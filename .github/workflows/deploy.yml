@@ -22,15 +22,18 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
+        working-directory: ./frontend
         run: npm ci
 
       - name: Build
+        working-directory: ./frontend
         run: npm run build
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          NODE_ENV: production
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: dist
+          folder: frontend/dist
           branch: gh-pages
