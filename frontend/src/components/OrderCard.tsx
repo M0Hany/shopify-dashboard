@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, ChatBubbleLeftRightIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
@@ -33,6 +33,9 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const [isShippedModalOpen, setIsShippedModalOpen] = useState(false);
   const [whatsAppMessage, setWhatsAppMessage] = useState('');
   const [noteText, setNoteText] = useState(order.note || '');
+  const noteModalRef = useRef<HTMLDivElement>(null);
+  const whatsAppModalRef = useRef<HTMLDivElement>(null);
+  const shippedModalRef = useRef<HTMLDivElement>(null);
   const tags = Array.isArray(order.tags) ? order.tags :
               typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) :
               [];
@@ -266,6 +269,40 @@ Your order is being picked up by the shipping company and should be arriving to 
     }
   };
 
+  // Close modals when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      // Note modal
+      if (isNoteModalOpen && noteModalRef.current && !noteModalRef.current.contains(event.target as Node)) {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsNoteModalOpen(false);
+      }
+      
+      // WhatsApp modal
+      if (isWhatsAppModalOpen && whatsAppModalRef.current && !whatsAppModalRef.current.contains(event.target as Node)) {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsWhatsAppModalOpen(false);
+      }
+      
+      // Shipped modal
+      if (isShippedModalOpen && shippedModalRef.current && !shippedModalRef.current.contains(event.target as Node)) {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsShippedModalOpen(false);
+      }
+    }
+
+    if (isNoteModalOpen || isWhatsAppModalOpen || isShippedModalOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isNoteModalOpen, isWhatsAppModalOpen, isShippedModalOpen]);
+
   return (
     <div 
       onClick={onClick}
@@ -472,12 +509,12 @@ Your order is being picked up by the shipping company and should be arriving to 
         {/* Note Modal */}
         {isNoteModalOpen && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
+            <div ref={noteModalRef} className="bg-white rounded-lg p-6 max-w-md w-full relative">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Add Note</h3>
                 <button
                   onClick={() => setIsNoteModalOpen(false)}
-                  className="text-gray-400 hover:text-gray-500"
+                  className="p-1 rounded-full bg-white hover:bg-gray-100 text-gray-400 hover:text-gray-500"
                 >
                   <XMarkIcon className="w-5 h-5" />
                 </button>
@@ -505,12 +542,12 @@ Your order is being picked up by the shipping company and should be arriving to 
         {/* WhatsApp Message Modal */}
         {isWhatsAppModalOpen && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
+            <div ref={whatsAppModalRef} className="bg-white rounded-lg p-6 max-w-md w-full relative">
               <div className="flex justify-between items-center mb-2">
                 <h3 className="text-lg font-medium">Send WhatsApp Message</h3>
                 <button
                   onClick={() => setIsWhatsAppModalOpen(false)}
-                  className="text-gray-400 hover:text-gray-500"
+                  className="p-1 rounded-full bg-white hover:bg-gray-100 text-gray-400 hover:text-gray-500"
                 >
                   <XMarkIcon className="w-5 h-5" />
                 </button>
@@ -553,12 +590,12 @@ Your order is being picked up by the shipping company and should be arriving to 
         {/* Shipped Notification Modal */}
         {isShippedModalOpen && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
+            <div ref={shippedModalRef} className="bg-white rounded-lg p-6 max-w-md w-full relative">
               <div className="flex justify-between items-center mb-2">
                 <h3 className="text-lg font-medium">Order Shipped Notification</h3>
                 <button
                   onClick={() => setIsShippedModalOpen(false)}
-                  className="text-gray-400 hover:text-gray-500"
+                  className="p-1 rounded-full bg-white hover:bg-gray-100 text-gray-400 hover:text-gray-500"
                 >
                   <XMarkIcon className="w-5 h-5" />
                 </button>
