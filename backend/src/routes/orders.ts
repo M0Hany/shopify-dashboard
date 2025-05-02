@@ -81,4 +81,15 @@ router.put('/:id/note', async (req, res) => {
   }
 });
 
+// Update order priority
+router.put('/:id/priority', async (req, res) => {
+  try {
+    await shopifyService.updateOrderPriority(Number(req.params.id), req.body.isPriority);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating order priority:', error);
+    res.status(500).json({ error: 'Failed to update order priority' });
+  }
+});
+
 export default router; 

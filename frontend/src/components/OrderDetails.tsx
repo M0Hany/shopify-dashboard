@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { XMarkIcon, UserIcon, PhoneIcon, MapPinIcon, CalendarIcon, ClockIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, UserIcon, PhoneIcon, MapPinIcon, CalendarIcon, ClockIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
@@ -159,7 +159,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({
               <h3 className="text-sm font-medium text-gray-900 mb-3">Order Notes</h3>
               <div className="bg-amber-50 rounded-lg p-4">
                 <div className="flex gap-2">
-                  <XMarkIcon className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                  <ExclamationTriangleIcon className="w-5 h-5 text-amber-600 flex-shrink-0" />
                   <p className="text-sm text-amber-700 font-medium">{order.note}</p>
                 </div>
               </div>
@@ -248,15 +248,6 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({
                 </span>
               </div>
             </div>
-          </section>
-
-          {/* Order Timeline Component */}
-          <section>
-            <OrderTimeline
-              createdAt={currentStartDate.toISOString()}
-              dueDate={currentDueDate.toISOString()}
-              isCustom={isCustomDueDate || isCustomStartDate}
-            />
           </section>
 
           {/* Items */}

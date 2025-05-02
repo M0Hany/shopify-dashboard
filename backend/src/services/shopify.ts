@@ -323,6 +323,40 @@ export class ShopifyService {
       throw new Error('Failed to update order note in Shopify');
     }
   }
+
+  async updateOrderPriority(id: number, isPriority: boolean): Promise<void> {
+    try {
+      // First get the current order to preserve other fields
+      const currentOrder = await this.getOrder(id);
+      
+      // Convert tags to array if it's a string
+      const existingTags = typeof currentOrder.tags === 'string' 
+        ? currentOrder.tags.split(',') 
+        : Array.isArray(currentOrder.tags) 
+          ? currentOrder.tags 
+          : [];
+      
+      // Remove priority tag if it exists
+      const filteredTags = existingTags.filter((tag: string) => tag.trim() !== 'priority');
+      
+      // Add priority tag if isPriority is true
+      const newTags = isPriority ? [...filteredTags, 'priority'] : filteredTags;
+      
+      // Update the order with the new tags
+      await this.client.put({
+        path: `/admin/api/2023-10/orders/${id}.json`,
+        data: {
+          order: {
+            id,
+            tags: newTags
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error updating order priority:', error);
+      throw new Error('Failed to update order priority in Shopify');
+    }
+  }
 }
 
 export const shopifyService = new ShopifyService(); 
