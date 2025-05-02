@@ -5,16 +5,19 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import orders from './routes/orders';
+import whatsapp from './routes/whatsapp';
 import { errorHandler } from './middleware/errorHandler';
+import { getConfig } from './config';
 
 // Load environment variables
 dotenv.config();
 
+const config = getConfig();
 const app = express();
 
 // CORS configuration
 app.use(cors({
-  origin: ['https://m0hany.github.io', 'http://localhost:5173'],
+  origin: config.allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   credentials: false  // Set to false since we're not using cookies
@@ -26,13 +29,14 @@ app.use(express.json());
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
+  windowMs: config.rateLimit.windowMs,
+  max: config.rateLimit.max,
 });
 app.use(limiter);
 
 // Routes
 app.use('/api/orders', orders);
+app.use('/api/whatsapp', whatsapp);
 
 // Test endpoint
 app.get('/api/test', (req, res) => {
