@@ -6,6 +6,6 @@ export default defineConfig({
   plugins: [react()],
   base: process.env.NODE_ENV === 'production' ? '/shopify-dashboard/' : '/',
   define: {
-    'process.env.VITE_API_URL': JSON.stringify('https://backend-2rn7ysbxy-medohany68-gmailcoms-projects.vercel.app')
+    'process.env.VITE_API_URL': JSON.stringify('https://backend-1t5kmxyfp-medohany68-gmailcoms-projects.vercel.app')
   }
 })
