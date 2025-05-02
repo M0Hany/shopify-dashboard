@@ -306,6 +306,23 @@ export class ShopifyService {
       throw new Error('Failed to update order start date in Shopify');
     }
   }
+
+  async updateOrderNote(id: number, note: string): Promise<void> {
+    try {
+      await this.client.put({
+        path: `/admin/api/2022-10/orders/${id}.json`,
+        data: {
+          order: {
+            id,
+            note
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error updating order note:', error);
+      throw new Error('Failed to update order note in Shopify');
+    }
+  }
 }
 
 export const shopifyService = new ShopifyService(); 
