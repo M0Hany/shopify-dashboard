@@ -14,12 +14,9 @@ export const Header: React.FC<HeaderProps> = () => {
   };
 
   return (
-    <header className="w-full bg-white shadow-sm">
+    <header className="w-full bg-white shadow-sm py-2">
       <div className="container mx-auto px-4">
-        <div className="flex justify-between h-14 items-center">
-          <h1 className="text-lg font-semibold text-gray-900">
-            OCD Crochet Dashboard
-          </h1>
+        <div className="flex justify-end h-10 items-center">
           <button
             onClick={handleLogout}
             className="px-4 py-1.5 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"

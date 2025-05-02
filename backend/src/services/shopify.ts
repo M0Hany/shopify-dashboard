@@ -15,7 +15,7 @@ interface CustomerDetails {
   };
 }
 
-interface ShopifyOrder {
+export interface ShopifyOrder {
   id: number;
   name: string;
   email: string;
@@ -47,7 +47,7 @@ interface ShopifyOrder {
 // Initialize Shopify API client
 const shopify = shopifyApi({
   apiSecretKey: config.shopify.apiSecret,
-  adminApiAccessToken: process.env.SHOPIFY_ACCESS_TOKEN || '',
+  adminApiAccessToken: config.shopify.accessToken,
   apiVersion: ApiVersion.October23,
   hostName: config.shopify.storeUrl,
   isEmbeddedApp: false,
@@ -65,7 +65,7 @@ export class ShopifyService {
       shop: config.shopify.storeUrl,
       state: 'state',
       isOnline: false,
-      accessToken: process.env.SHOPIFY_ACCESS_TOKEN || '',
+      accessToken: config.shopify.accessToken,
     });
     this.client = new shopify.clients.Rest({
       session: this.session,

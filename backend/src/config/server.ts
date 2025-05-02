@@ -14,6 +14,7 @@ interface ShopifyConfig {
   apiKey: string;
   apiSecret: string;
   storeUrl: string;
+  accessToken: string;
 }
 
 interface Config {
@@ -21,7 +22,7 @@ interface Config {
   shopify: ShopifyConfig;
 }
 
-// Validate required environment variables
+// Log missing environment variables as warnings instead of throwing errors
 const requiredEnvVars = [
   'PORT',
   'NODE_ENV',
@@ -33,7 +34,7 @@ const requiredEnvVars = [
 
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
-    throw new Error(`Missing required environment variable: ${envVar}`);
+    console.warn(`Warning: Missing environment variable: ${envVar}`);
   }
 }
 
@@ -46,7 +47,8 @@ const config: Config = {
   shopify: {
     apiKey: process.env.SHOPIFY_API_KEY || '',
     apiSecret: process.env.SHOPIFY_API_SECRET || '',
-    storeUrl: `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`,
+    storeUrl: process.env.SHOPIFY_SHOP_NAME ? `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com` : '',
+    accessToken: process.env.SHOPIFY_ACCESS_TOKEN || '',
   },
 };
 
