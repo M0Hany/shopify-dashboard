@@ -23,7 +23,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ order, isOpen, onClose, onU
       : new Date(convertToCairoTime(new Date(order.created_at)).getTime() + 14 * 24 * 60 * 60 * 1000);
     setCurrentDueDate(initialDueDate);
   }, [order]);
-
+  
   if (!order) return null;
 
   const createdAt = convertToCairoTime(new Date(order.created_at));
@@ -39,7 +39,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ order, isOpen, onClose, onU
   return (
     <>
       {/* Overlay */}
-      <div
+      <div 
         className={`fixed inset-0 bg-black transition-opacity duration-300 z-50 ${
           isOpen ? 'opacity-50' : 'opacity-0 pointer-events-none'
         }`}
@@ -47,7 +47,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ order, isOpen, onClose, onU
       />
 
       {/* Drawer */}
-      <div
+      <div 
         className={`fixed inset-y-0 right-0 w-full md:w-[480px] bg-white shadow-xl transform transition-transform duration-300 ease-in-out z-[51] ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
@@ -55,11 +55,11 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ order, isOpen, onClose, onU
         {/* Header */}
         <div className="relative p-6 pb-5">
           <div className="flex justify-between items-start">
-            <div>
+          <div>
               <h2 className="text-xl font-medium text-gray-900">
-                Order Details
-              </h2>
-              <div className="flex items-center gap-2 mt-1">
+              Order Details
+            </h2>
+            <div className="flex items-center gap-2 mt-1">
                 <h3 className="text-base text-gray-600">Order #{order.name}</h3>
               </div>
               <p className="text-sm text-gray-500 mt-1">
@@ -152,7 +152,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ order, isOpen, onClose, onU
                       <button className="text-sm text-gray-900 px-3 py-1 rounded border border-gray-200 hover:border-gray-300 flex items-center gap-1 bg-white">
                         {format(currentDueDate, 'MMM d, yyyy')}
                         <span className="text-blue-600 ml-1">›</span>
-                      </button>
+                </button>
                     }
                     minDate={new Date()}
                     dateFormat="MMM d, yyyy"
