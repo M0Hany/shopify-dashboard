@@ -184,6 +184,7 @@ const Orders = () => {
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [ordersState, setOrdersState] = useState<Order[] | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -193,7 +194,7 @@ const Orders = () => {
 
   const { data: orders, isLoading, error } = useQuery<Order[]>({
     queryKey: ['orders'],
-    queryFn: async () => {
+    queryFn: async (): Promise<Order[]> => {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`);
       if (!response.ok) {
         throw new Error('Failed to fetch orders');
@@ -227,8 +228,18 @@ const Orders = () => {
           custom_start_date: customStartDate,
           effective_created_at: customStartDate || customCreateDate || order.created_at
         };
-      }).sort((a: Order, b: Order) => {
-        // Calculate days left for both orders
+      })
+      // Pin priority orders at the top
+      .sort((a: Order, b: Order) => {
+        const aPriority = (Array.isArray(a.tags) ? a.tags : typeof a.tags === 'string' ? a.tags.split(',') : [])
+          .map((t: string) => t.trim())
+          .includes('priority');
+        const bPriority = (Array.isArray(b.tags) ? b.tags : typeof b.tags === 'string' ? b.tags.split(',') : [])
+          .map((t: string) => t.trim())
+          .includes('priority');
+        if (aPriority && !bPriority) return -1;
+        if (!aPriority && bPriority) return 1;
+        // Both are same priority status, now sort by days left
         const now = convertToCairoTime(new Date());
         const aDueDate = a.custom_due_date 
           ? convertToCairoTime(new Date(a.custom_due_date))
@@ -236,20 +247,21 @@ const Orders = () => {
         const bDueDate = b.custom_due_date 
           ? convertToCairoTime(new Date(b.custom_due_date))
           : new Date(convertToCairoTime(new Date(b.effective_created_at)).getTime() + 14 * 24 * 60 * 60 * 1000);
-        
         const aDaysLeft = Math.ceil((aDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
         const bDaysLeft = Math.ceil((bDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-        // First sort by days left
         if (aDaysLeft !== bDaysLeft) {
-          return aDaysLeft - bDaysLeft; // Ascending order of days left
+          return aDaysLeft - bDaysLeft;
         }
-        
         // If days left are equal, sort by order ID
-        return a.id - b.id; // Ascending order of order ID
+        return a.id - b.id;
       });
     },
   });
+
+  // Sync local ordersState with fetched orders
+  useEffect(() => {
+    if (orders) setOrdersState(orders);
+  }, [orders]);
 
   const updateDueDateMutation = useMutation({
     mutationFn: async ({ orderId, dueDate }: { orderId: number; dueDate: string }) => {
@@ -299,6 +311,44 @@ const Orders = () => {
     }
   });
 
+  const updateNoteMutation = useMutation({
+    mutationFn: async ({ orderId, note }: { orderId: number; note: string }) => {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/note`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ note }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to update note');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    },
+  });
+
+  const updatePriorityMutation = useMutation({
+    mutationFn: async ({ orderId, isPriority }: { orderId: number; isPriority: boolean }) => {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/priority`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ isPriority }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to update priority');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    },
+  });
+
   const handleOrderSelect = (orderId: number) => {
     setSelectedOrders(prev => 
       prev.includes(orderId) 
@@ -308,11 +358,11 @@ const Orders = () => {
   };
 
   const handleSelectAll = () => {
-    if (filteredOrders) {
-      if (selectedOrders.length === filteredOrders.length) {
+    if (orders) {
+      if (selectedOrders.length === orders.length) {
         setSelectedOrders([]);
       } else {
-        setSelectedOrders(filteredOrders.map(order => order.id));
+        setSelectedOrders(orders.map(order => order.id));
       }
     }
   };
@@ -366,16 +416,73 @@ const Orders = () => {
     setSelectedOrder(null);
   };
 
-  const filteredOrders = orders?.filter(order => {
+  const handleUpdateNote = (orderId: number, note: string) => {
+    updateNoteMutation.mutate({ orderId, note });
+  };
+
+  const handleTogglePriority = (orderId: number, isPriority: boolean) => {
+    setOrdersState((prev: Order[] | null) => {
+      if (!prev) return prev;
+      return prev.map((order: Order) => {
+        if (order.id !== orderId) return order;
+        let tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',') : [];
+        tags = tags.map((t: string) => t.trim());
+        if (isPriority && !tags.includes('priority')) {
+          tags = [...tags, 'priority'];
+        } else if (!isPriority && tags.includes('priority')) {
+          tags = tags.filter((t: string) => t.trim() !== 'priority');
+        }
+        return { ...order, tags };
+      });
+    });
+    updatePriorityMutation.mutate({ orderId, isPriority });
+  };
+
+  // First, decorate orders with their original index
+  const sortedOrders = (ordersState || orders)?.map((order: Order, idx: number) => ({
+    ...order,
+    originalIndex: idx
+  }))
+  // Then filter
+  .filter((order: Order & { originalIndex: number }) => {
+    const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) : [];
     const matchesSearch = searchQuery === '' || 
       order.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       `${order.customer?.first_name} ${order.customer?.last_name}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
       order.customer?.phone.includes(searchQuery);
-
     const matchesStatus = statusFilter === 'all' || 
       order.fulfillment_status === statusFilter;
-
     return matchesSearch && matchesStatus;
+  })
+  // Finally sort with stable tiebreaker
+  .sort((a: Order & { originalIndex: number }, b: Order & { originalIndex: number }) => {
+    const aPriority = (Array.isArray(a.tags) ? a.tags : typeof a.tags === 'string' ? a.tags.split(',') : [])
+      .map((t: string) => t.trim())
+      .includes('priority');
+    const bPriority = (Array.isArray(b.tags) ? b.tags : typeof b.tags === 'string' ? b.tags.split(',') : [])
+      .map((t: string) => t.trim())
+      .includes('priority');
+    if (aPriority && !bPriority) return -1;
+    if (!aPriority && bPriority) return 1;
+    // Both are same priority status, now sort by days left
+    const now = convertToCairoTime(new Date());
+    const aDueDate = a.custom_due_date 
+      ? convertToCairoTime(new Date(a.custom_due_date))
+      : new Date(convertToCairoTime(new Date(a.effective_created_at)).getTime() + 14 * 24 * 60 * 60 * 1000);
+    const bDueDate = b.custom_due_date 
+      ? convertToCairoTime(new Date(b.custom_due_date))
+      : new Date(convertToCairoTime(new Date(b.effective_created_at)).getTime() + 14 * 24 * 60 * 60 * 1000);
+    const aDaysLeft = Math.ceil((aDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    const bDaysLeft = Math.ceil((bDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    if (aDaysLeft !== bDaysLeft) {
+      return aDaysLeft - bDaysLeft;
+    }
+    // If days left are equal, sort by order ID (numerically)
+    if (a.id !== b.id) {
+      return a.id - b.id;
+    }
+    // Final stable sort tiebreaker using original index
+    return a.originalIndex - b.originalIndex;
   });
 
   if (isLoading) {
@@ -420,15 +527,15 @@ const Orders = () => {
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
             <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
           </div>
-              </div>
+        </div>
 
         {/* View Button */}
         <button className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
           <span>View</span>
           <ViewColumnsIcon className="w-5 h-5" />
-                </button>
-            </div>
-            
+        </button>
+      </div>
+      
       {/* Main Header */}
       <div className="bg-white border-b px-8 py-6">
         <div className="flex justify-between items-center">
@@ -440,25 +547,25 @@ const Orders = () => {
 
           {/* Right side - Filter and Select All */}
           <div className="flex items-center gap-4">
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
               className="w-[160px] pl-3 pr-10 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="all">All Orders</option>
-                <option value="pending">Pending</option>
-                <option value="processing">Processing</option>
-                <option value="shipped">Shipped</option>
-                <option value="delivered">Delivered</option>
-              </select>
+            >
+              <option value="all">All Orders</option>
+              <option value="pending">Pending</option>
+              <option value="processing">Processing</option>
+              <option value="shipped">Shipped</option>
+              <option value="delivered">Delivered</option>
+            </select>
 
             <label className="flex items-center gap-2">
-                <input
+              <input
                 type="checkbox"
-                checked={selectedOrders.length === (filteredOrders?.length || 0)}
+                checked={selectedOrders.length === (sortedOrders?.length || 0)}
                 onChange={handleSelectAll}
                 className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                />
+              />
               <span className="text-sm text-gray-700">Select All</span>
             </label>
           </div>
@@ -480,13 +587,15 @@ const Orders = () => {
       {/* Order Grid */}
       <div className="p-8">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {filteredOrders?.map((order: any) => (
+          {sortedOrders?.map((order: any) => (
             <OrderCard
               key={order.id}
               order={order}
               onClick={() => handleOrderClick(order)}
               isSelected={selectedOrders.includes(order.id)}
               onSelect={handleOrderSelect}
+              onUpdateNote={handleUpdateNote}
+              onTogglePriority={handleTogglePriority}
             />
           ))}
         </div>
