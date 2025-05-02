@@ -70,4 +70,15 @@ router.put('/:id/start-date', async (req, res) => {
   }
 });
 
+// Update order note
+router.put('/:id/note', async (req, res) => {
+  try {
+    await shopifyService.updateOrderNote(Number(req.params.id), req.body.note);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating order note:', error);
+    res.status(500).json({ error: 'Failed to update order note' });
+  }
+});
+
 export default router; 
