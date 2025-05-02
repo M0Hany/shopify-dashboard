@@ -111,3 +111,25 @@ npm run dev
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Deployment
+
+The application is automatically deployed to GitHub Pages when changes are pushed to the main branch. The deployment process includes:
+
+1. Running tests
+2. Building the application
+3. Deploying to GitHub Pages
+
+To manually trigger a deployment:
+
+1. Go to the Actions tab in your GitHub repository
+2. Select the "Deploy to GitHub Pages" workflow
+3. Click "Run workflow"
+
+The deployed application will be available at: `https://[your-github-username].github.io/shopify-dashboard/`
+
+### Environment Variables
+
+Make sure to set up the following secrets in your GitHub repository:
+
+- `VITE_API_URL`: Your API endpoint URL
