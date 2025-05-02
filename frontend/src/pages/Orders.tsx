@@ -139,6 +139,7 @@ interface Order {
   created_at: string;
   custom_due_date?: string;
   custom_create_date?: string;
+  custom_start_date?: string;
   effective_created_at: string;
   note?: string;
   customer: {
@@ -214,12 +215,17 @@ const Orders = () => {
         const customCreateDateTag = tags.find((tag: string) => tag.startsWith('custom_create_date:'));
         const customCreateDate = customCreateDateTag ? customCreateDateTag.split(':')[1] : undefined;
         
+        // Extract custom start date from tags
+        const customStartDateTag = tags.find((tag: string) => tag.startsWith('custom_start_date:'));
+        const customStartDate = customStartDateTag ? customStartDateTag.split(':')[1] : undefined;
+        
         return {
           ...order,
           tags,
           custom_due_date: customDueDate,
           custom_create_date: customCreateDate,
-          effective_created_at: customCreateDate || order.created_at
+          custom_start_date: customStartDate,
+          effective_created_at: customStartDate || customCreateDate || order.created_at
         };
       }).sort((a: Order, b: Order) => {
         // Calculate days left for both orders
@@ -239,10 +245,8 @@ const Orders = () => {
           return aDaysLeft - bDaysLeft; // Ascending order of days left
         }
         
-        // If days left are equal, sort by creation date
-        const aCreatedAt = new Date(a.effective_created_at).getTime();
-        const bCreatedAt = new Date(b.effective_created_at).getTime();
-        return aCreatedAt - bCreatedAt; // Ascending order of creation date
+        // If days left are equal, sort by order ID
+        return a.id - b.id; // Ascending order of order ID
       });
     },
   });
@@ -268,6 +272,30 @@ const Orders = () => {
     },
     onError: (error) => {
       console.error('Error updating due date:', error);
+    }
+  });
+
+  const updateStartDateMutation = useMutation({
+    mutationFn: async ({ orderId, startDate }: { orderId: number; startDate: string }) => {
+      console.log('Updating start date:', { orderId, startDate });
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/start-date`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ custom_start_date: startDate }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to update start date');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    },
+    onError: (error) => {
+      console.error('Error updating start date:', error);
     }
   });
 
@@ -475,6 +503,20 @@ const Orders = () => {
               updateDueDateMutation.mutate({
                 orderId: selectedOrder.id,
                 dueDate: date
+              });
+            }
+          }}
+          onUpdateStartDate={(date) => {
+            console.log('onUpdateStartDate called with date:', date);
+            console.log('selectedOrder:', selectedOrder);
+            if (selectedOrder) {
+              console.log('Calling updateStartDateMutation with:', {
+                orderId: selectedOrder.id,
+                startDate: date
+              });
+              updateStartDateMutation.mutate({
+                orderId: selectedOrder.id,
+                startDate: date
               });
             }
           }}

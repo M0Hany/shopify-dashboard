@@ -53,4 +53,21 @@ router.put('/:id/due-date', async (req, res) => {
   }
 });
 
+// Update order start date
+router.put('/:id/start-date', async (req, res) => {
+  try {
+    console.log('Received start-date update request:', {
+      orderId: req.params.id,
+      customStartDate: req.body.custom_start_date,
+      body: req.body
+    });
+    await shopifyService.updateOrderStartDate(Number(req.params.id), req.body.custom_start_date);
+    console.log('Start date update successful');
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating order start date:', error);
+    res.status(500).json({ error: 'Failed to update order start date' });
+  }
+});
+
 export default router; 

@@ -11,22 +11,66 @@ interface OrderDetailsProps {
   isOpen: boolean;
   onClose: () => void;
   onUpdateDueDate?: (date: string) => void;
+  onUpdateStartDate?: (date: string) => void;
 }
 
-const OrderDetails: React.FC<OrderDetailsProps> = ({ order, isOpen, onClose, onUpdateDueDate }) => {
+const OrderDetails: React.FC<OrderDetailsProps> = ({ 
+  order, 
+  isOpen, 
+  onClose, 
+  onUpdateDueDate,
+  onUpdateStartDate 
+}) => {
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [currentDueDate, setCurrentDueDate] = useState<Date>(new Date());
+  const [currentStartDate, setCurrentStartDate] = useState<Date>(new Date());
 
   useEffect(() => {
-    const initialDueDate = order.custom_due_date
-      ? convertToCairoTime(new Date(order.custom_due_date))
-      : new Date(convertToCairoTime(new Date(order.created_at)).getTime() + 14 * 24 * 60 * 60 * 1000);
+    // Parse tags to look for custom_due_date tag
+    const tags = Array.isArray(order.tags) ? order.tags :
+                typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) :
+                [];
+    
+    const dueDateTag = tags.find((tag: string) => tag.startsWith('custom_due_date:'));
+    const startDateTag = tags.find((tag: string) => tag.startsWith('custom_start_date:'));
+    
+    let initialDueDate;
+    
+    if (dueDateTag) {
+      const dateStr = dueDateTag.split(':')[1];
+      const parsedDate = convertToCairoTime(new Date(dateStr));
+      if (!isNaN(parsedDate.getTime())) {
+        initialDueDate = parsedDate;
+      }
+    }
+    
+    if (!initialDueDate) {
+      // Use created_at date and add 14 days
+      const createdAtDate = convertToCairoTime(new Date(order.effective_created_at || order.created_at));
+      initialDueDate = new Date(createdAtDate);
+      initialDueDate.setDate(initialDueDate.getDate() + 14);
+      initialDueDate = convertToCairoTime(initialDueDate);
+    }
+    
+    // Set initial start date
+    let initialStartDate = convertToCairoTime(new Date(order.effective_created_at || order.created_at));
+    
+    if (startDateTag) {
+      const dateStr = startDateTag.split(':')[1];
+      const parsedDate = convertToCairoTime(new Date(dateStr));
+      if (!isNaN(parsedDate.getTime())) {
+        initialStartDate = parsedDate;
+      }
+    }
+    
     setCurrentDueDate(initialDueDate);
+    setCurrentStartDate(initialStartDate);
   }, [order]);
   
   if (!order) return null;
 
-  const createdAt = convertToCairoTime(new Date(order.created_at));
+  // Use effective_created_at if available, otherwise fall back to created_at
+  const createdAt = convertToCairoTime(new Date(order.effective_created_at || order.created_at));
   const daysLeft = calculateDaysRemaining(currentDueDate, convertToCairoTime(new Date()));
 
   const handleDateSelect = (date: Date) => {
@@ -35,6 +79,27 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ order, isOpen, onClose, onU
       onUpdateDueDate(date.toISOString());
     }
   };
+  
+  const handleStartDateSelect = (date: Date) => {
+    console.log('Start date selected:', date.toISOString());
+    setCurrentStartDate(date);
+    if (onUpdateStartDate) {
+      console.log('Calling onUpdateStartDate with:', date.toISOString());
+      onUpdateStartDate(date.toISOString());
+    } else {
+      console.warn('onUpdateStartDate callback is not defined');
+    }
+  };
+
+  // Check if due date is from a custom tag
+  const tags = Array.isArray(order.tags) ? order.tags :
+              typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) :
+              [];
+  
+  const dueDateTag = tags.find((tag: string) => tag.startsWith('custom_due_date:'));
+  const startDateTag = tags.find((tag: string) => tag.startsWith('custom_start_date:'));
+  const isCustomDueDate = !!dueDateTag;
+  const isCustomStartDate = !!startDateTag;
 
   return (
     <>
@@ -60,7 +125,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ order, isOpen, onClose, onU
               Order Details
             </h2>
             <div className="flex items-center gap-2 mt-1">
-                <h3 className="text-base text-gray-600">Order #{order.name}</h3>
+                <h3 className="text-base text-gray-600">Order {order.name}</h3>
               </div>
               <p className="text-sm text-gray-500 mt-1">
                 Placed on {format(createdAt, 'MMM d, yyyy')}
@@ -135,9 +200,21 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ order, isOpen, onClose, onU
                   <CalendarIcon className="w-5 h-5 text-gray-400" />
                   <span className="text-sm text-gray-600">Order Date:</span>
                 </div>
-                <span className="text-sm text-gray-900">
-                  {format(createdAt, 'MMM d, yyyy')}
-                </span>
+                <div className="relative">
+                  <DatePicker
+                    selected={currentStartDate}
+                    onChange={handleStartDateSelect}
+                    customInput={
+                      <button className="text-sm text-gray-900 px-3 py-1 rounded border border-gray-200 hover:border-gray-300 flex items-center gap-1 bg-white">
+                        {format(currentStartDate, 'MMM d, yyyy')}
+                        <span className="text-blue-600 ml-1">›</span>
+                      </button>
+                    }
+                    dateFormat="MMM d, yyyy"
+                    popperPlacement="bottom-end"
+                    popperClassName="z-50"
+                  />
+                </div>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -176,9 +253,9 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ order, isOpen, onClose, onU
           {/* Order Timeline Component */}
           <section>
             <OrderTimeline
-              createdAt={createdAt.toISOString()}
+              createdAt={currentStartDate.toISOString()}
               dueDate={currentDueDate.toISOString()}
-              isCustom={true}
+              isCustom={isCustomDueDate || isCustomStartDate}
             />
           </section>
 
