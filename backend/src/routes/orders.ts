@@ -81,12 +81,12 @@ router.get('/:id', async (req, res) => {
 
 // Update order status
 router.put('/:id/status', async (req, res) => {
-  res.json({ success: true });
+    res.json({ success: true });
 });
 
 // Update order due date
 router.put('/:id/due-date', async (req, res) => {
-  res.json({ success: true });
+    res.json({ success: true });
 });
 
 export default router; 

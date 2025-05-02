@@ -392,15 +392,15 @@ const Orders = () => {
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
             <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
           </div>
-        </div>
+              </div>
 
         {/* View Button */}
         <button className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
           <span>View</span>
           <ViewColumnsIcon className="w-5 h-5" />
-        </button>
-      </div>
-
+                </button>
+            </div>
+            
       {/* Main Header */}
       <div className="bg-white border-b px-8 py-6">
         <div className="flex justify-between items-center">
@@ -412,25 +412,25 @@ const Orders = () => {
 
           {/* Right side - Filter and Select All */}
           <div className="flex items-center gap-4">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
               className="w-[160px] pl-3 pr-10 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-            >
-              <option value="all">All Orders</option>
-              <option value="pending">Pending</option>
-              <option value="processing">Processing</option>
-              <option value="shipped">Shipped</option>
-              <option value="delivered">Delivered</option>
-            </select>
+              >
+                <option value="all">All Orders</option>
+                <option value="pending">Pending</option>
+                <option value="processing">Processing</option>
+                <option value="shipped">Shipped</option>
+                <option value="delivered">Delivered</option>
+              </select>
 
             <label className="flex items-center gap-2">
-              <input
+                <input
                 type="checkbox"
                 checked={selectedOrders.length === (filteredOrders?.length || 0)}
                 onChange={handleSelectAll}
                 className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-              />
+                />
               <span className="text-sm text-gray-700">Select All</span>
             </label>
           </div>
