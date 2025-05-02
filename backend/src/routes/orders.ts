@@ -92,4 +92,15 @@ router.put('/:id/priority', async (req, res) => {
   }
 });
 
+// Fulfill an order
+router.post('/:id/fulfill', async (req, res) => {
+  try {
+    await shopifyService.fulfillOrder(Number(req.params.id));
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error fulfilling order:', error);
+    res.status(500).json({ error: 'Failed to fulfill order' });
+  }
+});
+
 export default router; 

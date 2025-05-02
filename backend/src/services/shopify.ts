@@ -214,14 +214,43 @@ export class ShopifyService {
 
   async updateOrderStatus(id: number, status: string): Promise<void> {
     try {
+      // First get the current order to preserve other fields
+      const currentOrder = await this.getOrder(id);
+      
+      // Convert tags to array if it's a string
+      const existingTags = typeof currentOrder.tags === 'string' 
+        ? currentOrder.tags.split(',').map((tag: string) => tag.trim()) 
+        : Array.isArray(currentOrder.tags) 
+          ? currentOrder.tags.map((tag: string) => tag.trim()) 
+          : [];
+      
+      // Remove any existing status tags - make sure to trim for comparison
+      const statusTags = ['customer_confirmed', 'ready to ship', 'shipped'];
+      const filteredTags = existingTags.filter((tag: string) => !statusTags.includes(tag.trim()));
+      
+      // Map frontend status values to actual tag values
+      let tagValue = status;
+      if (status === 'confirmed') {
+        tagValue = 'customer_confirmed';
+      }
+      
+      // Add the new status tag if it's not "pending" or "fulfilled"
+      // "fulfilled" is controlled by Shopify fulfillment status, not tags
+      // "pending" means no status tags
+      let newTags = filteredTags;
+      if (status !== 'pending' && status !== 'fulfilled') {
+        newTags = [...filteredTags, tagValue.trim()];
+      }
+      
+      // Update the order with the new tags
       await this.client.put({
-        path: `/admin/api/2022-10/orders/${id}.json`,
+        path: `/admin/api/2023-10/orders/${id}.json`,
         data: {
           order: {
             id,
-            tags: [status],
-          },
-        },
+            tags: newTags
+          }
+        }
       });
     } catch (error) {
       console.error('Error updating order status:', error);
@@ -331,9 +360,9 @@ export class ShopifyService {
       
       // Convert tags to array if it's a string
       const existingTags = typeof currentOrder.tags === 'string' 
-        ? currentOrder.tags.split(',') 
+        ? currentOrder.tags.split(',').map((tag: string) => tag.trim()) 
         : Array.isArray(currentOrder.tags) 
-          ? currentOrder.tags 
+          ? currentOrder.tags.map((tag: string) => tag.trim()) 
           : [];
       
       // Remove priority tag if it exists
@@ -355,6 +384,40 @@ export class ShopifyService {
     } catch (error) {
       console.error('Error updating order priority:', error);
       throw new Error('Failed to update order priority in Shopify');
+    }
+  }
+
+  async fulfillOrder(id: number): Promise<void> {
+    try {
+      // Get the order to find line items
+      const order = await this.getOrder(id);
+      
+      // Get fulfillable line items - note that Shopify API response has different structure
+      // We need to make another call to get the proper line item IDs for fulfillment
+      const fulfillmentOrderResponse = await this.client.get({
+        path: `/admin/api/2023-10/orders/${id}/fulfillment_orders.json`
+      });
+      
+      if (!fulfillmentOrderResponse.body.fulfillment_orders || 
+          fulfillmentOrderResponse.body.fulfillment_orders.length === 0) {
+        throw new Error('No fulfillment orders available for this order');
+      }
+      
+      // Create a fulfillment using the first fulfillment order
+      const fulfillmentOrderId = fulfillmentOrderResponse.body.fulfillment_orders[0].id;
+      
+      await this.client.post({
+        path: `/admin/api/2023-10/fulfillments.json`,
+        data: {
+          fulfillment: {
+            fulfillment_order_id: fulfillmentOrderId,
+            notify_customer: true
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error fulfilling order:', error);
+      throw new Error('Failed to fulfill order in Shopify');
     }
   }
 }

@@ -50,6 +50,13 @@ OrderSchema.index({ createdAt: 1 });
 
 // Static method to create an order from Shopify data
 OrderSchema.statics.createFromShopify = async function(shopifyOrder: ShopifyOrder) {
+  // Convert tags to array if it's a string or null
+  const tags = Array.isArray(shopifyOrder.tags) 
+    ? shopifyOrder.tags 
+    : typeof shopifyOrder.tags === 'string' 
+      ? shopifyOrder.tags.split(',') 
+      : [];
+      
   return this.create({
     shopifyId: shopifyOrder.id,
     name: shopifyOrder.name,
@@ -58,11 +65,11 @@ OrderSchema.statics.createFromShopify = async function(shopifyOrder: ShopifyOrde
     totalPrice: shopifyOrder.total_price,
     financialStatus: shopifyOrder.financial_status,
     fulfillmentStatus: shopifyOrder.fulfillment_status,
-    tags: shopifyOrder.tags,
+    tags: tags,
     createdAt: new Date(shopifyOrder.created_at),
     updatedAt: new Date(shopifyOrder.updated_at),
     lineItems: shopifyOrder.line_items,
-    status: shopifyOrder.tags.includes('express') ? 'express' : 'pending',
+    status: tags.includes('express') ? 'express' : 'pending',
   });
 };
 
