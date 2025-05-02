@@ -39,9 +39,9 @@ jobs:
         run: npm run build
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
-          VITE_AUTH0_DOMAIN: ${{ secrets.VITE_AUTH0_DOMAIN }}
-          VITE_AUTH0_CLIENT_ID: ${{ secrets.VITE_AUTH0_CLIENT_ID }}
-          VITE_AUTH0_CALLBACK_URL: ${{ secrets.VITE_AUTH0_CALLBACK_URL }}
+          VITE_AUTH0_DOMAIN: dev-phz7fceqjx206ki7.us.auth0.com
+          VITE_AUTH0_CLIENT_ID: yXOjEIE2dUTIAMT9jtTkfkLY1to2kI2c
+          VITE_AUTH0_CALLBACK_URL: https://m0hany.github.io/shopify-dashboard/
           NODE_ENV: production
 
       - name: Setup Pages
