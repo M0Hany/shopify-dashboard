@@ -1,0 +1,69 @@
+import React from 'react';
+import { ClockIcon } from '@heroicons/react/24/outline';
+import { convertToCairoTime, calculateDaysRemaining } from '../utils/dateUtils';
+
+interface OrderTimelineProps {
+  createdAt: string;
+  dueDate: string;
+  isCustom?: boolean;
+}
+
+const OrderTimeline: React.FC<OrderTimelineProps> = ({ createdAt, dueDate }) => {
+  const start = convertToCairoTime(new Date(createdAt));
+  const end = convertToCairoTime(new Date(dueDate));
+  const now = convertToCairoTime(new Date());
+  const daysLeft = calculateDaysRemaining(end, now);
+
+  // Format date to show only month and day
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'Africa/Cairo'
+    });
+  };
+
+  // Calculate progress percentage based on priority intervals
+  const calculateProgress = () => {
+    if (daysLeft <= 0) return 100; // Overdue - full width
+    if (daysLeft <= 4) return 90; // High priority (1-4 days)
+    if (daysLeft <= 8) return 75; // Less priority (5-8 days)
+    if (daysLeft <= 14) return 60; // Less priority (9-14 days)
+    if (daysLeft <= 20) return 45; // Less priority (15-20 days)
+    return 30; // Default for more than 20 days
+  };
+
+  // Get progress bar color based on days remaining
+  const getProgressColor = () => {
+    if (daysLeft <= 0) return 'bg-red-500'; // Overdue
+    if (daysLeft <= 4) return 'bg-yellow-500'; // High priority
+    return 'bg-green-500'; // Normal
+  };
+
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-between text-sm text-gray-600">
+        <span>{formatDate(start)}</span>
+        <span>{formatDate(end)}</span>
+      </div>
+      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+        <div
+          className={`h-full ${getProgressColor()} transition-all duration-300`}
+          style={{ width: `${calculateProgress()}%` }}
+        />
+      </div>
+      <div className="flex items-center gap-1 text-sm text-gray-600">
+        <ClockIcon className="w-4 h-4" />
+        <span>
+          {daysLeft < 0
+            ? `${Math.abs(daysLeft)} days overdue`
+            : daysLeft === 0
+            ? 'Due today'
+            : `${daysLeft} days left`}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+export default OrderTimeline; 
