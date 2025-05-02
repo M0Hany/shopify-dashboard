@@ -1,92 +1,56 @@
 import express from 'express';
+import { ShopifyService } from '../services/shopify';
 
 const router = express.Router();
+const shopifyService = new ShopifyService();
 
 // Get all orders with optional filters
 router.get('/', async (req, res) => {
   try {
-    // Return test data
-    const testOrders = [
-      {
-        id: 1,
-        name: "#1001",
-        created_at: new Date().toISOString(),
-        customer: {
-          first_name: "John",
-          last_name: "Doe",
-          phone: "1234567890"
-        },
-        shipping_address: {
-          address1: "123 Test St",
-          address2: "Apt 4B",
-          city: "Cairo",
-          province: "Cairo",
-          zip: "12345",
-          country: "Egypt"
-        },
-        total_price: "1500.00",
-        financial_status: "paid",
-        fulfillment_status: "unfulfilled",
-        tags: ["express", "custom_due_date:2024-03-20"],
-        line_items: [
-          {
-            title: "Crochet Blanket",
-            quantity: 2,
-            price: "750.00",
-            variant_title: "Large/Blue"
-          }
-        ]
-      }
-    ];
-    res.json(testOrders);
+    const orders = await shopifyService.getOrders({
+      limit: 250,
+      status: req.query.status as string,
+      created_at_min: req.query.created_at_min as string,
+      created_at_max: req.query.created_at_max as string,
+    });
+    res.json(orders);
   } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error fetching orders:', error);
+    res.status(500).json({ error: 'Failed to fetch orders' });
   }
 });
 
 // Get a single order by ID
 router.get('/:id', async (req, res) => {
-  res.json({
-    id: Number(req.params.id),
-    name: `#${1000 + Number(req.params.id)}`,
-    created_at: new Date().toISOString(),
-    customer: {
-      first_name: "John",
-      last_name: "Doe",
-      phone: "1234567890"
-    },
-    shipping_address: {
-      address1: "123 Test St",
-      address2: "Apt 4B",
-      city: "Cairo",
-      province: "Cairo",
-      zip: "12345",
-      country: "Egypt"
-    },
-    total_price: "1500.00",
-    financial_status: "paid",
-    fulfillment_status: "unfulfilled",
-    tags: ["express", "custom_due_date:2024-03-20"],
-    line_items: [
-      {
-        title: "Crochet Blanket",
-        quantity: 2,
-        price: "750.00",
-        variant_title: "Large/Blue"
-      }
-    ]
-  });
+  try {
+    const order = await shopifyService.getOrder(Number(req.params.id));
+    res.json(order);
+  } catch (error) {
+    console.error('Error fetching order:', error);
+    res.status(500).json({ error: 'Failed to fetch order' });
+  }
 });
 
 // Update order status
 router.put('/:id/status', async (req, res) => {
+  try {
+    await shopifyService.updateOrderStatus(Number(req.params.id), req.body.status);
     res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    res.status(500).json({ error: 'Failed to update order status' });
+  }
 });
 
 // Update order due date
 router.put('/:id/due-date', async (req, res) => {
+  try {
+    await shopifyService.updateOrderDueDate(Number(req.params.id), req.body.custom_due_date);
     res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating order due date:', error);
+    res.status(500).json({ error: 'Failed to update order due date' });
+  }
 });
 
 export default router; 
