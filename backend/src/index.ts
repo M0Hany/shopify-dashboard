@@ -14,10 +14,10 @@ const app = express();
 
 // CORS configuration
 app.use(cors({
-  origin: '*',  // Allow all origins
-  credentials: true,
+  origin: 'https://m0hany.github.io',  // Only allow production URL
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: false  // Set to false since we're not using cookies
 }));
 
 app.use(helmet());
