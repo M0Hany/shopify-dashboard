@@ -130,7 +130,10 @@ const OrderCard: React.FC<OrderCardProps> = ({
             {order.line_items?.map((item: any, index: number) => (
               <div key={index} className="flex justify-between text-sm">
                 <div className="flex gap-2">
-                  <span className="text-gray-900">{item.title}</span>
+                  <span className="text-gray-900">
+                    {item.title}
+                    {item.variant_title && ` (${item.variant_title})`}
+                  </span>
                   <span className="text-gray-500">×{item.quantity}</span>
                 </div>
               </div>
@@ -141,7 +144,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
         {/* Order Number */}
         <div className="pt-3 border-t">
           <div className="flex justify-between items-center">
-            <span className="text-xs text-gray-500">Order #{order.name}</span>
+            <span className="text-xs text-gray-500">Order {order.name}</span>
             <span className="text-xs text-gray-500">{order.line_items?.length} items</span>
           </div>
         </div>

@@ -262,6 +262,50 @@ export class ShopifyService {
       throw new Error('Failed to update order due date in Shopify');
     }
   }
+
+  async updateOrderStartDate(orderId: number, customStartDate: string): Promise<void> {
+    try {
+      console.log('Starting updateOrderStartDate method:', { orderId, customStartDate });
+      // First get the current order to preserve other fields
+      const currentOrder = await this.getOrder(orderId);
+      console.log('Current order retrieved:', { tags: currentOrder.tags });
+      
+      // Format the date to YYYY-MM-DD for the tag
+      const formattedDate = new Date(customStartDate).toISOString().split('T')[0];
+      console.log('Formatted date:', formattedDate);
+      
+      // Convert tags to array if it's a string
+      const existingTags = typeof currentOrder.tags === 'string' 
+        ? currentOrder.tags.split(',') 
+        : Array.isArray(currentOrder.tags) 
+          ? currentOrder.tags 
+          : [];
+      console.log('Existing tags:', existingTags);
+      
+      // Remove any existing custom start date tags
+      const filteredTags = existingTags.filter((tag: string) => !tag.startsWith('custom_start_date:'));
+      console.log('Filtered tags:', filteredTags);
+      
+      const finalTags = [...filteredTags, `custom_start_date:${formattedDate}`];
+      console.log('Final tags:', finalTags);
+      
+      // Update the order with the new start date tag
+      console.log('Sending update to Shopify API');
+      await this.client.put({
+        path: `/admin/api/2023-10/orders/${orderId}.json`,
+        data: {
+          order: {
+            id: orderId,
+            tags: finalTags
+          }
+        }
+      });
+      console.log('Order successfully updated with new start date tag');
+    } catch (error) {
+      console.error('Error updating order start date:', error);
+      throw new Error('Failed to update order start date in Shopify');
+    }
+  }
 }
 
 export const shopifyService = new ShopifyService(); 
