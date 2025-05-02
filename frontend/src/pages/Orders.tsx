@@ -183,7 +183,7 @@ const Orders = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('pending');
   const [ordersState, setOrdersState] = useState<Order[] | null>(null);
 
   useEffect(() => {
@@ -349,6 +349,49 @@ const Orders = () => {
     },
   });
 
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ orderId, status }: { orderId: number; status: string }) => {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to update order status');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    },
+    onError: (error) => {
+      console.error('Error updating order status:', error);
+    }
+  });
+
+  const fulfillOrderMutation = useMutation({
+    mutationFn: async (orderId: number) => {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/fulfill`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fulfill order');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    },
+    onError: (error) => {
+      console.error('Error fulfilling order:', error);
+    }
+  });
+
   const handleOrderSelect = (orderId: number) => {
     setSelectedOrders(prev => 
       prev.includes(orderId) 
@@ -423,7 +466,8 @@ const Orders = () => {
   const handleTogglePriority = (orderId: number, isPriority: boolean) => {
     setOrdersState((prev: Order[] | null) => {
       if (!prev) return prev;
-      return prev.map((order: Order) => {
+      // Update the tags for the specific order
+      const updatedOrders = prev.map((order: Order) => {
         if (order.id !== orderId) return order;
         let tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',') : [];
         tags = tags.map((t: string) => t.trim());
@@ -434,8 +478,111 @@ const Orders = () => {
         }
         return { ...order, tags };
       });
+      
+      // Sort the updated orders with priority orders at top
+      return updatedOrders.sort((a: Order, b: Order) => {
+        const aPriority = (Array.isArray(a.tags) ? a.tags : typeof a.tags === 'string' ? a.tags.split(',') : [])
+          .map((t: string) => t.trim())
+          .includes('priority');
+        const bPriority = (Array.isArray(b.tags) ? b.tags : typeof b.tags === 'string' ? b.tags.split(',') : [])
+          .map((t: string) => t.trim())
+          .includes('priority');
+        
+        // Sort by priority first
+        if (aPriority && !bPriority) return -1;
+        if (!bPriority && aPriority) return 1;
+        
+        // If both have same priority status, maintain existing order
+        return 0;
+      });
     });
+    // Send the update to the server in the background
     updatePriorityMutation.mutate({ orderId, isPriority });
+  };
+
+  const handleUpdateStatus = (orderId: number, status: string) => {
+    // Special case for fulfilling an order
+    if (status === 'fulfill') {
+      fulfillOrderMutation.mutate(orderId);
+      return;
+    }
+    
+    setOrdersState((prev: Order[] | null) => {
+      if (!prev) return prev;
+      // Update the tags for the specific order
+      const updatedOrders = prev.map((order: Order) => {
+        if (order.id !== orderId) return order;
+        
+        let tags = Array.isArray(order.tags) ? [...order.tags] : 
+                  typeof order.tags === 'string' ? order.tags.split(',').map(t => t.trim()) : [];
+        
+        // Ensure all tags are trimmed for consistent comparison
+        tags = tags.map((tag: string) => tag.trim());
+        
+        // Remove existing status tags - with proper trimming for comparison
+        const statusTags = ['customer_confirmed', 'ready to ship', 'shipped'];
+        tags = tags.filter(tag => !statusTags.includes(tag.trim()));
+        
+        // Map frontend status values to actual tag values
+        let tagValue = status;
+        if (status === 'confirmed') {
+          tagValue = 'customer_confirmed';
+        }
+        
+        // Add the new status tag if it's not "pending" or "fulfilled"
+        if (status !== 'pending' && status !== 'fulfilled') {
+          tags.push(tagValue.trim());
+        }
+        
+        // Add a temporary tag to keep this order visible in filtered views
+        // Will be cleared on next data refresh
+        tags.push('__status_just_updated');
+        
+        return { ...order, tags };
+      });
+      
+      return updatedOrders;
+    });
+    
+    // Send the update to the server
+    updateStatusMutation.mutate({ orderId, status });
+  };
+
+  // Filter orders based on the selected filter
+  const filterOrdersByStatus = (order: Order): boolean => {
+    const tags = Array.isArray(order.tags) 
+      ? order.tags 
+      : typeof order.tags === 'string' 
+        ? order.tags.split(',').map((t: string) => t.trim()) 
+        : [];
+    
+    const trimmedTags = tags.map((tag: string) => tag.trim());
+    
+    // If an order was just updated, keep it visible momentarily regardless of status
+    if (trimmedTags.includes('__status_just_updated')) {
+      return true;
+    }
+    
+    switch(statusFilter) {
+      case 'pending':
+        // Show both pending orders (no status tags) and confirmed orders (customer_confirmed tag)
+        // but exclude other statuses (shipped, ready to ship) and fulfilled orders
+        const isPending = !trimmedTags.some(tag => 
+          tag === 'shipped' || 
+          tag === 'ready to ship'
+        );
+        const isNotFulfilled = order.fulfillment_status !== 'fulfilled';
+        return isPending && isNotFulfilled;
+      case 'ready-to-ship':
+        return trimmedTags.includes('ready to ship');
+      case 'shipped':
+        return trimmedTags.includes('shipped');
+      case 'fulfilled':
+        return order.fulfillment_status === 'fulfilled';
+      case 'all':
+      default:
+        return true;
+    }
   };
 
   // First, decorate orders with their original index
@@ -445,13 +592,13 @@ const Orders = () => {
   }))
   // Then filter
   .filter((order: Order & { originalIndex: number }) => {
-    const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) : [];
     const matchesSearch = searchQuery === '' || 
       order.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       `${order.customer?.first_name} ${order.customer?.last_name}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
       order.customer?.phone.includes(searchQuery);
-    const matchesStatus = statusFilter === 'all' || 
-      order.fulfillment_status === statusFilter;
+    
+    const matchesStatus = filterOrdersByStatus(order);
+    
     return matchesSearch && matchesStatus;
   })
   // Finally sort with stable tiebreaker
@@ -484,6 +631,46 @@ const Orders = () => {
     // Final stable sort tiebreaker using original index
     return a.originalIndex - b.originalIndex;
   });
+
+  // Clear temporary status update tags after a delay
+  useEffect(() => {
+    if (!ordersState) return;
+    
+    // Check if any orders have the temporary status tag
+    const hasTemporaryTags = ordersState.some(order => {
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map((t: string) => t.trim()) 
+          : [];
+      
+      return tags.some(tag => tag === '__status_just_updated');
+    });
+    
+    if (hasTemporaryTags) {
+      // Set a timeout to clear the temporary tags
+      const timeoutId = setTimeout(() => {
+        setOrdersState(prev => {
+          if (!prev) return prev;
+          
+          return prev.map(order => {
+            const tags = Array.isArray(order.tags) 
+              ? [...order.tags] 
+              : typeof order.tags === 'string' 
+                ? order.tags.split(',').map((t: string) => t.trim()) 
+                : [];
+            
+            // Remove the temporary tag
+            const filteredTags = tags.filter(tag => tag !== '__status_just_updated');
+            
+            return { ...order, tags: filteredTags };
+          });
+        });
+      }, 3000); // Keep visible for 3 seconds
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [ordersState]);
 
   if (isLoading) {
     return (
@@ -529,11 +716,6 @@ const Orders = () => {
           </div>
         </div>
 
-        {/* View Button */}
-        <button className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
-          <span>View</span>
-          <ViewColumnsIcon className="w-5 h-5" />
-        </button>
       </div>
       
       {/* Main Header */}
@@ -550,13 +732,13 @@ const Orders = () => {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-[160px] pl-3 pr-10 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              className="pl-4 pr-10 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
             >
-              <option value="all">All Orders</option>
-              <option value="pending">Pending</option>
-              <option value="processing">Processing</option>
+              <option value="pending">Pending Orders</option>
+              <option value="ready-to-ship">Ready to Ship</option>
               <option value="shipped">Shipped</option>
-              <option value="delivered">Delivered</option>
+              <option value="fulfilled">Fulfilled</option>
+              <option value="all">All Orders</option>
             </select>
 
             <label className="flex items-center gap-2">
@@ -596,6 +778,7 @@ const Orders = () => {
               onSelect={handleOrderSelect}
               onUpdateNote={handleUpdateNote}
               onTogglePriority={handleTogglePriority}
+              onUpdateStatus={handleUpdateStatus}
             />
           ))}
         </div>

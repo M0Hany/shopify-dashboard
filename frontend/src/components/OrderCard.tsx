@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline } from '@heroicons/react/24/outline';
+import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, ChatBubbleLeftRightIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
 import { convertToCairoTime } from '../utils/dateUtils';
+import { Menu } from '@headlessui/react';
 
 interface OrderCardProps {
   order: any;
@@ -11,6 +12,9 @@ interface OrderCardProps {
   onSelect?: (orderId: number) => void;
   onUpdateNote?: (orderId: number, note: string) => void;
   onTogglePriority?: (orderId: number, isPriority: boolean) => void;
+  onUpdateStatus?: (orderId: number, status: string) => void;
+  onSendWhatsAppMessage?: (orderId: number, phone: string, message: string) => void;
+  onSendConfirmationMessage?: (orderId: number, phone: string) => void;
 }
 
 const OrderCard: React.FC<OrderCardProps> = ({ 
@@ -19,9 +23,15 @@ const OrderCard: React.FC<OrderCardProps> = ({
   isSelected = false,
   onSelect,
   onUpdateNote,
-  onTogglePriority
+  onTogglePriority,
+  onUpdateStatus,
+  onSendWhatsAppMessage,
+  onSendConfirmationMessage
 }) => {
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
+  const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
+  const [isShippedModalOpen, setIsShippedModalOpen] = useState(false);
+  const [whatsAppMessage, setWhatsAppMessage] = useState('');
   const [noteText, setNoteText] = useState(order.note || '');
   const tags = Array.isArray(order.tags) ? order.tags :
               typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) :
@@ -53,18 +63,84 @@ const OrderCard: React.FC<OrderCardProps> = ({
     dueDate = convertToCairoTime(dueDate);
   }
 
+  // Determine the current status based on tags and fulfillment status
+  const getCurrentStatus = () => {
+    // Trim all tags for consistent matching
+    const trimmedTags = tags.map((tag: string) => tag.trim());
+    
+    if (order.fulfillment_status === 'fulfilled') {
+      return 'fulfilled';
+    } else if (trimmedTags.includes('shipped')) {
+      return 'shipped';
+    } else if (trimmedTags.includes('ready to ship')) {
+      return 'ready to ship';
+    } else if (trimmedTags.includes('customer_confirmed')) {
+      return 'confirmed';
+    } else {
+      return 'pending';
+    }
+  };
+
+  const [currentStatus, setCurrentStatus] = useState(getCurrentStatus());
+
+  useEffect(() => {
+    setCurrentStatus(getCurrentStatus());
+  }, [order.tags, order.fulfillment_status]);
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending':
         return 'bg-yellow-100 text-yellow-800';
-      case 'processing':
-        return 'bg-blue-100 text-blue-800';
+      case 'confirmed':
+        return 'bg-green-600 text-white';
+      case 'ready to ship':
+        return 'bg-blue-600 text-white font-medium';
       case 'shipped':
-        return 'bg-purple-100 text-purple-800';
-      case 'delivered':
-        return 'bg-green-100 text-green-800';
+        return 'bg-purple-600 text-white';
+      case 'fulfilled':
+        return 'bg-emerald-600 text-white';
       default:
         return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const handleStatusChange = (newStatus: string) => {
+    if (newStatus === currentStatus) return;
+    
+    // Store the previous status before updating to the new one
+    const previousStatus = currentStatus;
+    
+    // Update the local status immediately for UI feedback
+    setCurrentStatus(newStatus);
+    
+    // If the new status is shipped, open the shipping notification modal
+    // Use setTimeout to ensure the modal opens after the status update is processed
+    if (newStatus === 'shipped') {
+      // Short timeout to ensure the modal opens after the status update
+      setTimeout(() => {
+        setIsShippedModalOpen(true);
+      }, 100);
+    }
+    
+    // Send status update to the server
+    if (onUpdateStatus) {
+      onUpdateStatus(order.id, newStatus);
+    }
+  };
+
+  // Add useEffect to ensure the shipped modal opens when status changes to shipped
+  useEffect(() => {
+    if (currentStatus === 'shipped' && 
+        !isShippedModalOpen && 
+        order.customer?.phone) {
+      setIsShippedModalOpen(true);
+    }
+  }, [currentStatus, order.customer?.phone]);
+
+  const handleFulfillOrder = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onUpdateStatus) {
+      onUpdateStatus(order.id, 'fulfill');
     }
   };
 
@@ -80,12 +156,105 @@ const OrderCard: React.FC<OrderCardProps> = ({
     setIsNoteModalOpen(true);
   };
 
+  const handleChatIconClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsWhatsAppModalOpen(true);
+  };
+
   const handleNoteSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (onUpdateNote) {
       onUpdateNote(order.id, noteText);
     }
     setIsNoteModalOpen(false);
+  };
+
+  const handleWhatsAppMessageSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!whatsAppMessage.trim() || !order.customer?.phone) return;
+    
+    // Format phone and message for WhatsApp link
+    const formattedPhone = formatPhoneNumber(order.customer.phone);
+    const encodedMessage = encodeURIComponent(whatsAppMessage);
+    
+    // Create a WhatsApp link that works with both Web and Business App
+    const whatsAppLink = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
+    
+    // Open in a new tab
+    window.open(whatsAppLink, '_blank');
+    
+    setWhatsAppMessage('');
+    setIsWhatsAppModalOpen(false);
+  };
+
+  const handleSendConfirmation = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!order.customer?.phone) return;
+    
+    // Format phone for WhatsApp link
+    const formattedPhone = formatPhoneNumber(order.customer.phone);
+    
+    // Get the confirmation template
+    const confirmationTemplate = getConfirmationTemplate(order.customer.first_name);
+    
+    // Create a WhatsApp link
+    const whatsAppLink = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(confirmationTemplate)}`;
+    
+    // Open in a new tab
+    window.open(whatsAppLink, '_blank');
+    
+    setIsWhatsAppModalOpen(false);
+  };
+
+  const handleSendShippingNotification = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!order.customer?.phone) return;
+    
+    // Format phone for WhatsApp link
+    const formattedPhone = formatPhoneNumber(order.customer.phone);
+    
+    // Get the shipping notification template
+    const shippingTemplate = getShippingTemplate(order.customer.first_name);
+    
+    // Create a WhatsApp link
+    const whatsAppLink = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(shippingTemplate)}`;
+    
+    // Open in a new tab
+    window.open(whatsAppLink, '_blank');
+    
+    setIsShippedModalOpen(false);
+  };
+  
+  // Format phone number for WhatsApp
+  const formatPhoneNumber = (phone: string): string => {
+    // Remove any non-numeric characters
+    let formatted = phone.replace(/\D/g, '');
+    
+    // Ensure it starts with country code (e.g., 20 for Egypt)
+    if (!formatted.startsWith('20') && formatted.startsWith('0')) {
+      formatted = '20' + formatted.substring(1);
+    } else if (!formatted.startsWith('20') && !formatted.startsWith('0')) {
+      formatted = '20' + formatted;
+    }
+    
+    return formatted;
+  };
+  
+  // Get confirmation message template
+  const getConfirmationTemplate = (customerName: string): string => {
+    return `Hello ${customerName}✨
+OCD Crochet here, your order is confirmed! 
+
+Since every piece is handmade by one person, delivery may take around 2 weeks. 
+
+Thank you for your patience!
+Please kindly confirm 🤍`;
+  };
+
+  // Get shipping notification message template
+  const getShippingTemplate = (customerName: string): string => {
+    return `Hello ${customerName}, this is OCD crochet✨
+Your order is being picked up by the shipping company and should be arriving to you in the next couple of days🚚`;
   };
 
   const handlePriorityClick = (e: React.MouseEvent) => {
@@ -106,23 +275,30 @@ const OrderCard: React.FC<OrderCardProps> = ({
         {/* Header: Checkbox, Note Icon, and Status */}
         <div className="flex justify-between items-start mb-4">
           <div className="flex items-center gap-2">
-            <div 
-              onClick={handleCheckboxClick}
-              className="relative w-5 h-5 cursor-pointer"
-            >
-              <input
-                type="checkbox"
-                checked={isSelected}
-                onChange={() => {}}
-                className="absolute w-5 h-5 cursor-pointer rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-            </div>
+          <div 
+            onClick={handleCheckboxClick}
+            className="relative w-5 h-5 cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => {}}
+              className="absolute w-5 h-5 cursor-pointer rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+          </div>
             <button
               onClick={handleNoteIconClick}
               className="p-1 text-gray-400 hover:text-gray-600 transition-colors duration-200 bg-white rounded-md"
               title="Add note"
             >
               <PencilIcon className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleChatIconClick}
+              className="p-1 text-gray-400 hover:text-green-600 transition-colors duration-200 bg-white rounded-md"
+              title="Send WhatsApp message"
+            >
+              <ChatBubbleLeftRightIcon className="w-4 h-4" />
             </button>
           </div>
           <div className="flex items-center gap-2">
@@ -137,9 +313,96 @@ const OrderCard: React.FC<OrderCardProps> = ({
                 <StarIconOutline className="w-4 h-4 text-gray-300" />
               )}
             </button>
-            <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getStatusColor(order.fulfillment_status || 'pending')}`}>
-              {order.fulfillment_status || 'pending'}
-            </span>
+            <Menu as="div" className="relative inline-block text-left">
+              {({ open }) => (
+                <>
+                  <div>
+                    <Menu.Button 
+                      className={`inline-flex items-center justify-center px-3 py-1.5 rounded-full text-sm font-medium ${getStatusColor(currentStatus)}`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {currentStatus}
+                      <ChevronDownIcon className="w-3 h-3 ml-1" />
+                    </Menu.Button>
+                  </div>
+                  {open && (
+                    <Menu.Items
+                      static
+                      className="absolute right-0 mt-1 w-40 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="py-2 px-2 space-y-1">
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('pending')}`}
+                              onClick={() => handleStatusChange('pending')}
+                            >
+                              Pending
+                            </button>
+                          )}
+                        </Menu.Item>
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('confirmed')}`}
+                              onClick={() => handleStatusChange('confirmed')}
+                            >
+                              Confirmed
+                            </button>
+                          )}
+                        </Menu.Item>
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('ready to ship')}`}
+                              onClick={() => handleStatusChange('ready to ship')}
+                            >
+                              Ready to Ship
+                            </button>
+                          )}
+                        </Menu.Item>
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('shipped')}`}
+                              onClick={() => handleStatusChange('shipped')}
+                            >
+                              Shipped
+                            </button>
+                          )}
+                        </Menu.Item>
+                        {order.fulfillment_status !== 'fulfilled' && (
+                          <Menu.Item>
+                            {({ active }) => (
+                              <button
+                                className={`rounded-md w-full text-center py-1.5 text-sm font-medium bg-emerald-600 text-white`}
+                                onClick={handleFulfillOrder}
+                              >
+                                Fulfill
+                              </button>
+                            )}
+                          </Menu.Item>
+                        )}
+                        {order.fulfillment_status === 'fulfilled' && (
+                          <Menu.Item>
+                            {({ active }) => (
+                              <button
+                                className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('fulfilled')}`}
+                                onClick={() => handleStatusChange('fulfilled')}
+                                disabled
+                              >
+                                Fulfilled
+                              </button>
+                            )}
+                          </Menu.Item>
+                        )}
+                      </div>
+                    </Menu.Items>
+                  )}
+                </>
+              )}
+            </Menu>
           </div>
         </div>
 
@@ -210,7 +473,15 @@ const OrderCard: React.FC<OrderCardProps> = ({
         {isNoteModalOpen && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
-              <h3 className="text-lg font-medium mb-4">Add Note</h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Add Note</h3>
+                <button
+                  onClick={() => setIsNoteModalOpen(false)}
+                  className="text-gray-400 hover:text-gray-500"
+                >
+                  <XMarkIcon className="w-5 h-5" />
+                </button>
+              </div>
               <form onSubmit={handleNoteSubmit}>
                 <textarea
                   value={noteText}
@@ -218,14 +489,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
                   className="w-full h-32 p-2 border rounded-md mb-4 bg-white"
                   placeholder="Enter your note here..."
                 />
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsNoteModalOpen(false)}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
-                  >
-                    Cancel
-                  </button>
+                <div className="flex justify-end">
                   <button
                     type="submit"
                     className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
@@ -234,6 +498,91 @@ const OrderCard: React.FC<OrderCardProps> = ({
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* WhatsApp Message Modal */}
+        {isWhatsAppModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="text-lg font-medium">Send WhatsApp Message</h3>
+                <button
+                  onClick={() => setIsWhatsAppModalOpen(false)}
+                  className="text-gray-400 hover:text-gray-500"
+                >
+                  <XMarkIcon className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                {order.customer?.phone ? 
+                  `Message will be sent to ${order.customer.first_name} ${order.customer.last_name} (${order.customer.phone})` :
+                  'Customer phone number not available'}
+              </p>
+              <form onSubmit={handleWhatsAppMessageSubmit}>
+                <textarea
+                  value={whatsAppMessage}
+                  onChange={(e) => setWhatsAppMessage(e.target.value)}
+                  className="w-full h-32 p-2 border rounded-md mb-4 bg-white"
+                  placeholder="Enter your WhatsApp message..."
+                  disabled={!order.customer?.phone}
+                />
+                <div className="flex justify-between gap-2">
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={!whatsAppMessage.trim() || !order.customer?.phone}
+                  >
+                    Send Message
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSendConfirmation}
+                    className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={!order.customer?.phone}
+                  >
+                    Send Confirmation
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Shipped Notification Modal */}
+        {isShippedModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="text-lg font-medium">Order Shipped Notification</h3>
+                <button
+                  onClick={() => setIsShippedModalOpen(false)}
+                  className="text-gray-400 hover:text-gray-500"
+                >
+                  <XMarkIcon className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                {order.customer?.phone ? 
+                  `Send shipping notification to ${order.customer.first_name} ${order.customer.last_name} (${order.customer.phone})` :
+                  'Customer phone number not available'}
+              </p>
+              <div className="p-3 bg-gray-50 rounded-md mb-4">
+                <p className="text-sm text-gray-700 whitespace-pre-line">
+                  {getShippingTemplate(order.customer?.first_name || '')}
+                </p>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleSendShippingNotification}
+                  className="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!order.customer?.phone}
+                >
+                  Send Shipping Notification
+                </button>
+              </div>
             </div>
           </div>
         )}
