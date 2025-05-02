@@ -1,0 +1,292 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.shopifyService = exports.ShopifyService = void 0;
+require("@shopify/shopify-api/adapters/node");
+const shopify_api_1 = require("@shopify/shopify-api");
+const server_1 = __importDefault(require("../config/server"));
+// Initialize Shopify API client
+const shopify = (0, shopify_api_1.shopifyApi)({
+    apiSecretKey: server_1.default.shopify.apiSecret,
+    adminApiAccessToken: server_1.default.shopify.accessToken,
+    apiVersion: shopify_api_1.ApiVersion.October23,
+    hostName: server_1.default.shopify.storeUrl,
+    isEmbeddedApp: false,
+    isCustomStoreApp: true,
+    scopes: ['read_orders', 'write_orders'],
+});
+class ShopifyService {
+    constructor() {
+        this.session = new shopify_api_1.Session({
+            id: `offline_${server_1.default.shopify.storeUrl}`,
+            shop: server_1.default.shopify.storeUrl,
+            state: 'state',
+            isOnline: false,
+            accessToken: server_1.default.shopify.accessToken,
+        });
+        this.client = new shopify.clients.Rest({
+            session: this.session,
+        });
+    }
+    async getCustomerDetails(customerId) {
+        try {
+            const client = new shopify.clients.Graphql({ session: this.session });
+            const response = await client.query({
+                data: `query {
+          customer(id: "${customerId}") {
+            id
+            firstName
+            lastName
+            email
+            phone
+            defaultAddress {
+              formattedArea
+              address1
+              phone
+            }
+          }
+        }`,
+            });
+            const responseBody = response.body;
+            if (!responseBody?.data?.customer) {
+                throw new Error('Invalid response format from Shopify API');
+            }
+            return responseBody.data.customer;
+        }
+        catch (error) {
+            console.error('Error fetching customer details:', error);
+            throw new Error('Failed to fetch customer details from Shopify');
+        }
+    }
+    async getOrders(params) {
+        try {
+            const allOrders = [];
+            let hasNextPage = true;
+            let pageInfo = '';
+            while (hasNextPage) {
+                const query = {
+                    limit: params.limit ? Math.min(250, params.limit - allOrders.length) : 250,
+                    status: 'any',
+                    fields: 'id,name,email,phone,total_price,financial_status,fulfillment_status,tags,created_at,updated_at,line_items,customer,shipping_address,line_items.variant_title,note'
+                };
+                if (params.status)
+                    query.status = params.status;
+                if (params.created_at_min)
+                    query.created_at_min = params.created_at_min;
+                if (params.created_at_max)
+                    query.created_at_max = params.created_at_max;
+                if (pageInfo)
+                    query.page_info = pageInfo;
+                const response = await this.client.get({
+                    path: '/admin/api/2022-10/orders.json',
+                    query,
+                });
+                if (!response.body?.orders) {
+                    throw new Error('No orders found in response');
+                }
+                const ordersWithCustomerDetails = await Promise.all(response.body.orders.map(async (order) => {
+                    if (order.customer?.id) {
+                        try {
+                            const customerDetails = await this.getCustomerDetails(`gid://shopify/Customer/${order.customer.id}`);
+                            return {
+                                ...order,
+                                customer: {
+                                    ...order.customer,
+                                    first_name: customerDetails.firstName,
+                                    last_name: customerDetails.lastName,
+                                    phone: customerDetails.phone || customerDetails.defaultAddress?.phone || order.customer.phone
+                                }
+                            };
+                        }
+                        catch (error) {
+                            console.error(`Failed to fetch details for customer ${order.customer.id}:`, error);
+                            return order;
+                        }
+                    }
+                    return order;
+                }));
+                allOrders.push(...ordersWithCustomerDetails);
+                // Stop if we've reached the limit
+                if (params.limit && allOrders.length >= params.limit) {
+                    return allOrders.slice(0, params.limit);
+                }
+                const linkHeader = response.headers['link'];
+                if (linkHeader) {
+                    const nextPageMatch = linkHeader.match(/<([^>]+)>; rel="next"/);
+                    hasNextPage = !!nextPageMatch;
+                    if (nextPageMatch) {
+                        const nextPageUrl = new URL(nextPageMatch[1]);
+                        pageInfo = nextPageUrl.searchParams.get('page_info') || '';
+                    }
+                }
+                else {
+                    hasNextPage = false;
+                }
+            }
+            return allOrders;
+        }
+        catch (error) {
+            console.error('Error fetching orders:', {
+                error,
+                storeUrl: server_1.default.shopify.storeUrl,
+                customDomain: '007j3b-hp.com',
+                hasAccessToken: true,
+                errorDetails: error.response?.body || error.message,
+                requestUrl: error.response?.url,
+            });
+            throw new Error('Failed to fetch orders from Shopify');
+        }
+    }
+    async getOrder(id) {
+        try {
+            const response = await this.client.get({
+                path: `/admin/api/2022-10/orders/${id}.json`,
+            });
+            if (!response.body.order) {
+                throw new Error('Order not found');
+            }
+            return response.body.order;
+        }
+        catch (error) {
+            console.error('Error fetching order:', error);
+            throw new Error('Failed to fetch order from Shopify');
+        }
+    }
+    async updateOrderStatus(id, status) {
+        try {
+            await this.client.put({
+                path: `/admin/api/2022-10/orders/${id}.json`,
+                data: {
+                    order: {
+                        id,
+                        tags: [status],
+                    },
+                },
+            });
+        }
+        catch (error) {
+            console.error('Error updating order status:', error);
+            throw new Error('Failed to update order status in Shopify');
+        }
+    }
+    async updateOrderDueDate(orderId, customDueDate) {
+        try {
+            // First get the current order to preserve other fields
+            const currentOrder = await this.getOrder(orderId);
+            // Format the date to YYYY-MM-DD for the tag
+            const formattedDate = new Date(customDueDate).toISOString().split('T')[0];
+            // Convert tags to array if it's a string
+            const existingTags = typeof currentOrder.tags === 'string'
+                ? currentOrder.tags.split(',')
+                : Array.isArray(currentOrder.tags)
+                    ? currentOrder.tags
+                    : [];
+            // Remove any existing custom due date tags
+            const filteredTags = existingTags.filter((tag) => !tag.startsWith('custom_due_date:'));
+            // Update the order with the new due date tag
+            await this.client.put({
+                path: `/admin/api/2023-10/orders/${orderId}.json`,
+                data: {
+                    order: {
+                        id: orderId,
+                        tags: [...filteredTags, `custom_due_date:${formattedDate}`]
+                    }
+                }
+            });
+        }
+        catch (error) {
+            console.error('Error updating order due date:', error);
+            throw new Error('Failed to update order due date in Shopify');
+        }
+    }
+    async updateOrderStartDate(orderId, customStartDate) {
+        try {
+            console.log('Starting updateOrderStartDate method:', { orderId, customStartDate });
+            // First get the current order to preserve other fields
+            const currentOrder = await this.getOrder(orderId);
+            console.log('Current order retrieved:', { tags: currentOrder.tags });
+            // Format the date to YYYY-MM-DD for the tag
+            const formattedDate = new Date(customStartDate).toISOString().split('T')[0];
+            console.log('Formatted date:', formattedDate);
+            // Convert tags to array if it's a string
+            const existingTags = typeof currentOrder.tags === 'string'
+                ? currentOrder.tags.split(',')
+                : Array.isArray(currentOrder.tags)
+                    ? currentOrder.tags
+                    : [];
+            console.log('Existing tags:', existingTags);
+            // Remove any existing custom start date tags
+            const filteredTags = existingTags.filter((tag) => !tag.startsWith('custom_start_date:'));
+            console.log('Filtered tags:', filteredTags);
+            const finalTags = [...filteredTags, `custom_start_date:${formattedDate}`];
+            console.log('Final tags:', finalTags);
+            // Update the order with the new start date tag
+            console.log('Sending update to Shopify API');
+            await this.client.put({
+                path: `/admin/api/2023-10/orders/${orderId}.json`,
+                data: {
+                    order: {
+                        id: orderId,
+                        tags: finalTags
+                    }
+                }
+            });
+            console.log('Order successfully updated with new start date tag');
+        }
+        catch (error) {
+            console.error('Error updating order start date:', error);
+            throw new Error('Failed to update order start date in Shopify');
+        }
+    }
+    async updateOrderNote(id, note) {
+        try {
+            await this.client.put({
+                path: `/admin/api/2022-10/orders/${id}.json`,
+                data: {
+                    order: {
+                        id,
+                        note
+                    }
+                }
+            });
+        }
+        catch (error) {
+            console.error('Error updating order note:', error);
+            throw new Error('Failed to update order note in Shopify');
+        }
+    }
+    async updateOrderPriority(id, isPriority) {
+        try {
+            // First get the current order to preserve other fields
+            const currentOrder = await this.getOrder(id);
+            // Convert tags to array if it's a string
+            const existingTags = typeof currentOrder.tags === 'string'
+                ? currentOrder.tags.split(',')
+                : Array.isArray(currentOrder.tags)
+                    ? currentOrder.tags
+                    : [];
+            // Remove priority tag if it exists
+            const filteredTags = existingTags.filter((tag) => tag.trim() !== 'priority');
+            // Add priority tag if isPriority is true
+            const newTags = isPriority ? [...filteredTags, 'priority'] : filteredTags;
+            // Update the order with the new tags
+            await this.client.put({
+                path: `/admin/api/2023-10/orders/${id}.json`,
+                data: {
+                    order: {
+                        id,
+                        tags: newTags
+                    }
+                }
+            });
+        }
+        catch (error) {
+            console.error('Error updating order priority:', error);
+            throw new Error('Failed to update order priority in Shopify');
+        }
+    }
+}
+exports.ShopifyService = ShopifyService;
+exports.shopifyService = new ShopifyService();
