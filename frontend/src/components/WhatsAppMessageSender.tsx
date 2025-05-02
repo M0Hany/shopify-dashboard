@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
+import { ChatBubbleLeftRightIcon, XMarkIcon } from '@heroicons/react/24/outline';
 
 interface WhatsAppMessageSenderProps {
   orderId: number;
@@ -17,6 +17,26 @@ const WhatsAppMessageSender: React.FC<WhatsAppMessageSenderProps> = ({
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  // Close modal when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (modalRef.current && !modalRef.current.contains(event.target as Node)) {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsModalOpen(false);
+      }
+    }
+
+    if (isModalOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isModalOpen]);
 
   // Format phone number for display
   const displayPhone = phone ? formatPhoneForDisplay(phone) : 'No phone number';
@@ -149,7 +169,15 @@ const WhatsAppMessageSender: React.FC<WhatsAppMessageSenderProps> = ({
 
       {isModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
+          <div ref={modalRef} className="bg-white rounded-lg p-6 max-w-md w-full relative">
+            <button 
+              onClick={() => setIsModalOpen(false)}
+              className="absolute top-2 right-2 p-1 rounded-full bg-white hover:bg-gray-100"
+              aria-label="Close dialog"
+            >
+              <XMarkIcon className="w-5 h-5 text-gray-500" />
+            </button>
+            
             <h3 className="text-lg font-medium mb-2">Send WhatsApp Message</h3>
             <p className="text-sm text-gray-600 mb-4">
               Message will be sent to {customerName} ({displayPhone})
