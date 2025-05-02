@@ -14,7 +14,7 @@ const app = express();
 
 // CORS configuration
 app.use(cors({
-  origin: 'https://m0hany.github.io',  // Only allow production URL
+  origin: ['https://m0hany.github.io', 'http://localhost:5173'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   credentials: false  // Set to false since we're not using cookies
