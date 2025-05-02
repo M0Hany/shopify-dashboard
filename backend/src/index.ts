@@ -33,6 +33,11 @@ app.use(limiter);
 // Routes
 app.use('/api/orders', orders);
 
+// Test endpoint
+app.get('/api/test', (req, res) => {
+  res.json({ message: 'CORS test successful' });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
