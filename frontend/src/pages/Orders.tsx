@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
 import OrderDetails from '../components/OrderDetails';
-import { MagnifyingGlassIcon, ViewColumnsIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
@@ -185,6 +185,7 @@ const Orders = () => {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('pending');
   const [ordersState, setOrdersState] = useState<Order[] | null>(null);
+  const [sortDescending, setSortDescending] = useState<boolean>(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -585,6 +586,11 @@ const Orders = () => {
     }
   };
 
+  // Toggle sort order
+  const handleToggleSort = () => {
+    setSortDescending(!sortDescending);
+  };
+
   // First, decorate orders with their original index
   const sortedOrders = (ordersState || orders)?.map((order: Order, idx: number) => ({
     ...order,
@@ -603,6 +609,12 @@ const Orders = () => {
   })
   // Finally sort with stable tiebreaker
   .sort((a: Order & { originalIndex: number }, b: Order & { originalIndex: number }) => {
+    // If descending sort is enabled, simply sort by order ID in descending order
+    if (sortDescending) {
+      return b.id - a.id;
+    }
+
+    // Otherwise, continue with the original sorting logic
     const aPriority = (Array.isArray(a.tags) ? a.tags : typeof a.tags === 'string' ? a.tags.split(',') : [])
       .map((t: string) => t.trim())
       .includes('priority');
@@ -727,7 +739,7 @@ const Orders = () => {
             <p className="text-base text-gray-500">Manage and track your customer orders</p>
           </div>
 
-          {/* Right side - Filter and Select All */}
+          {/* Right side - Filter, Sort, and Select All */}
           <div className="flex items-center gap-4">
             <select
               value={statusFilter}
@@ -740,6 +752,24 @@ const Orders = () => {
               <option value="fulfilled">Fulfilled</option>
               <option value="all">All Orders</option>
             </select>
+
+            <button
+              onClick={handleToggleSort}
+              className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              title={sortDescending ? "Restore default sort" : "Sort by order ID (descending)"}
+            >
+              {sortDescending ? (
+                <>
+                  <ArrowUpIcon className="h-4 w-4 mr-1" />
+                  Default Sort
+                </>
+              ) : (
+                <>
+                  <ArrowDownIcon className="h-4 w-4 mr-1" />
+                  Sort by ID
+                </>
+              )}
+            </button>
 
             <label className="flex items-center gap-2">
               <input
