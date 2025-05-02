@@ -13,7 +13,11 @@ dotenv.config();
 const app = express();
 
 // CORS configuration
-const allowedOrigins = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:5173', 'https://m0hany.github.io'];
+const allowedOrigins = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : [
+  'http://localhost:5173',
+  'https://m0hany.github.io',
+  'https://backend-2rn7ysbxy-medohany68-gmailcoms-projects.vercel.app'
+];
 
 // Middleware
 app.use(cors({
@@ -29,7 +33,9 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 600 // Cache preflight requests for 10 minutes
 }));
 
 app.use(helmet());
