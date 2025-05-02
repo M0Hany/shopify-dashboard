@@ -5,6 +5,8 @@ import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
 import OrderDetails from '../components/OrderDetails';
 import { MagnifyingGlassIcon, ViewColumnsIcon } from '@heroicons/react/24/outline';
+import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
@@ -173,6 +175,8 @@ const convertToCairoTime = (date: Date): Date => {
 };
 
 const Orders = () => {
+  const { isAuthenticated } = useAuth();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selectedOrders, setSelectedOrders] = useState<number[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -180,10 +184,16 @@ const Orders = () => {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
+  useEffect(() => {
+    if (!isAuthenticated) {
+      navigate('/');
+    }
+  }, [isAuthenticated, navigate]);
+
   const { data: orders, isLoading, error } = useQuery<Order[]>({
     queryKey: ['orders'],
     queryFn: async () => {
-      const response = await fetch('http://localhost:3000/api/orders');
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`);
       if (!response.ok) {
         throw new Error('Failed to fetch orders');
       }
@@ -240,7 +250,7 @@ const Orders = () => {
   const updateDueDateMutation = useMutation({
     mutationFn: async ({ orderId, dueDate }: { orderId: number; dueDate: string }) => {
       console.log('Updating due date:', { orderId, dueDate });
-      const response = await fetch(`http://localhost:3000/api/orders/${orderId}/due-date`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/due-date`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
