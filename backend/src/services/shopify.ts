@@ -52,7 +52,16 @@ const shopify = shopifyApi({
   hostName: config.shopify.storeUrl,
   isEmbeddedApp: false,
   isCustomStoreApp: true,
-  scopes: ['read_orders', 'write_orders'],
+  scopes: [
+    'read_orders',
+    'write_orders',
+    'read_fulfillments',
+    'write_fulfillments',
+    'read_customers',
+    'write_customers',
+    'read_tags',
+    'write_tags'
+  ],
 });
 
 export class ShopifyService {
@@ -392,8 +401,7 @@ export class ShopifyService {
       // Get the order to find line items
       const order = await this.getOrder(id);
       
-      // Get fulfillable line items - note that Shopify API response has different structure
-      // We need to make another call to get the proper line item IDs for fulfillment
+      // Get fulfillable line items
       const fulfillmentOrderResponse = await this.client.get({
         path: `/admin/api/2023-10/orders/${id}/fulfillment_orders.json`
       });
@@ -403,21 +411,48 @@ export class ShopifyService {
         throw new Error('No fulfillment orders available for this order');
       }
       
-      // Create a fulfillment using the first fulfillment order
-      const fulfillmentOrderId = fulfillmentOrderResponse.body.fulfillment_orders[0].id;
+      // Get the first fulfillment order
+      const fulfillmentOrder = fulfillmentOrderResponse.body.fulfillment_orders[0];
       
-      await this.client.post({
+      // Check if the fulfillment order is already closed
+      if (fulfillmentOrder.status === 'closed') {
+        throw new Error('This order has already been fulfilled');
+      }
+      
+      // Check if the fulfillment order is fulfillable
+      if (fulfillmentOrder.status !== 'open') {
+        throw new Error(`Cannot fulfill order: fulfillment order status is ${fulfillmentOrder.status}`);
+      }
+      
+      // Create a fulfillment with line items
+      const response = await this.client.post({
         path: `/admin/api/2023-10/fulfillments.json`,
         data: {
           fulfillment: {
-            fulfillment_order_id: fulfillmentOrderId,
-            notify_customer: true
+            fulfillment_order_id: fulfillmentOrder.id,
+            notify_customer: true,
+            line_items_by_fulfillment_order: [{
+              fulfillment_order_id: fulfillmentOrder.id,
+              fulfillment_order_line_items: fulfillmentOrder.line_items.map((item: any) => ({
+                id: item.id,
+                quantity: item.quantity
+              }))
+            }]
           }
         }
       });
-    } catch (error) {
-      console.error('Error fulfilling order:', error);
-      throw new Error('Failed to fulfill order in Shopify');
+
+      if (!response.body.fulfillment) {
+        throw new Error('Failed to create fulfillment - no fulfillment returned in response');
+      }
+    } catch (error: any) {
+      console.error('Error fulfilling order:', {
+        error,
+        orderId: id,
+        errorDetails: error.response?.body || error.message,
+        requestUrl: error.response?.url
+      });
+      throw new Error(`Failed to fulfill order in Shopify: ${error.message}`);
     }
   }
 }
