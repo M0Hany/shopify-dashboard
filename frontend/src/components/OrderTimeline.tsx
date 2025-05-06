@@ -6,13 +6,27 @@ interface OrderTimelineProps {
   createdAt: string;
   dueDate: string;
   isCustom?: boolean;
+  orderName?: string;
 }
 
-const OrderTimeline: React.FC<OrderTimelineProps> = ({ createdAt, dueDate }) => {
+const OrderTimeline: React.FC<OrderTimelineProps> = ({ createdAt, dueDate, isCustom, orderName }) => {
+  // Ensure dates are in Cairo timezone
   const start = convertToCairoTime(new Date(createdAt));
   const end = convertToCairoTime(new Date(dueDate));
   const now = convertToCairoTime(new Date());
   const daysLeft = calculateDaysRemaining(end, now);
+
+  // Debug logging only for order #1040
+  if (orderName === '#1040') {
+    console.log('OrderTimeline dates for #1040:', {
+      createdAt,
+      dueDate,
+      start: start.toISOString(),
+      end: end.toISOString(),
+      now: now.toISOString(),
+      daysLeft
+    });
+  }
 
   // Format date to show only month and day
   const formatDate = (date: Date) => {
@@ -39,6 +53,12 @@ const OrderTimeline: React.FC<OrderTimelineProps> = ({ createdAt, dueDate }) => 
     if (daysLeft <= 4) return 'bg-yellow-500'; // High priority
     return 'bg-green-500'; // Normal
   };
+
+  // Ensure dates are valid
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    console.error('Invalid dates in OrderTimeline:', { start, end, createdAt, dueDate });
+    return null;
+  }
 
   return (
     <div className="space-y-1">
