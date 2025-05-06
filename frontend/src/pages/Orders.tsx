@@ -449,11 +449,14 @@ const Orders = () => {
       const matchedCity = findBestMatchingCity(fullAddress, order.shipping_address.province);
       
       return {
-        'Consignee Name': `${order.customer.first_name} ${order.customer.last_name}`,
+        'Serial': order.name.replace('#', ''),
+        'Reciver name': `${order.customer.first_name} ${order.customer.last_name}`,
+        'Reciver phone': formattedPhone,
+        'Reciver note': '',
         'Address': `${order.shipping_address.address1}${order.shipping_address.address2 ? `, ${order.shipping_address.address2}` : ''}, ${order.shipping_address.city}, ${order.shipping_address.province} ${order.shipping_address.zip}, ${order.shipping_address.country}`,
-        'City': matchedCity || order.shipping_address.city,
-        'Phone_1': formattedPhone,
-        'COD': formattedCOD
+        'Order_Content': order.line_items.map(item => item.title).join(', '),
+        'Ord_Qty': order.line_items.reduce((total, item) => total + item.quantity, 0),
+        'Order_Amt': formattedCOD
       };
     });
 
