@@ -374,22 +374,35 @@ const Orders = () => {
 
   const fulfillOrderMutation = useMutation({
     mutationFn: async (orderId: number) => {
+      console.log('Attempting to fulfill order:', orderId);
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/fulfill`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         }
       });
+      
       if (!response.ok) {
-        throw new Error('Failed to fulfill order');
+        const errorData = await response.json();
+        console.error('Fulfillment error details:', {
+          status: response.status,
+          statusText: response.statusText,
+          errorData,
+          orderId
+        });
+        throw new Error(errorData.details || 'Failed to fulfill order');
       }
       return response.json();
     },
     onSuccess: () => {
+      console.log('Order fulfilled successfully');
       queryClient.invalidateQueries({ queryKey: ['orders'] });
     },
-    onError: (error) => {
-      console.error('Error fulfilling order:', error);
+    onError: (error: any) => {
+      console.error('Error fulfilling order:', {
+        message: error.message,
+        error
+      });
     }
   });
 
@@ -713,9 +726,9 @@ const Orders = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top Bar */}
-      <div className="bg-white border-b px-4 py-2 flex justify-between items-center">
+      <div className="bg-white border-b px-2 sm:px-4 py-2 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
         {/* Search */}
-        <div className="relative w-[400px]">
+        <div className="relative w-full sm:w-[400px]">
           <input
             type="text"
             placeholder="Search orders..."
@@ -727,24 +740,23 @@ const Orders = () => {
             <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
           </div>
         </div>
-
       </div>
       
       {/* Main Header */}
-      <div className="bg-white border-b px-8 py-6">
-        <div className="flex justify-between items-center">
+      <div className="bg-white border-b px-4 sm:px-8 py-4 sm:py-6">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           {/* Left side - Title and Description */}
           <div>
-            <h1 className="text-[28px] font-semibold text-gray-900 leading-tight">Orders</h1>
-            <p className="text-base text-gray-500">Manage and track your customer orders</p>
+            <h1 className="text-2xl sm:text-[28px] font-semibold text-gray-900 leading-tight">Orders</h1>
+            <p className="text-sm sm:text-base text-gray-500">Manage and track your customer orders</p>
           </div>
 
           {/* Right side - Filter, Sort, and Select All */}
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4 w-full sm:w-auto">
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="pl-4 pr-10 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
+              className="w-full sm:w-auto pl-4 pr-10 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
             >
               <option value="pending">Pending Orders</option>
               <option value="ready-to-ship">Ready to Ship</option>
@@ -755,7 +767,7 @@ const Orders = () => {
 
             <button
               onClick={handleToggleSort}
-              className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              className="w-full sm:w-auto inline-flex items-center justify-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
               title={sortDescending ? "Restore default sort" : "Sort by order ID (descending)"}
             >
               {sortDescending ? (
@@ -771,7 +783,7 @@ const Orders = () => {
               )}
             </button>
 
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2 w-full sm:w-auto">
               <input
                 type="checkbox"
                 checked={selectedOrders.length === (sortedOrders?.length || 0)}
@@ -788,7 +800,7 @@ const Orders = () => {
           <div className="mt-4">
             <button
               onClick={handleExport}
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
             >
               Extract Delivery Form ({selectedOrders.length})
             </button>
@@ -797,8 +809,8 @@ const Orders = () => {
       </div>
 
       {/* Order Grid */}
-      <div className="p-8">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+      <div className="p-2 sm:p-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
           {sortedOrders?.map((order: any) => (
             <OrderCard
               key={order.id}

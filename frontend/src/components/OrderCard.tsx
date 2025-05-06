@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, ChatBubbleLeftRightIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, ChatBubbleLeftRightIcon, XMarkIcon, PhoneIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
 import { convertToCairoTime } from '../utils/dateUtils';
@@ -451,6 +451,12 @@ Your order is being picked up by the shipping company and should be arriving to 
               {order.customer?.first_name} {order.customer?.last_name}
             </span>
           </div>
+          {order.customer?.phone && (
+            <div className="flex items-center gap-2">
+              <PhoneIcon className="w-4 h-4 text-green-500" />
+              <span className="text-xs text-gray-700">{order.customer.phone}</span>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <CurrencyDollarIcon className="w-5 h-5 text-gray-400" />
             <span className="text-sm font-medium text-gray-900">
@@ -509,7 +515,7 @@ Your order is being picked up by the shipping company and should be arriving to 
         {/* Note Modal */}
         {isNoteModalOpen && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div ref={noteModalRef} className="bg-white rounded-lg p-6 max-w-md w-full relative">
+            <div ref={noteModalRef} className="bg-white rounded-lg p-6 max-w-md w-full relative" onClick={e => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Add Note</h3>
                 <button
@@ -542,7 +548,7 @@ Your order is being picked up by the shipping company and should be arriving to 
         {/* WhatsApp Message Modal */}
         {isWhatsAppModalOpen && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div ref={whatsAppModalRef} className="bg-white rounded-lg p-6 max-w-md w-full relative">
+            <div ref={whatsAppModalRef} className="bg-white rounded-lg p-6 max-w-md w-full relative" onClick={e => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-2">
                 <h3 className="text-lg font-medium">Send WhatsApp Message</h3>
                 <button
@@ -590,7 +596,7 @@ Your order is being picked up by the shipping company and should be arriving to 
         {/* Shipped Notification Modal */}
         {isShippedModalOpen && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div ref={shippedModalRef} className="bg-white rounded-lg p-6 max-w-md w-full relative">
+            <div ref={shippedModalRef} className="bg-white rounded-lg p-6 max-w-md w-full relative" onClick={e => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-2">
                 <h3 className="text-lg font-medium">Order Shipped Notification</h3>
                 <button

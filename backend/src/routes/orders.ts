@@ -97,9 +97,18 @@ router.post('/:id/fulfill', async (req, res) => {
   try {
     await shopifyService.fulfillOrder(Number(req.params.id));
     res.json({ success: true });
-  } catch (error) {
-    console.error('Error fulfilling order:', error);
-    res.status(500).json({ error: 'Failed to fulfill order' });
+  } catch (error: any) {
+    console.error('Error fulfilling order:', {
+      error,
+      orderId: req.params.id,
+      errorDetails: error.response?.body || error.message,
+      requestUrl: error.response?.url
+    });
+    res.status(500).json({ 
+      error: 'Failed to fulfill order',
+      details: error.message,
+      orderId: req.params.id
+    });
   }
 });
 
