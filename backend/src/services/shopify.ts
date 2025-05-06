@@ -282,8 +282,13 @@ export class ShopifyService {
           ? currentOrder.tags 
           : [];
       
-      // Remove any existing custom due date tags
-      const filteredTags = existingTags.filter((tag: string) => !tag.startsWith('custom_due_date:'));
+      // Remove any existing custom due date tags and trim all tags
+      const filteredTags = existingTags
+        .map((tag: string) => tag.trim())
+        .filter((tag: string) => !tag.startsWith('custom_due_date:'));
+      
+      // Add the new custom due date tag
+      const finalTags = [...filteredTags, `custom_due_date:${formattedDate}`];
       
       // Update the order with the new due date tag
       await this.client.put({
@@ -291,7 +296,7 @@ export class ShopifyService {
         data: {
           order: {
             id: orderId,
-            tags: [...filteredTags, `custom_due_date:${formattedDate}`]
+            tags: finalTags
           }
         }
       });

@@ -46,12 +46,26 @@ const OrderCard: React.FC<OrderCardProps> = ({
   }, [order.tags]);
   const isPriority = localPriority;
   
-  const dueDateTag = tags.find((tag: string) => tag.startsWith('custom_due_date:'));
+  // Ensure all tags are trimmed before searching
+  const trimmedTags = tags.map((tag: string) => tag.trim());
+  const dueDateTag = trimmedTags.find((tag: string) => tag.startsWith('custom_due_date:'));
+  const startDateTag = trimmedTags.find((tag: string) => tag.startsWith('custom_start_date:'));
   
   // Calculate dates in Cairo timezone
-  const createdAt = convertToCairoTime(new Date(order.effective_created_at || order.created_at));
-  let dueDate;
+  let startDate;
+  if (startDateTag) {
+    const dateStr = startDateTag.split(':')[1];
+    const parsedDate = convertToCairoTime(new Date(dateStr));
+    if (!isNaN(parsedDate.getTime())) {
+      startDate = parsedDate;
+    }
+  }
   
+  if (!startDate) {
+    startDate = convertToCairoTime(new Date(order.created_at));
+  }
+  
+  let dueDate;
   if (dueDateTag) {
     const dateStr = dueDateTag.split(':')[1];
     const parsedDate = convertToCairoTime(new Date(dateStr));
@@ -61,7 +75,32 @@ const OrderCard: React.FC<OrderCardProps> = ({
   }
   
   if (!dueDate) {
-    dueDate = new Date(createdAt);
+    // Calculate due date based on start date (either custom or created_at)
+    dueDate = new Date(startDate);
+    dueDate.setDate(dueDate.getDate() + 14);
+    dueDate = convertToCairoTime(dueDate);
+  }
+
+  // Debug logging only for order #1040
+  if (order.name === '#1040') {
+    console.log('OrderCard dates for #1040:', {
+      orderId: order.id,
+      tags,
+      trimmedTags,
+      startDateTag,
+      dueDateTag,
+      startDate: startDate?.toISOString(),
+      dueDate: dueDate?.toISOString(),
+      created_at: order.created_at
+    });
+  }
+
+  // Ensure both dates are valid
+  if (isNaN(startDate.getTime()) || isNaN(dueDate.getTime())) {
+    console.error('Invalid dates:', { startDate, dueDate, order });
+    // Fallback to created_at + 14 days if dates are invalid
+    startDate = convertToCairoTime(new Date(order.created_at));
+    dueDate = new Date(startDate);
     dueDate.setDate(dueDate.getDate() + 14);
     dueDate = convertToCairoTime(dueDate);
   }
@@ -480,9 +519,10 @@ Your order is being picked up by the shipping company and should be arriving to 
         {/* Timeline */}
         <div className="mb-4">
           <OrderTimeline
-            createdAt={createdAt.toISOString()}
+            createdAt={startDate.toISOString()}
             dueDate={dueDate.toISOString()}
             isCustom={!!dueDateTag}
+            orderName={order.name}
           />
         </div>
 
