@@ -450,7 +450,30 @@ export class ShopifyService {
       if (!response.body.fulfillment) {
         throw new Error('Failed to create fulfillment - no fulfillment returned in response');
       }
-    } catch (error: any) {
+
+      // After successful fulfillment, remove all status-related tags
+      const currentOrder = await this.getOrder(id);
+      const existingTags = typeof currentOrder.tags === 'string' 
+        ? currentOrder.tags.split(',').map((tag: string) => tag.trim()) 
+        : Array.isArray(currentOrder.tags) 
+          ? currentOrder.tags.map((tag: string) => tag.trim()) 
+          : [];
+      
+      // Remove all status-related tags
+      const statusTags = ['customer_confirmed', 'ready to ship', 'shipped', 'express', 'overdue'];
+      const filteredTags = existingTags.filter((tag: string) => !statusTags.includes(tag.trim()));
+      
+      // Update the order with the filtered tags
+      await this.client.put({
+        path: `/admin/api/2023-10/orders/${id}.json`,
+        data: {
+          order: {
+            id,
+            tags: filteredTags
+          }
+        }
+      });
+    } catch (error) {
       console.error('Error fulfilling order:', {
         error,
         orderId: id,

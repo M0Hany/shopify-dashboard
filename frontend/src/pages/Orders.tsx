@@ -4,9 +4,10 @@ import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
 import OrderDetails from '../components/OrderDetails';
-import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { Menu } from '@headlessui/react';
 
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
@@ -416,12 +417,27 @@ const Orders = () => {
 
   const handleSelectAll = () => {
     if (orders) {
-      if (selectedOrders.length === orders.length) {
+      // Get only the orders that are currently visible based on the filter
+      const visibleOrders = orders.filter(filterOrdersByStatus);
+      
+      if (selectedOrders.length === visibleOrders.length) {
         setSelectedOrders([]);
       } else {
-        setSelectedOrders(orders.map(order => order.id));
+        setSelectedOrders(visibleOrders.map(order => order.id));
       }
     }
+  };
+
+  const handleBulkStatusUpdate = (status: string) => {
+    if (selectedOrders.length === 0) return;
+    
+    // Update each selected order's status
+    selectedOrders.forEach(orderId => {
+      updateStatusMutation.mutate({ orderId, status });
+    });
+    
+    // Clear selection after update
+    setSelectedOrders([]);
   };
 
   const handleExport = () => {
@@ -789,24 +805,98 @@ const Orders = () => {
             <label className="flex items-center gap-2 w-full sm:w-auto">
               <input
                 type="checkbox"
-                checked={selectedOrders.length === (sortedOrders?.length || 0)}
+                checked={orders ? selectedOrders.length === orders.filter(filterOrdersByStatus).length : false}
                 onChange={handleSelectAll}
-                className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
-              <span className="text-sm text-gray-700">Select All</span>
+              <span className="text-sm text-gray-600">
+                {selectedOrders.length} selected
+              </span>
             </label>
           </div>
         </div>
 
-        {/* Export Button - Only show when orders are selected */}
+        {/* Export Button and Bulk Actions - Only show when orders are selected */}
         {selectedOrders.length > 0 && (
-          <div className="mt-4">
+          <div className="mt-4 flex items-center gap-2">
             <button
               onClick={handleExport}
-              className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
             >
               Extract Delivery Form ({selectedOrders.length})
             </button>
+
+            <Menu as="div" className="relative inline-block text-left">
+              {({ open }) => (
+                <>
+                  <div>
+                    <Menu.Button 
+                      className="inline-flex items-center justify-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                    >
+                      Bulk Status Update
+                      <ChevronDownIcon className="w-4 h-4 ml-1" />
+                    </Menu.Button>
+                  </div>
+                  {open && (
+                    <Menu.Items
+                      static
+                      className="absolute right-0 mt-1 w-48 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50"
+                    >
+                      <div className="py-1">
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`${
+                                active ? 'bg-gray-100' : ''
+                              } block w-full text-left px-4 py-2 text-sm text-white bg-green-600 hover:bg-green-700`}
+                              onClick={() => handleBulkStatusUpdate('confirmed')}
+                            >
+                              Mark Confirmed
+                            </button>
+                          )}
+                        </Menu.Item>
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`${
+                                active ? 'bg-gray-100' : ''
+                              } block w-full text-left px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 font-medium`}
+                              onClick={() => handleBulkStatusUpdate('ready to ship')}
+                            >
+                              Mark Ready to Ship
+                            </button>
+                          )}
+                        </Menu.Item>
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`${
+                                active ? 'bg-gray-100' : ''
+                              } block w-full text-left px-4 py-2 text-sm text-white bg-purple-600 hover:bg-purple-700`}
+                              onClick={() => handleBulkStatusUpdate('shipped')}
+                            >
+                              Mark Shipped
+                            </button>
+                          )}
+                        </Menu.Item>
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`${
+                                active ? 'bg-gray-100' : ''
+                              } block w-full text-left px-4 py-2 text-sm text-white bg-emerald-600 hover:bg-emerald-700`}
+                              onClick={() => handleBulkStatusUpdate('fulfill')}
+                            >
+                              Mark Fulfilled
+                            </button>
+                          )}
+                        </Menu.Item>
+                      </div>
+                    </Menu.Items>
+                  )}
+                </>
+              )}
+            </Menu>
           </div>
         )}
       </div>
