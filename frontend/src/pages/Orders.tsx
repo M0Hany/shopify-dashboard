@@ -534,12 +534,6 @@ const Orders = () => {
   };
 
   const handleUpdateStatus = (orderId: number, status: string) => {
-    // Special case for fulfilling an order
-    if (status === 'fulfill') {
-      fulfillOrderMutation.mutate(orderId);
-      return;
-    }
-    
     setOrdersState((prev: Order[] | null) => {
       if (!prev) return prev;
       // Update the tags for the specific order
@@ -553,7 +547,7 @@ const Orders = () => {
         tags = tags.map((tag: string) => tag.trim());
         
         // Remove existing status tags - with proper trimming for comparison
-        const statusTags = ['customer_confirmed', 'ready to ship', 'shipped'];
+        const statusTags = ['customer_confirmed', 'ready to ship', 'shipped', 'fulfilled'];
         tags = tags.filter(tag => !statusTags.includes(tag.trim()));
         
         // Map frontend status values to actual tag values
@@ -562,9 +556,14 @@ const Orders = () => {
           tagValue = 'customer_confirmed';
         }
         
-        // Add the new status tag if it's not "pending" or "fulfilled"
-        if (status !== 'pending' && status !== 'fulfilled') {
+        // Add the new status tag if it's not "pending"
+        if (status !== 'pending') {
           tags.push(tagValue.trim());
+        }
+
+        // If status is fulfilled, remove priority tag
+        if (status === 'fulfilled') {
+          tags = tags.filter(tag => tag !== 'priority');
         }
         
         // Add a temporary tag to keep this order visible in filtered views
@@ -599,19 +598,18 @@ const Orders = () => {
     switch(statusFilter) {
       case 'pending':
         // Show both pending orders (no status tags) and confirmed orders (customer_confirmed tag)
-        // but exclude other statuses (shipped, ready to ship) and fulfilled orders
-        const isPending = !trimmedTags.some(tag => 
+        // but exclude other statuses (shipped, ready to ship, fulfilled)
+        return !trimmedTags.some(tag => 
           tag === 'shipped' || 
-          tag === 'ready to ship'
+          tag === 'ready to ship' ||
+          tag === 'fulfilled'
         );
-        const isNotFulfilled = order.fulfillment_status !== 'fulfilled';
-        return isPending && isNotFulfilled;
       case 'ready-to-ship':
         return trimmedTags.includes('ready to ship');
       case 'shipped':
         return trimmedTags.includes('shipped');
       case 'fulfilled':
-        return order.fulfillment_status === 'fulfilled';
+        return trimmedTags.includes('fulfilled');
       case 'all':
       default:
         return true;
@@ -646,7 +644,27 @@ const Orders = () => {
       return b.id - a.id;
     }
 
-    // Otherwise, continue with the original sorting logic
+    // Get status priority for sorting
+    const getStatusPriority = (order: Order) => {
+      const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',') : [];
+      const trimmedTags = tags.map((t: string) => t.trim());
+      
+      if (trimmedTags.includes('fulfilled')) return 4;
+      if (trimmedTags.includes('shipped')) return 3;
+      if (trimmedTags.includes('ready to ship')) return 2;
+      if (trimmedTags.includes('customer_confirmed') || !trimmedTags.some(tag => ['shipped', 'ready to ship', 'fulfilled'].includes(tag))) return 1;
+      return 0;
+    };
+
+    const aStatusPriority = getStatusPriority(a);
+    const bStatusPriority = getStatusPriority(b);
+
+    // First sort by status priority
+    if (aStatusPriority !== bStatusPriority) {
+      return aStatusPriority - bStatusPriority;
+    }
+
+    // Then sort by priority tag
     const aPriority = (Array.isArray(a.tags) ? a.tags : typeof a.tags === 'string' ? a.tags.split(',') : [])
       .map((t: string) => t.trim())
       .includes('priority');
@@ -655,6 +673,7 @@ const Orders = () => {
       .includes('priority');
     if (aPriority && !bPriority) return -1;
     if (!aPriority && bPriority) return 1;
+
     // Both are same priority status, now sort by days left
     const now = convertToCairoTime(new Date());
     const aDueDate = a.custom_due_date 
