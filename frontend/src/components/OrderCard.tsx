@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, ChatBubbleLeftRightIcon, XMarkIcon, PhoneIcon } from '@heroicons/react/24/outline';
+import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, ChatBubbleLeftRightIcon, XMarkIcon, PhoneIcon, TruckIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
 import { convertToCairoTime } from '../utils/dateUtils';
@@ -16,6 +16,73 @@ interface OrderCardProps {
   onSendWhatsAppMessage?: (orderId: number, phone: string, message: string) => void;
   onSendConfirmationMessage?: (orderId: number, phone: string) => void;
 }
+
+// Add new ShippingStatus component
+const ShippingStatus: React.FC<{ shippingDate: string }> = ({ shippingDate }) => {
+  const [daysPassed, setDaysPassed] = useState(0);
+
+  useEffect(() => {
+    const calculateDaysPassed = () => {
+      try {
+        // Parse the YYYY-MM-DD date string
+        const [year, month, day] = shippingDate.split('-').map(Number);
+        const shipped = new Date(year, month - 1, day); // month is 0-based in JS Date
+        if (isNaN(shipped.getTime())) {
+          console.error('Invalid shipping date:', shippingDate);
+          return;
+        }
+        const now = new Date();
+        // Set both dates to midnight for accurate day calculation
+        const shippedMidnight = new Date(shipped.getFullYear(), shipped.getMonth(), shipped.getDate());
+        const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const diffTime = Math.abs(nowMidnight.getTime() - shippedMidnight.getTime());
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        setDaysPassed(diffDays);
+      } catch (error) {
+        console.error('Error calculating days passed:', error);
+      }
+    };
+
+    calculateDaysPassed();
+    // Update every minute
+    const interval = setInterval(calculateDaysPassed, 60000);
+    return () => clearInterval(interval);
+  }, [shippingDate]);
+
+  // Format the date for display
+  const formatDate = (dateStr: string) => {
+    try {
+      const [year, month, day] = dateStr.split('-').map(Number);
+      const date = new Date(year, month - 1, day);
+      if (isNaN(date.getTime())) {
+        return 'Invalid Date';
+      }
+      // Format the date in a more readable way
+      return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+    } catch (error) {
+      console.error('Error formatting date:', error);
+      return 'Invalid Date';
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 p-2 bg-purple-50 rounded-md">
+      <TruckIcon className="w-5 h-5 text-purple-600" />
+      <div className="text-sm">
+        <span className="text-purple-700 font-medium">
+          {daysPassed === 0 ? 'Shipped today' : `Shipped ${daysPassed} days ago`}
+        </span>
+        <div className="text-xs text-purple-600">
+          {formatDate(shippingDate)}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const OrderCard: React.FC<OrderCardProps> = ({ 
   order, 
@@ -110,7 +177,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
     // Trim all tags for consistent matching
     const trimmedTags = tags.map((tag: string) => tag.trim());
     
-    if (order.fulfillment_status === 'fulfilled') {
+    if (trimmedTags.includes('fulfilled')) {
       return 'fulfilled';
     } else if (trimmedTags.includes('shipped')) {
       return 'shipped';
@@ -174,15 +241,16 @@ const OrderCard: React.FC<OrderCardProps> = ({
   useEffect(() => {
     if (currentStatus === 'shipped' && 
         !isShippedModalOpen && 
-        order.customer?.phone) {
+        order.customer?.phone &&
+        tags.includes('__status_just_updated')) {
       setIsShippedModalOpen(true);
     }
-  }, [currentStatus, order.customer?.phone]);
+  }, [currentStatus, order.customer?.phone, tags]);
 
   const handleFulfillOrder = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onUpdateStatus) {
-      onUpdateStatus(order.id, 'fulfill');
+      onUpdateStatus(order.id, 'fulfilled');
     }
   };
 
@@ -342,6 +410,18 @@ Your order is being picked up by the shipping company and should be arriving to 
     };
   }, [isNoteModalOpen, isWhatsAppModalOpen, isShippedModalOpen]);
 
+  // Update the getShippingDate function
+  const getShippingDate = () => {
+    const shippingDateTag = trimmedTags.find((tag: string) => tag.trim().startsWith('shipping_date:'));
+    if (shippingDateTag) {
+      const dateStr = shippingDateTag.trim().split(':')[1]?.trim();
+      if (dateStr) {
+        return dateStr;
+      }
+    }
+    return null;
+  };
+
   return (
     <div 
       onClick={onClick}
@@ -448,31 +528,16 @@ Your order is being picked up by the shipping company and should be arriving to 
                             </button>
                           )}
                         </Menu.Item>
-                        {order.fulfillment_status !== 'fulfilled' && (
-                          <Menu.Item>
-                            {({ active }) => (
-                              <button
-                                className={`rounded-md w-full text-center py-1.5 text-sm font-medium bg-emerald-600 text-white`}
-                                onClick={handleFulfillOrder}
-                              >
-                                Fulfill
-                              </button>
-                            )}
-                          </Menu.Item>
-                        )}
-                        {order.fulfillment_status === 'fulfilled' && (
-                          <Menu.Item>
-                            {({ active }) => (
-                              <button
-                                className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('fulfilled')}`}
-                                onClick={() => handleStatusChange('fulfilled')}
-                                disabled
-                              >
-                                Fulfilled
-                              </button>
-                            )}
-                          </Menu.Item>
-                        )}
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('fulfilled')}`}
+                              onClick={() => handleStatusChange('fulfilled')}
+                            >
+                              Fulfilled
+                            </button>
+                          )}
+                        </Menu.Item>
                       </div>
                     </Menu.Items>
                   )}
@@ -516,15 +581,21 @@ Your order is being picked up by the shipping company and should be arriving to 
           </div>
         )}
 
-        {/* Timeline */}
-        <div className="mb-4">
-          <OrderTimeline
-            createdAt={startDate.toISOString()}
-            dueDate={dueDate.toISOString()}
-            isCustom={!!dueDateTag}
-            orderName={order.name}
-          />
-        </div>
+        {/* Timeline or Shipping Status */}
+        {trimmedTags.includes('shipped') ? (
+          <div className="mb-4">
+            <ShippingStatus shippingDate={getShippingDate() || new Date().toISOString()} />
+          </div>
+        ) : !trimmedTags.includes('fulfilled') && (
+          <div className="mb-4">
+            <OrderTimeline
+              createdAt={startDate.toISOString()}
+              dueDate={dueDate.toISOString()}
+              isCustom={!!dueDateTag}
+              orderName={order.name}
+            />
+          </div>
+        )}
 
         {/* Items List */}
         <div className="space-y-2 mb-4">
