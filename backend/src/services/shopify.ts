@@ -229,7 +229,7 @@ export class ShopifyService {
         throw new Error('Order not found');
       }
 
-      // Get existing tags
+      // Get existing tags and ensure they are trimmed
       const existingTags = typeof order.tags === 'string' 
         ? order.tags.split(',').map((tag: string) => tag.trim())
         : Array.isArray(order.tags)
@@ -237,14 +237,15 @@ export class ShopifyService {
           : [];
       
       // Filter out existing status tags and shipping date tag
+      const statusTags = ['customer_confirmed', 'ready to ship', 'shipped', 'fulfilled', 'cancelled'].map(tag => tag.trim());
       const filteredTags = existingTags.filter((tag: string) => 
-        !['customer_confirmed', 'ready to ship', 'shipped', 'fulfilled'].includes(tag) &&
+        !statusTags.includes(tag.trim()) &&
         !tag.startsWith('shipping_date:')
       );
 
-      // Add new status tag if not pending
+      // Add new status tag if not pending (ensure it's trimmed)
       if (status !== 'pending') {
-        filteredTags.push(status);
+        filteredTags.push(status.trim());
       }
 
       // If status is shipped, add shipping date tag
@@ -254,20 +255,20 @@ export class ShopifyService {
         filteredTags.push(`shipping_date:${shippingDate}`);
       }
 
-      // Remove priority tag if status is fulfilled
-      if (status === 'fulfilled') {
-        const priorityIndex = filteredTags.indexOf('priority');
+      // Remove priority tag if status is fulfilled or cancelled
+      if (status.trim() === 'fulfilled' || status.trim() === 'cancelled') {
+        const priorityIndex = filteredTags.findIndex(tag => tag.trim() === 'priority');
         if (priorityIndex > -1) {
           filteredTags.splice(priorityIndex, 1);
         }
       }
 
-      // Update the order with new tags
+      // Update the order with new tags (ensure all tags are trimmed before joining)
       await this.client.put({
         path: `orders/${orderId}`,
         data: {
           order: {
-            tags: filteredTags.join(', ')
+            tags: filteredTags.map(tag => tag.trim()).join(', ')
           }
         }
       });
@@ -491,6 +492,39 @@ export class ShopifyService {
         requestUrl: error.response?.url
       });
       throw new Error(`Failed to fulfill order in Shopify: ${error.message}`);
+    }
+  }
+
+  async deleteOrder(id: number): Promise<void> {
+    try {
+      // First get the order to check if it's cancelled
+      const order = await this.getOrder(id);
+      if (!order) {
+        throw new Error('Order not found');
+      }
+
+      // Check if the order is cancelled
+      const tags = typeof order.tags === 'string' 
+        ? order.tags.split(',').map((tag: string) => tag.trim())
+        : Array.isArray(order.tags)
+          ? order.tags.map((tag: string) => tag.trim())
+          : [];
+
+      if (!tags.includes('cancelled')) {
+        throw new Error('Only cancelled orders can be deleted');
+      }
+
+      // Delete the order
+      await this.client.delete({
+        path: `/admin/api/2023-10/orders/${id}.json`
+      });
+    } catch (error: unknown) {
+      console.error('Error deleting order:', {
+        error,
+        orderId: id,
+        errorDetails: error instanceof Error ? error.message : 'Unknown error'
+      });
+      throw new Error(error instanceof Error ? error.message : 'Failed to delete order from Shopify');
     }
   }
 }

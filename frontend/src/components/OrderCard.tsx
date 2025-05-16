@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, ChatBubbleLeftRightIcon, XMarkIcon, PhoneIcon, TruckIcon } from '@heroicons/react/24/outline';
+import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, ChatBubbleLeftRightIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
 import { convertToCairoTime } from '../utils/dateUtils';
@@ -15,6 +15,7 @@ interface OrderCardProps {
   onUpdateStatus?: (orderId: number, status: string) => void;
   onSendWhatsAppMessage?: (orderId: number, phone: string, message: string) => void;
   onSendConfirmationMessage?: (orderId: number, phone: string) => void;
+  onDeleteOrder?: (orderId: number) => void;
 }
 
 // Add new ShippingStatus component
@@ -93,7 +94,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
   onTogglePriority,
   onUpdateStatus,
   onSendWhatsAppMessage,
-  onSendConfirmationMessage
+  onSendConfirmationMessage,
+  onDeleteOrder
 }) => {
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
@@ -177,13 +179,24 @@ const OrderCard: React.FC<OrderCardProps> = ({
     // Trim all tags for consistent matching
     const trimmedTags = tags.map((tag: string) => tag.trim());
     
-    if (trimmedTags.includes('fulfilled')) {
+    // Define status tags with proper trimming
+    const statusTags = {
+      fulfilled: 'fulfilled',
+      shipped: 'shipped',
+      readyToShip: 'ready to ship',
+      customerConfirmed: 'customer_confirmed',
+      cancelled: 'cancelled'
+    } as const;
+    
+    if (trimmedTags.some((tag: string) => tag.trim() === statusTags.cancelled)) {
+      return 'cancelled';
+    } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.fulfilled)) {
       return 'fulfilled';
-    } else if (trimmedTags.includes('shipped')) {
+    } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.shipped)) {
       return 'shipped';
-    } else if (trimmedTags.includes('ready to ship')) {
+    } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.readyToShip)) {
       return 'ready to ship';
-    } else if (trimmedTags.includes('customer_confirmed')) {
+    } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.customerConfirmed)) {
       return 'confirmed';
     } else {
       return 'pending';
@@ -208,6 +221,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
         return 'bg-purple-600 text-white';
       case 'fulfilled':
         return 'bg-emerald-600 text-white';
+      case 'cancelled':
+        return 'bg-red-600 text-white';
       default:
         return 'bg-gray-100 text-gray-800';
     }
@@ -422,53 +437,76 @@ Your order is being picked up by the shipping company and should be arriving to 
     return null;
   };
 
+  const isOrderCancelled = trimmedTags.some((tag: string) => tag.trim() === 'cancelled');
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onDeleteOrder) {
+      onDeleteOrder(order.id);
+    }
+  };
+
   return (
     <div 
       onClick={onClick}
-      className="bg-white rounded-lg border border-gray-200 hover:border-gray-300 transition-all duration-200 cursor-pointer"
+      className={`bg-white rounded-lg border ${isOrderCancelled ? 'border-red-200' : 'border-gray-200'} hover:border-gray-300 transition-all duration-200 cursor-pointer`}
     >
       <div className="p-4">
         {/* Header: Checkbox, Note Icon, and Status */}
         <div className="flex justify-between items-start mb-4">
           <div className="flex items-center gap-2">
-          <div 
-            onClick={handleCheckboxClick}
-            className="relative w-5 h-5 cursor-pointer"
-          >
-            <input
-              type="checkbox"
-              checked={isSelected}
-              onChange={() => {}}
-              className="absolute w-5 h-5 cursor-pointer rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-            />
-          </div>
-            <button
-              onClick={handleNoteIconClick}
-              className="p-1 text-gray-400 hover:text-gray-600 transition-colors duration-200 bg-white rounded-md"
-              title="Add note"
+            <div 
+              onClick={handleCheckboxClick}
+              className="relative w-5 h-5 cursor-pointer"
             >
-              <PencilIcon className="w-4 h-4" />
-            </button>
-            <button
-              onClick={handleChatIconClick}
-              className="p-1 text-gray-400 hover:text-green-600 transition-colors duration-200 bg-white rounded-md"
-              title="Send WhatsApp message"
-            >
-              <ChatBubbleLeftRightIcon className="w-4 h-4" />
-            </button>
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={() => {}}
+                className="absolute w-5 h-5 cursor-pointer rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+            </div>
+            {!isOrderCancelled && (
+              <>
+                <button
+                  onClick={handleNoteIconClick}
+                  className="p-1 text-gray-400 hover:text-gray-600 transition-colors duration-200 bg-white rounded-md"
+                  title="Add note"
+                >
+                  <PencilIcon className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={handleChatIconClick}
+                  className="p-1 text-gray-400 hover:text-green-600 transition-colors duration-200 bg-white rounded-md"
+                  title="Send WhatsApp message"
+                >
+                  <ChatBubbleLeftRightIcon className="w-4 h-4" />
+                </button>
+              </>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handlePriorityClick}
-              className="p-1 transition-all duration-200 bg-white rounded-md"
-              title={isPriority ? "Remove priority" : "Add priority"}
-            >
-              {isPriority ? (
-                <StarIconSolid className="w-4 h-4 text-yellow-500" />
-              ) : (
-                <StarIconOutline className="w-4 h-4 text-gray-300" />
-              )}
-            </button>
+            {isOrderCancelled ? (
+              <button
+                onClick={handleDeleteClick}
+                className="p-1 transition-all duration-200 bg-white rounded-md"
+                title="Delete order"
+              >
+                <TrashIcon className="w-4 h-4 text-red-500 hover:text-red-600" />
+              </button>
+            ) : (
+              <button
+                onClick={handlePriorityClick}
+                className="p-1 transition-all duration-200 bg-white rounded-md"
+                title={isPriority ? "Remove priority" : "Add priority"}
+              >
+                {isPriority ? (
+                  <StarIconSolid className="w-4 h-4 text-yellow-500" />
+                ) : (
+                  <StarIconOutline className="w-4 h-4 text-gray-300" />
+                )}
+              </button>
+            )}
             <Menu as="div" className="relative inline-block text-left">
               {({ open }) => (
                 <>
@@ -538,6 +576,16 @@ Your order is being picked up by the shipping company and should be arriving to 
                             </button>
                           )}
                         </Menu.Item>
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('cancelled')}`}
+                              onClick={() => handleStatusChange('cancelled')}
+                            >
+                              Cancelled
+                            </button>
+                          )}
+                        </Menu.Item>
                       </div>
                     </Menu.Items>
                   )}
@@ -569,8 +617,8 @@ Your order is being picked up by the shipping company and should be arriving to 
           </div>
         </div>
 
-        {/* Order Notes */}
-        {order.note && (
+        {/* Order Notes - only show if not cancelled */}
+        {!isOrderCancelled && order.note && (
           <div className="mb-4 p-3 bg-amber-50 rounded-md">
             <div className="flex gap-2">
               <ExclamationTriangleIcon className="w-5 h-5 text-amber-600 flex-shrink-0" />
@@ -581,20 +629,24 @@ Your order is being picked up by the shipping company and should be arriving to 
           </div>
         )}
 
-        {/* Timeline or Shipping Status */}
-        {trimmedTags.includes('shipped') ? (
-          <div className="mb-4">
-            <ShippingStatus shippingDate={getShippingDate() || new Date().toISOString()} />
-          </div>
-        ) : !trimmedTags.includes('fulfilled') && (
-          <div className="mb-4">
-            <OrderTimeline
-              createdAt={startDate.toISOString()}
-              dueDate={dueDate.toISOString()}
-              isCustom={!!dueDateTag}
-              orderName={order.name}
-            />
-          </div>
+        {/* Timeline or Shipping Status - only show if not cancelled */}
+        {!isOrderCancelled && (
+          <>
+            {trimmedTags.includes('shipped') ? (
+              <div className="mb-4">
+                <ShippingStatus shippingDate={getShippingDate() || new Date().toISOString()} />
+              </div>
+            ) : !trimmedTags.includes('fulfilled') && (
+              <div className="mb-4">
+                <OrderTimeline
+                  createdAt={startDate.toISOString()}
+                  dueDate={dueDate.toISOString()}
+                  isCustom={!!dueDateTag}
+                  orderName={order.name}
+                />
+              </div>
+            )}
+          </>
         )}
 
         {/* Items List */}
@@ -604,7 +656,7 @@ Your order is being picked up by the shipping company and should be arriving to 
             {order.line_items?.map((item: any, index: number) => (
               <div key={index} className="flex justify-between text-sm">
                 <div className="flex gap-2">
-                  <span className="text-gray-900">
+                  <span className={`${isOrderCancelled ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
                     {item.title}
                     {item.variant_title && ` (${item.variant_title})`}
                   </span>

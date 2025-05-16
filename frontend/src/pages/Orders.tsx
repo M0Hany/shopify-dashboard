@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
 import OrderDetails from '../components/OrderDetails';
-import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { Menu } from '@headlessui/react';
@@ -187,6 +187,7 @@ const Orders = () => {
   const [statusFilter, setStatusFilter] = useState<string>('pending');
   const [ordersState, setOrdersState] = useState<Order[] | null>(null);
   const [sortDescending, setSortDescending] = useState<boolean>(false);
+  const [previousStatusFilter, setPreviousStatusFilter] = useState<string>('pending');
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -407,6 +408,26 @@ const Orders = () => {
     }
   });
 
+  // Add delete order mutation
+  const deleteOrderMutation = useMutation({
+    mutationFn: async (orderId: number) => {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to delete order');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    },
+    onError: (error) => {
+      console.error('Error deleting order:', error);
+    }
+  });
+
   const handleOrderSelect = (orderId: number) => {
     setSelectedOrders(prev => 
       prev.includes(orderId) 
@@ -445,38 +466,95 @@ const Orders = () => {
 
     const selectedOrderData = orders.filter(order => selectedOrders.includes(order.id));
     const exportData = selectedOrderData.map(order => {
-      // Format phone number: remove all non-digits, ensure it starts with 01
+      // Format phone number: remove all non-digits and ensure leading zero
       let formattedPhone = order.customer.phone.replace(/\D/g, '');
       if (formattedPhone.startsWith('20')) {
         formattedPhone = formattedPhone.substring(2);
       }
-      if (!formattedPhone.startsWith('01')) {
-        formattedPhone = '01' + formattedPhone;
+      if (!formattedPhone.startsWith('0')) {
+        formattedPhone = '0' + formattedPhone;
       }
-      
-      // Format COD: convert to integer (remove decimal point and everything after it)
-      const formattedCOD = Math.floor(parseFloat(order.total_price));
-      
-      // Get Arabic province name
-      const arabicProvince = provinceMapping[order.shipping_address.province] || order.shipping_address.province;
-      
-      // Find the best matching city
+
+      // Get the full address and city from Shopify
       const fullAddress = `${order.shipping_address.address1}${order.shipping_address.address2 ? `, ${order.shipping_address.address2}` : ''}`;
-      const matchedCity = findBestMatchingCity(fullAddress, order.shipping_address.province);
+      const shopifyCity = order.shipping_address.city;
+
+      // List of valid cities
+      const validCities = [
+        'Cairo', 'Giza', 'Alexandria', 'Beheira', 'Dakahlia', 'Damietta', 'Gharbia',
+        'Ismailia', 'Kafr El Sheikh', 'Monufia', 'Port Said', 'Qalyubia', 'Sharqia',
+        'Suez', 'North Coast', 'Asyut', 'Aswan', 'Beni Suef', 'Faiyum', 'Luxor',
+        'Matruh', 'Minya', 'El Wadi el Gedid', 'North Sinai', 'Qena', 'Red Sea',
+        'Sohag', 'South Sinai', 'Banha City'
+      ];
+
+      // Try to find a matching city from our valid cities list
+      let city = '';
+      
+      // First try to match the Shopify city directly
+      const matchingCity = validCities.find(validCity => 
+        validCity.toLowerCase() === shopifyCity.toLowerCase() ||
+        shopifyCity.toLowerCase().includes(validCity.toLowerCase())
+      );
+
+      if (matchingCity) {
+        city = matchingCity;
+      } else {
+        // If no match found in the city field, try the full address
+        const addressMatch = validCities.find(validCity =>
+          fullAddress.toLowerCase().includes(validCity.toLowerCase())
+        );
+        
+        if (addressMatch) {
+          city = addressMatch;
+        } else {
+          // If still no match, use the original city from Shopify
+          city = shopifyCity;
+        }
+      }
+
+      // Determine neighborhood and district based on city
+      const neighborhood = (city === 'Cairo' || city === 'Giza') ? '' : city;
+      const district = (city === 'Cairo' || city === 'Giza') ? '' : city;
       
       return {
-        'Serial': order.name.replace('#', ''),
-        'Reciver name': `${order.customer.first_name} ${order.customer.last_name}`,
-        'Reciver phone': formattedPhone,
-        'Reciver note': '',
-        'Address': `${order.shipping_address.address1}${order.shipping_address.address2 ? `, ${order.shipping_address.address2}` : ''}, ${order.shipping_address.city}, ${order.shipping_address.province} ${order.shipping_address.zip}, ${order.shipping_address.country}`,
-        'Order_Content': order.line_items.map(item => item.title).join(', '),
-        'Ord_Qty': order.line_items.reduce((total, item) => total + item.quantity, 0),
-        'Order_Amt': formattedCOD
+        'Package_Serial': order.name.replace('#', ''),
+        'Description': 'crochet',
+        'Total_Weight': '0.5',
+        'Service': 'Next Day',
+        'Service_Type': 'Door-to-Door',
+        'Service_Category': 'Delivery',
+        'Payment_Type': 'Cash-on-Delivery',
+        'COD_Value': Math.floor(parseFloat(order.total_price)),
+        'Quantity': order.line_items.reduce((total, item) => total + item.quantity, 0),
+        'Weight': '0.5',
+        'Customer_Name': `${order.customer.first_name} ${order.customer.last_name}`,
+        'Mobile_No': formattedPhone,
+        'Street': fullAddress,
+        'City': city,
+        'Neighborhood': neighborhood,
+        'District': district,
+        'Address_Category': 'Home',
+        'Fulfillment': 'False'
       };
     });
 
     const ws = XLSX.utils.json_to_sheet(exportData);
+
+    // Set the Mobile_No column to text format to preserve leading zeros
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    const mobileNoCol = Object.keys(ws).find(key => 
+      ws[key].v === 'Mobile_No'
+    )?.replace(/[0-9]/g, '');
+
+    if (mobileNoCol) {
+      for (let row = range.s.r + 1; row <= range.e.r; row++) {
+        const cellRef = mobileNoCol + (row + 1);
+        if (!ws[cellRef]) continue;
+        ws[cellRef].z = '@';  // Set cell format to Text
+      }
+    }
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Delivery Form");
     XLSX.writeFile(wb, "delivery_form.xlsx");
@@ -580,6 +658,12 @@ const Orders = () => {
     updateStatusMutation.mutate({ orderId, status });
   };
 
+  const handleDeleteOrder = (orderId: number) => {
+    if (window.confirm('Are you sure you want to delete this order? This action cannot be undone.')) {
+      deleteOrderMutation.mutate(orderId);
+    }
+  };
+
   // Filter orders based on the selected filter
   const filterOrdersByStatus = (order: Order): boolean => {
     const tags = Array.isArray(order.tags) 
@@ -594,31 +678,89 @@ const Orders = () => {
     if (trimmedTags.includes('__status_just_updated')) {
       return true;
     }
+
+    // Define status tags with proper trimming
+    const statusTags = {
+      shipped: 'shipped',
+      readyToShip: 'ready to ship',
+      fulfilled: 'fulfilled',
+      cancelled: 'cancelled',
+      customerConfirmed: 'customer_confirmed'
+    };
     
     switch(statusFilter) {
       case 'pending':
         // Show both pending orders (no status tags) and confirmed orders (customer_confirmed tag)
-        // but exclude other statuses (shipped, ready to ship, fulfilled)
-        return !trimmedTags.some(tag => 
-          tag === 'shipped' || 
-          tag === 'ready to ship' ||
-          tag === 'fulfilled'
-        );
+        // but exclude other statuses (shipped, ready to ship, fulfilled, cancelled)
+        return !trimmedTags.some(tag => [
+          statusTags.shipped,
+          statusTags.readyToShip,
+          statusTags.fulfilled,
+          statusTags.cancelled
+        ].includes(tag.trim()));
       case 'ready-to-ship':
-        return trimmedTags.includes('ready to ship');
+        return trimmedTags.some(tag => tag.trim() === statusTags.readyToShip);
       case 'shipped':
-        return trimmedTags.includes('shipped');
+        return trimmedTags.some(tag => tag.trim() === statusTags.shipped);
       case 'fulfilled':
-        return trimmedTags.includes('fulfilled');
+        return trimmedTags.some(tag => tag.trim() === statusTags.fulfilled);
+      case 'cancelled':
+        return trimmedTags.some(tag => tag.trim() === statusTags.cancelled);
       case 'all':
       default:
         return true;
     }
   };
 
+  // Get status priority for sorting
+  const getStatusPriority = (order: Order) => {
+    const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',') : [];
+    const trimmedTags = tags.map((t: string) => t.trim());
+    
+    // Define status tags with proper trimming
+    const statusTags = {
+      cancelled: 'cancelled',
+      fulfilled: 'fulfilled',
+      shipped: 'shipped',
+      readyToShip: 'ready to ship',
+      customerConfirmed: 'customer_confirmed'
+    };
+    
+    if (trimmedTags.some(tag => tag.trim() === statusTags.cancelled)) return 5;
+    if (trimmedTags.some(tag => tag.trim() === statusTags.fulfilled)) return 4;
+    if (trimmedTags.some(tag => tag.trim() === statusTags.shipped)) return 3;
+    if (trimmedTags.some(tag => tag.trim() === statusTags.readyToShip)) return 2;
+    if (trimmedTags.some(tag => tag.trim() === statusTags.customerConfirmed) || 
+        !trimmedTags.some(tag => [
+          statusTags.shipped,
+          statusTags.readyToShip,
+          statusTags.fulfilled,
+          statusTags.cancelled
+        ].includes(tag.trim()))) return 1;
+    return 0;
+  };
+
   // Toggle sort order
   const handleToggleSort = () => {
     setSortDescending(!sortDescending);
+  };
+
+  // Update search query handler
+  const handleSearchChange = (value: string) => {
+    if (value && statusFilter !== 'all') {
+      // Store current filter before switching to 'all'
+      setPreviousStatusFilter(statusFilter);
+      setStatusFilter('all');
+    } else if (!value && statusFilter === 'all') {
+      // Restore previous filter when search is cleared
+      setStatusFilter(previousStatusFilter);
+    }
+    setSearchQuery(value);
+  };
+
+  // Clear search handler
+  const handleClearSearch = () => {
+    handleSearchChange('');
   };
 
   // First, decorate orders with their original index
@@ -645,17 +787,6 @@ const Orders = () => {
     }
 
     // Get status priority for sorting
-    const getStatusPriority = (order: Order) => {
-      const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',') : [];
-      const trimmedTags = tags.map((t: string) => t.trim());
-      
-      if (trimmedTags.includes('fulfilled')) return 4;
-      if (trimmedTags.includes('shipped')) return 3;
-      if (trimmedTags.includes('ready to ship')) return 2;
-      if (trimmedTags.includes('customer_confirmed') || !trimmedTags.some(tag => ['shipped', 'ready to ship', 'fulfilled'].includes(tag))) return 1;
-      return 0;
-    };
-
     const aStatusPriority = getStatusPriority(a);
     const bStatusPriority = getStatusPriority(b);
 
@@ -771,12 +902,20 @@ const Orders = () => {
             type="text"
             placeholder="Search orders..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="block w-full pl-10 pr-3 py-2 text-gray-900 bg-white border border-gray-300 rounded-md text-sm placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+            onChange={(e) => handleSearchChange(e.target.value)}
+            className="block w-full pl-10 pr-10 py-2 text-gray-900 bg-white border border-gray-300 rounded-md text-sm placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
           />
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
             <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
           </div>
+          {searchQuery && (
+            <button
+              onClick={handleClearSearch}
+              className="absolute inset-y-[1px] right-[1px] px-3 flex items-center justify-center bg-white rounded-r-md hover:bg-gray-50 focus:outline-none focus:ring-0"
+            >
+              <XMarkIcon className="h-5 w-5 text-gray-400 hover:text-gray-600" />
+            </button>
+          )}
         </div>
       </div>
       
@@ -800,6 +939,7 @@ const Orders = () => {
               <option value="ready-to-ship">Ready to Ship</option>
               <option value="shipped">Shipped</option>
               <option value="fulfilled">Fulfilled</option>
+              <option value="cancelled">Cancelled</option>
               <option value="all">All Orders</option>
             </select>
 
@@ -933,6 +1073,7 @@ const Orders = () => {
               onUpdateNote={handleUpdateNote}
               onTogglePriority={handleTogglePriority}
               onUpdateStatus={handleUpdateStatus}
+              onDeleteOrder={handleDeleteOrder}
             />
           ))}
         </div>
