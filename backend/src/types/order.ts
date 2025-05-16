@@ -30,4 +30,5 @@ export type OrderStatus =
   | 'Ready to Ship'
   | 'Shipped'
   | 'Received'
-  | 'Overdue'; 
+  | 'Overdue'
+  | 'Cancelled'; 
