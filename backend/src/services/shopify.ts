@@ -221,49 +221,59 @@ export class ShopifyService {
     }
   }
 
-  async updateOrderStatus(id: number, status: string): Promise<void> {
+  async updateOrderStatus(orderId: number, status: string): Promise<void> {
     try {
-      // First get the current order to preserve other fields
-      const currentOrder = await this.getOrder(id);
-      
-      // Convert tags to array if it's a string
-      const existingTags = typeof currentOrder.tags === 'string' 
-        ? currentOrder.tags.split(',').map((tag: string) => tag.trim()) 
-        : Array.isArray(currentOrder.tags) 
-          ? currentOrder.tags.map((tag: string) => tag.trim()) 
+      // Get the current order to check existing tags
+      const order = await this.getOrder(orderId);
+      if (!order) {
+        throw new Error('Order not found');
+      }
+
+      // Get existing tags
+      const existingTags = typeof order.tags === 'string' 
+        ? order.tags.split(',').map((tag: string) => tag.trim())
+        : Array.isArray(order.tags)
+          ? order.tags.map((tag: string) => tag.trim())
           : [];
       
-      // Remove any existing status tags - make sure to trim for comparison
-      const statusTags = ['customer_confirmed', 'ready to ship', 'shipped'];
-      const filteredTags = existingTags.filter((tag: string) => !statusTags.includes(tag.trim()));
-      
-      // Map frontend status values to actual tag values
-      let tagValue = status;
-      if (status === 'confirmed') {
-        tagValue = 'customer_confirmed';
+      // Filter out existing status tags and shipping date tag
+      const filteredTags = existingTags.filter((tag: string) => 
+        !['customer_confirmed', 'ready to ship', 'shipped', 'fulfilled'].includes(tag) &&
+        !tag.startsWith('shipping_date:')
+      );
+
+      // Add new status tag if not pending
+      if (status !== 'pending') {
+        filteredTags.push(status);
       }
-      
-      // Add the new status tag if it's not "pending" or "fulfilled"
-      // "fulfilled" is controlled by Shopify fulfillment status, not tags
-      // "pending" means no status tags
-      let newTags = filteredTags;
-      if (status !== 'pending' && status !== 'fulfilled') {
-        newTags = [...filteredTags, tagValue.trim()];
+
+      // If status is shipped, add shipping date tag
+      if (status === 'shipped') {
+        const today = new Date();
+        const shippingDate = today.toISOString().split('T')[0]; // Get only YYYY-MM-DD
+        filteredTags.push(`shipping_date:${shippingDate}`);
       }
-      
-      // Update the order with the new tags
+
+      // Remove priority tag if status is fulfilled
+      if (status === 'fulfilled') {
+        const priorityIndex = filteredTags.indexOf('priority');
+        if (priorityIndex > -1) {
+          filteredTags.splice(priorityIndex, 1);
+        }
+      }
+
+      // Update the order with new tags
       await this.client.put({
-        path: `/admin/api/2023-10/orders/${id}.json`,
+        path: `orders/${orderId}`,
         data: {
           order: {
-            id,
-            tags: newTags
+            tags: filteredTags.join(', ')
           }
         }
       });
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error updating order status:', error);
-      throw new Error('Failed to update order status in Shopify');
+      throw error;
     }
   }
 
