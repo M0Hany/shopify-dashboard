@@ -4,6 +4,7 @@ import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
 import { convertToCairoTime } from '../utils/dateUtils';
 import { Menu } from '@headlessui/react';
+import { format } from 'date-fns';
 
 interface OrderCardProps {
   order: any;
@@ -245,6 +246,17 @@ const OrderCard: React.FC<OrderCardProps> = ({
         setIsShippedModalOpen(true);
       }, 100);
     }
+
+    // Add fulfillment date tag when status changes to fulfilled
+    if (newStatus === 'fulfilled') {
+      const today = format(new Date(), 'yyyy-MM-dd');
+      if (onUpdateStatus) {
+        // Remove priority tag and add fulfillment date
+        setLocalPriority(false);
+        onUpdateStatus(order.id, `${newStatus},fulfillment_date:${today}`.trim());
+        return;
+      }
+    }
     
     // Send status update to the server
     if (onUpdateStatus) {
@@ -455,33 +467,33 @@ Your order is being picked up by the shipping company and should be arriving to 
         {/* Header: Checkbox, Note Icon, and Status */}
         <div className="flex justify-between items-start mb-4">
           <div className="flex items-center gap-2">
-            <div 
-              onClick={handleCheckboxClick}
-              className="relative w-5 h-5 cursor-pointer"
-            >
-              <input
-                type="checkbox"
-                checked={isSelected}
-                onChange={() => {}}
-                className="absolute w-5 h-5 cursor-pointer rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-            </div>
+          <div 
+            onClick={handleCheckboxClick}
+            className="relative w-5 h-5 cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => {}}
+              className="absolute w-5 h-5 cursor-pointer rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+          </div>
             {!isOrderCancelled && (
               <>
-                <button
-                  onClick={handleNoteIconClick}
-                  className="p-1 text-gray-400 hover:text-gray-600 transition-colors duration-200 bg-white rounded-md"
-                  title="Add note"
-                >
-                  <PencilIcon className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={handleChatIconClick}
-                  className="p-1 text-gray-400 hover:text-green-600 transition-colors duration-200 bg-white rounded-md"
-                  title="Send WhatsApp message"
-                >
-                  <ChatBubbleLeftRightIcon className="w-4 h-4" />
-                </button>
+            <button
+              onClick={handleNoteIconClick}
+              className="p-1 text-gray-400 hover:text-gray-600 transition-colors duration-200 bg-white rounded-md"
+              title="Add note"
+            >
+              <PencilIcon className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleChatIconClick}
+              className="p-1 text-gray-400 hover:text-green-600 transition-colors duration-200 bg-white rounded-md"
+              title="Send WhatsApp message"
+            >
+              <ChatBubbleLeftRightIcon className="w-4 h-4" />
+            </button>
               </>
             )}
           </div>
@@ -495,17 +507,17 @@ Your order is being picked up by the shipping company and should be arriving to 
                 <TrashIcon className="w-4 h-4 text-red-500 hover:text-red-600" />
               </button>
             ) : (
-              <button
-                onClick={handlePriorityClick}
-                className="p-1 transition-all duration-200 bg-white rounded-md"
-                title={isPriority ? "Remove priority" : "Add priority"}
-              >
-                {isPriority ? (
-                  <StarIconSolid className="w-4 h-4 text-yellow-500" />
-                ) : (
-                  <StarIconOutline className="w-4 h-4 text-gray-300" />
-                )}
-              </button>
+            <button
+              onClick={handlePriorityClick}
+              className="p-1 transition-all duration-200 bg-white rounded-md"
+              title={isPriority ? "Remove priority" : "Add priority"}
+            >
+              {isPriority ? (
+                <StarIconSolid className="w-4 h-4 text-yellow-500" />
+              ) : (
+                <StarIconOutline className="w-4 h-4 text-gray-300" />
+              )}
+            </button>
             )}
             <Menu as="div" className="relative inline-block text-left">
               {({ open }) => (
@@ -632,19 +644,19 @@ Your order is being picked up by the shipping company and should be arriving to 
         {/* Timeline or Shipping Status - only show if not cancelled */}
         {!isOrderCancelled && (
           <>
-            {trimmedTags.includes('shipped') ? (
-              <div className="mb-4">
-                <ShippingStatus shippingDate={getShippingDate() || new Date().toISOString()} />
-              </div>
-            ) : !trimmedTags.includes('fulfilled') && (
-              <div className="mb-4">
-                <OrderTimeline
-                  createdAt={startDate.toISOString()}
-                  dueDate={dueDate.toISOString()}
-                  isCustom={!!dueDateTag}
-                  orderName={order.name}
-                />
-              </div>
+        {trimmedTags.includes('shipped') ? (
+          <div className="mb-4">
+            <ShippingStatus shippingDate={getShippingDate() || new Date().toISOString()} />
+          </div>
+        ) : !trimmedTags.includes('fulfilled') && (
+          <div className="mb-4">
+            <OrderTimeline
+              createdAt={startDate.toISOString()}
+              dueDate={dueDate.toISOString()}
+              isCustom={!!dueDateTag}
+              orderName={order.name}
+            />
+          </div>
             )}
           </>
         )}
