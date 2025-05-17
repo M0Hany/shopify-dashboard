@@ -474,7 +474,7 @@ const Orders = () => {
       if (!formattedPhone.startsWith('0')) {
         formattedPhone = '0' + formattedPhone;
       }
-
+      
       // Get the full address and city from Shopify
       const fullAddress = `${order.shipping_address.address1}${order.shipping_address.address2 ? `, ${order.shipping_address.address2}` : ''}`;
       const shopifyCity = order.shipping_address.city;
@@ -487,7 +487,7 @@ const Orders = () => {
         'Matruh', 'Minya', 'El Wadi el Gedid', 'North Sinai', 'Qena', 'Red Sea',
         'Sohag', 'South Sinai', 'Banha City'
       ];
-
+      
       // Try to find a matching city from our valid cities list
       let city = '';
       
