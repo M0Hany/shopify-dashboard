@@ -260,7 +260,9 @@ const OrderCard: React.FC<OrderCardProps> = ({
     
     // Send status update to the server
     if (onUpdateStatus) {
-      onUpdateStatus(order.id, newStatus);
+      // Map the status to the correct tag
+      const statusTag = newStatus === 'confirmed' ? 'customer_confirmed' : newStatus;
+      onUpdateStatus(order.id, statusTag);
     }
   };
 
