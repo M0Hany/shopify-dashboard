@@ -698,6 +698,9 @@ const Orders = () => {
           statusTags.fulfilled,
           statusTags.cancelled
         ].includes(tag.trim()));
+      case 'confirmed':
+        // Show only orders with customer_confirmed tag
+        return trimmedTags.some(tag => tag.trim() === statusTags.customerConfirmed);
       case 'ready-to-ship':
         return trimmedTags.some(tag => tag.trim() === statusTags.readyToShip);
       case 'shipped':
@@ -936,6 +939,7 @@ const Orders = () => {
               className="w-full sm:w-auto pl-4 pr-10 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
             >
               <option value="pending">Pending Orders</option>
+              <option value="confirmed">Confirmed Orders</option>
               <option value="ready-to-ship">Ready to Ship</option>
               <option value="shipped">Shipped</option>
               <option value="fulfilled">Fulfilled</option>
