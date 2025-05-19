@@ -1,8 +1,10 @@
 import express from 'express';
 import { ShopifyService } from '../services/shopify';
+import { getConfig } from '../config';
 
 const router = express.Router();
 const shopifyService = new ShopifyService();
+const config = getConfig();
 
 // Get all orders with optional filters
 router.get('/', async (req, res) => {
@@ -109,6 +111,25 @@ router.post('/:id/fulfill', async (req, res) => {
       details: error.message,
       orderId: req.params.id
     });
+  }
+});
+
+// Public endpoint to get unfulfilled orders count
+router.get('/unfulfilled-count', async (req, res) => {
+  try {
+    const orders = await shopifyService.getOrders({
+      status: 'any'
+    });
+    
+    const unfulfilledCount = orders.filter(order => {
+      const tags = Array.isArray(order.tags) ? order.tags : order.tags ? [order.tags] : [];
+      return !tags.includes('fulfilled');
+    }).length;
+
+    res.json({ count: unfulfilledCount });
+  } catch (error) {
+    console.error('Error fetching unfulfilled orders count:', error);
+    res.status(500).json({ error: 'Failed to fetch unfulfilled orders count' });
   }
 });
 
