@@ -31,13 +31,6 @@ export const convertToCairoTime = (date: Date): Date => {
     parseInt(dateParts.second)
   );
 
-  // Debug logging
-  console.log('Date conversion:', {
-    original: date.toISOString(),
-    cairo: cairoDate.toISOString(),
-    parts: dateParts
-  });
-
   return cairoDate;
 };
 
@@ -53,14 +46,6 @@ export const calculateDaysRemaining = (endDate: Date, now: Date): number => {
   // Calculate the difference in days (inclusive)
   const diffTime = end.getTime() - current.getTime();
   const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
-
-  // Debug logging
-  console.log('Days remaining calculation:', {
-    end: end.toISOString(),
-    current: current.toISOString(),
-    diffTime,
-    diffDays
-  });
 
   return diffDays;
 };

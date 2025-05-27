@@ -4,10 +4,12 @@ import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
 import OrderDetails from '../components/OrderDetails';
-import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, FunnelIcon, ArrowsUpDownIcon, CheckIcon, DocumentArrowUpIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Menu } from '@headlessui/react';
+import { Menu, Popover, Transition } from '@headlessui/react';
+import FileUpload from '../components/FileUpload';
+import MoneyTransferUpload from '../components/MoneyTransferUpload';
 
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
@@ -176,6 +178,17 @@ const convertToCairoTime = (date: Date): Date => {
   return cairoDate;
 };
 
+const statusOptions = [
+  { value: 'pending', label: 'Pending Orders' },
+  { value: 'confirmed', label: 'Confirmed Orders' },
+  { value: 'ready-to-ship', label: 'Ready to Ship' },
+  { value: 'shipped', label: 'Shipped' },
+  { value: 'fulfilled', label: 'Fulfilled' },
+  { value: 'cancelled', label: 'Cancelled' },
+  { value: 'paid', label: 'Paid' },
+  { value: 'all', label: 'All Orders' },
+];
+
 const Orders = () => {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
@@ -188,6 +201,14 @@ const Orders = () => {
   const [ordersState, setOrdersState] = useState<Order[] | null>(null);
   const [sortDescending, setSortDescending] = useState<boolean>(false);
   const [previousStatusFilter, setPreviousStatusFilter] = useState<string>('pending');
+  const [uploadResults, setUploadResults] = useState<{
+    processed: number;
+    updated: number;
+    notFound: number;
+    errors: number;
+  } | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
+  const [showSort, setShowSort] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -195,7 +216,7 @@ const Orders = () => {
     }
   }, [isAuthenticated, navigate]);
 
-  const { data: orders, isLoading, error } = useQuery<Order[]>({
+  const { data: orders, isLoading, error, refetch } = useQuery<Order[]>({
     queryKey: ['orders'],
     queryFn: async (): Promise<Order[]> => {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`);
@@ -685,18 +706,20 @@ const Orders = () => {
       readyToShip: 'ready to ship',
       fulfilled: 'fulfilled',
       cancelled: 'cancelled',
-      customerConfirmed: 'customer_confirmed'
+      customerConfirmed: 'customer_confirmed',
+      paid: 'paid'
     };
     
     switch(statusFilter) {
       case 'pending':
         // Show both pending orders (no status tags) and confirmed orders (customer_confirmed tag)
-        // but exclude other statuses (shipped, ready to ship, fulfilled, cancelled)
+        // but exclude other statuses (shipped, ready to ship, fulfilled, cancelled, paid)
         return !trimmedTags.some(tag => [
           statusTags.shipped,
           statusTags.readyToShip,
           statusTags.fulfilled,
-          statusTags.cancelled
+          statusTags.cancelled,
+          statusTags.paid
         ].includes(tag.trim()));
       case 'confirmed':
         // Show only orders with customer_confirmed tag
@@ -706,9 +729,15 @@ const Orders = () => {
       case 'shipped':
         return trimmedTags.some(tag => tag.trim() === statusTags.shipped);
       case 'fulfilled':
-        return trimmedTags.some(tag => tag.trim() === statusTags.fulfilled);
+        // Show both fulfilled and paid orders
+        return trimmedTags.some(tag => 
+          tag.trim() === statusTags.fulfilled || 
+          tag.trim() === statusTags.paid
+        );
       case 'cancelled':
         return trimmedTags.some(tag => tag.trim() === statusTags.cancelled);
+      case 'paid':
+        return trimmedTags.some(tag => tag.trim() === statusTags.paid);
       case 'all':
       default:
         return true;
@@ -723,13 +752,15 @@ const Orders = () => {
     // Define status tags with proper trimming
     const statusTags = {
       cancelled: 'cancelled',
+      paid: 'paid',
       fulfilled: 'fulfilled',
       shipped: 'shipped',
       readyToShip: 'ready to ship',
       customerConfirmed: 'customer_confirmed'
     };
     
-    if (trimmedTags.some(tag => tag.trim() === statusTags.cancelled)) return 5;
+    if (trimmedTags.some(tag => tag.trim() === statusTags.cancelled)) return 6;
+    if (trimmedTags.some(tag => tag.trim() === statusTags.paid)) return 5;
     if (trimmedTags.some(tag => tag.trim() === statusTags.fulfilled)) return 4;
     if (trimmedTags.some(tag => tag.trim() === statusTags.shipped)) return 3;
     if (trimmedTags.some(tag => tag.trim() === statusTags.readyToShip)) return 2;
@@ -738,6 +769,7 @@ const Orders = () => {
           statusTags.shipped,
           statusTags.readyToShip,
           statusTags.fulfilled,
+          statusTags.paid,
           statusTags.cancelled
         ].includes(tag.trim()))) return 1;
     return 0;
@@ -764,6 +796,17 @@ const Orders = () => {
   // Clear search handler
   const handleClearSearch = () => {
     handleSearchChange('');
+  };
+
+  const handleUploadComplete = (results: {
+    processed: number;
+    updated: number;
+    notFound: number;
+    errors: number;
+  }) => {
+    setUploadResults(results);
+    // Refresh orders after successful upload
+    refetch();
   };
 
   // First, decorate orders with their original index
@@ -896,7 +939,7 @@ const Orders = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="container mx-auto px-4 py-8">
       {/* Top Bar */}
       <div className="bg-white border-b px-2 sm:px-4 py-2 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
         {/* Search */}
@@ -933,49 +976,69 @@ const Orders = () => {
 
           {/* Right side - Filter, Sort, and Select All */}
           <div className="flex flex-wrap items-center gap-2 sm:gap-4 w-full sm:w-auto">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-full sm:w-auto pl-4 pr-10 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
-            >
-              <option value="pending">Pending Orders</option>
-              <option value="confirmed">Confirmed Orders</option>
-              <option value="ready-to-ship">Ready to Ship</option>
-              <option value="shipped">Shipped</option>
-              <option value="fulfilled">Fulfilled</option>
-              <option value="cancelled">Cancelled</option>
-              <option value="all">All Orders</option>
-            </select>
-
-            <button
-              onClick={handleToggleSort}
-              className="w-full sm:w-auto inline-flex items-center justify-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-              title={sortDescending ? "Restore default sort" : "Sort by order ID (descending)"}
-            >
-              {sortDescending ? (
+            {/* Filter Dropdown */}
+            <Popover className="relative">
+              {({ open, close }) => (
                 <>
-                  <ArrowUpIcon className="h-4 w-4 mr-1" />
-                  Default Sort
-                </>
-              ) : (
-                <>
-                  <ArrowDownIcon className="h-4 w-4 mr-1" />
-                  Sort by ID
+                  <Popover.Button
+                    className={`p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 ${open ? 'ring-2 ring-blue-500' : ''}`}
+                    title="Filter orders"
+                  >
+                    <FunnelIcon className="w-5 h-5 text-gray-600" />
+                  </Popover.Button>
+                  <Transition
+                    show={open}
+                    enter="transition duration-100 ease-out"
+                    enterFrom="transform scale-95 opacity-0"
+                    enterTo="transform scale-100 opacity-100"
+                    leave="transition duration-75 ease-in"
+                    leaveFrom="transform scale-100 opacity-100"
+                    leaveTo="transform scale-95 opacity-0"
+                  >
+                    <Popover.Panel className="absolute z-10 mt-2 w-48 bg-white border border-gray-200 rounded-md shadow-lg">
+                      <div className="py-1">
+                        {statusOptions.map(option => (
+                          <button
+                            key={option.value}
+                            onClick={() => {
+                              setStatusFilter(option.value);
+                              close();
+                            }}
+                            className={`w-full text-left px-4 py-2 text-sm bg-white ${statusFilter === option.value ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-gray-700'} hover:bg-gray-100`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </Popover.Panel>
+                  </Transition>
                 </>
               )}
+            </Popover>
+
+            {/* Upload Button */}
+            <MoneyTransferUpload onUploadComplete={handleUploadComplete} />
+
+            {/* Sort Button (icon only) */}
+            <button
+              onClick={handleToggleSort}
+              className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              title="Sort by ID"
+            >
+              <ArrowsUpDownIcon className="w-5 h-5 text-gray-600" />
             </button>
 
-            <label className="flex items-center gap-2 w-full sm:w-auto">
-              <input
-                type="checkbox"
-                checked={orders ? selectedOrders.length === orders.filter(filterOrdersByStatus).length : false}
-                onChange={handleSelectAll}
-                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              <span className="text-sm text-gray-600">
-                {selectedOrders.length} selected
-              </span>
-            </label>
+            {/* Select All Button */}
+            <button
+              onClick={handleSelectAll}
+              className={`p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 relative ${orders && selectedOrders.length === orders.filter(filterOrdersByStatus).length ? 'bg-blue-50 border-blue-400' : ''}`}
+              title="Select all orders"
+            >
+              <CheckIcon className={`w-5 h-5 ${orders && selectedOrders.length === orders.filter(filterOrdersByStatus).length ? 'text-blue-600' : 'text-gray-600'}`} />
+              {selectedOrders.length > 0 && (
+                <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-xs rounded-full px-1.5 py-0.5">{selectedOrders.length}</span>
+              )}
+            </button>
           </div>
         </div>
 
