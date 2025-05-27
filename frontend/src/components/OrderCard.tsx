@@ -151,20 +151,6 @@ const OrderCard: React.FC<OrderCardProps> = ({
     dueDate = convertToCairoTime(dueDate);
   }
 
-  // Debug logging only for order #1040
-  if (order.name === '#1040') {
-    console.log('OrderCard dates for #1040:', {
-      orderId: order.id,
-      tags,
-      trimmedTags,
-      startDateTag,
-      dueDateTag,
-      startDate: startDate?.toISOString(),
-      dueDate: dueDate?.toISOString(),
-      created_at: order.created_at
-    });
-  }
-
   // Ensure both dates are valid
   if (isNaN(startDate.getTime()) || isNaN(dueDate.getTime())) {
     console.error('Invalid dates:', { startDate, dueDate, order });
@@ -182,15 +168,18 @@ const OrderCard: React.FC<OrderCardProps> = ({
     
     // Define status tags with proper trimming
     const statusTags = {
+      cancelled: 'cancelled',
+      paid: 'paid',
       fulfilled: 'fulfilled',
       shipped: 'shipped',
       readyToShip: 'ready to ship',
-      customerConfirmed: 'customer_confirmed',
-      cancelled: 'cancelled'
+      customerConfirmed: 'customer_confirmed'
     } as const;
     
     if (trimmedTags.some((tag: string) => tag.trim() === statusTags.cancelled)) {
       return 'cancelled';
+    } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.paid)) {
+      return 'paid';
     } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.fulfilled)) {
       return 'fulfilled';
     } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.shipped)) {
@@ -224,6 +213,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
         return 'bg-emerald-600 text-white';
       case 'cancelled':
         return 'bg-red-600 text-white';
+      case 'paid':
+        return 'bg-indigo-600 text-white';
       default:
         return 'bg-gray-100 text-gray-800';
     }
@@ -593,6 +584,16 @@ Your order is being picked up by the shipping company and should be arriving to 
                         <Menu.Item>
                           {({ active }) => (
                             <button
+                              className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('paid')}`}
+                              onClick={() => handleStatusChange('paid')}
+                            >
+                              Paid
+                            </button>
+                          )}
+                        </Menu.Item>
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
                               className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('cancelled')}`}
                               onClick={() => handleStatusChange('cancelled')}
                             >
@@ -643,22 +644,22 @@ Your order is being picked up by the shipping company and should be arriving to 
           </div>
         )}
 
-        {/* Timeline or Shipping Status - only show if not cancelled */}
-        {!isOrderCancelled && (
+        {/* Timeline or Shipping Status - only show if not cancelled and not paid */}
+        {!isOrderCancelled && !trimmedTags.includes('paid') && (
           <>
-        {trimmedTags.includes('shipped') ? (
-          <div className="mb-4">
-            <ShippingStatus shippingDate={getShippingDate() || new Date().toISOString()} />
-          </div>
-        ) : !trimmedTags.includes('fulfilled') && (
-          <div className="mb-4">
-            <OrderTimeline
-              createdAt={startDate.toISOString()}
-              dueDate={dueDate.toISOString()}
-              isCustom={!!dueDateTag}
-              orderName={order.name}
-            />
-          </div>
+            {trimmedTags.includes('shipped') ? (
+              <div className="mb-4">
+                <ShippingStatus shippingDate={getShippingDate() || new Date().toISOString()} />
+              </div>
+            ) : !trimmedTags.includes('fulfilled') && (
+              <div className="mb-4">
+                <OrderTimeline
+                  createdAt={startDate.toISOString()}
+                  dueDate={dueDate.toISOString()}
+                  isCustom={!!dueDateTag}
+                  orderName={order.name}
+                />
+              </div>
             )}
           </>
         )}
