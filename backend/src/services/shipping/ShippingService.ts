@@ -5,6 +5,10 @@ import {
   ShippingCharges,
   GetPackagesListPayload,
   MylerzLocationResponse,
+  Warehouse,
+  TrackingResponse,
+  OrderDTO,
+  OrderResponse
 } from './types';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
@@ -62,17 +66,16 @@ export class ShippingService {
 
   private async authenticate(): Promise<void> {
     try {
-      logger.info('Attempting to authenticate with shipping service...');
-      
-      // Form data for token request
+      // Create form data
       const formData = new URLSearchParams();
+      formData.append('grant_type', 'password');
       formData.append('username', config.shipping.username);
       formData.append('password', config.shipping.password);
-      formData.append('grant_type', 'password');
 
-      const response = await this.client.post<ShippingTokenData>('/token', formData, {
+      const response = await this.client.post<ShippingResponse<ShippingTokenData>>('/token', formData, {
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json'
         }
       });
 
@@ -82,21 +85,11 @@ export class ShippingService {
         
         // Update axios default headers
         this.client.defaults.headers.common['Authorization'] = `Bearer ${this.token}`;
-        
-        logger.info('Successfully authenticated with shipping service');
       } else {
-        logger.error('Authentication failed - Invalid response:', response.data);
         throw new Error('Authentication failed: No token received');
       }
     } catch (error) {
-      logger.error('Shipping service authentication failed:', {
-        error,
-        config: {
-          url: this.baseUrl,
-          username: config.shipping.username,
-          hasPassword: !!config.shipping.password
-        }
-      });
+      logger.error('Shipping service authentication failed:', error);
       throw new Error('Failed to authenticate with shipping service');
     }
   }
@@ -118,7 +111,6 @@ export class ShippingService {
     } catch (error: unknown) {
       console.error('Failed to create order:', error);
       if (axios.isAxiosError(error)) {
-        console.error('Response data:', error.response?.data);
         console.error('Response status:', error.response?.status);
         console.error('Request config:', error.config);
       }
@@ -195,7 +187,14 @@ export class ShippingService {
   public async getPackagesList(payload: GetPackagesListPayload): Promise<any> {
     await this.ensureAuthenticated();
     try {
-      const response = await this.client.post('/api/package/GetPackagesList', payload);
+      const response = await this.client.post('/api/package/GetPackagesList', payload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Culture': 'en-Mylerz'
+        }
+      });
       return response.data;
     } catch (error) {
       console.error('Failed to get packages list:', error);
@@ -205,58 +204,18 @@ export class ShippingService {
 
   async getAllLocations(): Promise<MylerzLocationResponse> {
     try {
-      logger.info('Ensuring authentication before fetching locations...');
       await this.ensureAuthenticated();
 
-      logger.info('Fetching all shipping locations...');
-      const response = await this.client.get<MylerzLocationResponse>('/api/loockup/GetAllPickup', {
-        validateStatus: function (status) {
-          return status < 500; // Accept all status codes less than 500
-        }
-      });
+      const response = await this.client.get<MylerzLocationResponse>('/loockup/GetAllPickup');
 
-      // Log the raw response for debugging
-      logger.info('Raw API Response:', {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers
-      });
-
-      if (!response.data) {
-        logger.error('No data received from locations API');
-        throw new Error('No data received from locations API');
-      }
-
-      // Check if the response has the expected structure
-      if (!response.data.Value || !Array.isArray(response.data.Value)) {
-        logger.error('Invalid response format:', response.data);
-        throw new Error('Invalid response format from locations API');
-      }
-
-      // Check for API errors
       if (response.data.IsErrorState) {
-        logger.error('API returned error state:', {
-          description: response.data.ErrorDescription,
-          metadata: response.data.ErrorMetadata
-        });
-        throw new Error(`API Error: ${response.data.ErrorDescription || 'Unknown error'}`);
+        throw new Error(`Failed to fetch locations: ${response.data.ErrorDescription}`);
       }
 
-      logger.info(`Successfully fetched ${response.data.Value.length} cities`);
       return response.data;
-    } catch (error: any) {
-      const axiosError = error.isAxiosError ? error : null;
-      logger.error('Failed to fetch shipping locations:', {
-        error: error.message,
-        response: axiosError?.response?.data,
-        status: axiosError?.response?.status,
-        config: {
-          ...axiosError?.config,
-          headers: axiosError?.config?.headers
-        },
-        stack: error.stack
-      });
-      throw new Error(`Failed to fetch shipping locations: ${error.message}`);
+    } catch (error) {
+      logger.error('Failed to fetch shipping locations:', error);
+      throw new Error('Failed to fetch shipping locations');
     }
   }
 
@@ -270,8 +229,8 @@ export class ShippingService {
       
       // Find the city (case-insensitive search in both Arabic and English names)
       const city = locations.Value.find(c => 
-        c.ArName.toLowerCase() === cityName.toLowerCase() ||
-        c.EnName.toLowerCase() === cityName.toLowerCase()
+        c.Name.toLowerCase() === cityName.toLowerCase() ||
+        c.NameEn.toLowerCase() === cityName.toLowerCase()
       );
 
       if (!city) {
@@ -279,30 +238,26 @@ export class ShippingService {
       }
 
       // Find the neighborhood
-      let foundZone: Zone | undefined;
-      let foundSubZone: SubZone | undefined;
+      const neighborhood = city.Neighborhoods.find(n =>
+        n.Name.toLowerCase() === neighborhoodName.toLowerCase() ||
+        n.NameEn.toLowerCase() === neighborhoodName.toLowerCase()
+      );
 
-      // Search through all zones and their subzones
-      for (const zone of city.Zones) {
-        const subZone = zone.SubZones.find(sz => 
-          sz.ArName.toLowerCase() === neighborhoodName.toLowerCase() ||
-          sz.EnName.toLowerCase() === neighborhoodName.toLowerCase()
-        );
-        if (subZone) {
-          foundZone = zone;
-          foundSubZone = subZone;
-          break;
-        }
+      if (!neighborhood) {
+        throw new Error(`Neighborhood not found: ${neighborhoodName} in city ${cityName}`);
       }
 
-      if (!foundZone || !foundSubZone) {
-        throw new Error(`Neighborhood not found: ${neighborhoodName} in city ${cityName}`);
+      // Get the first active subzone (or implement your own logic for selecting subzone)
+      const subZone = neighborhood.SubZones.find(sz => sz.IsActive);
+
+      if (!subZone) {
+        throw new Error(`No active subzone found for neighborhood: ${neighborhoodName}`);
       }
 
       return {
         cityId: city.Id.toString(),
-        neighborhoodId: foundZone.Id.toString(),
-        subZoneId: foundSubZone.Id.toString()
+        neighborhoodId: neighborhood.Id.toString(),
+        subZoneId: subZone.Id.toString()
       };
     } catch (error) {
       logger.error('Failed to find location IDs:', error);

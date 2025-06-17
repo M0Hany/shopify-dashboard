@@ -10,8 +10,7 @@ export interface ShippingToken {
 }
 
 export interface ShippingTokenData {
-  access_token: string;
-  token_type: string;
+  token: string;
   expires_in: number;
   userName: string;
   issued: string;
@@ -80,8 +79,16 @@ export interface OrderResponse {
 }
 
 export interface TrackingResponse {
-  BarCode: string;
-  Status: string;
+  Value: {
+    PackageId: number;
+    Barcode: string;
+    PackageENStatus: string;
+    PackageARStatus: string;
+    PackageStatusColor: string;
+    LastUpdated: string;
+  };
+  IsErrorState: boolean;
+  ErrorDescription: string | null;
 }
 
 export interface ErrorResponse {
@@ -90,9 +97,12 @@ export interface ErrorResponse {
 }
 
 export interface Warehouse {
-  name: string;
-  address: string;
-  contactDetails: string;
+  Id: number;
+  MerchantId: number;
+  Code: string;
+  Name: string;
+  ZoneId: number;
+  AreaId: number;
 }
 
 export interface ShippingCharges {
@@ -102,18 +112,37 @@ export interface ShippingCharges {
 }
 
 export interface ShippingResponse<T> {
-  data: T;
-  success: boolean;
-  message: string | null;
-  validationErrors: any[] | null;
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  data?: T;
+}
+
+export interface MylerzSubZone {
+  Id: number;
+  Name: string;
+  NameEn: string;
+  IsActive: boolean;
+}
+
+export interface MylerzNeighborhood {
+  Id: number;
+  Name: string;
+  NameEn: string;
+  SubZones: MylerzSubZone[];
 }
 
 export interface MylerzLocation {
   Id: number;
   Name: string;
   NameEn: string;
-  Code: string;
-  IsActive: boolean;
+  Neighborhoods: MylerzNeighborhood[];
+}
+
+export interface MylerzLocationResponse {
+  Value: MylerzLocation[];
+  IsErrorState: boolean;
+  ErrorDescription: string | null;
 }
 
 export interface MylerzCity extends MylerzLocation {
@@ -150,12 +179,4 @@ export interface City {
   EnName: string;
   Id: number;
   Zones: Zone[];
-}
-
-export interface MylerzLocationResponse {
-  Value: City[];
-  CoreValue: null;
-  IsErrorState: boolean;
-  ErrorDescription: null | string;
-  ErrorMetadata: null | any;
 } 
