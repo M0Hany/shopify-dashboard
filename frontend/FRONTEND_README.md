@@ -78,3 +78,8 @@ Code formatting is handled by Prettier. Configuration can be found in `.prettier
 ## 📚 Documentation
 
 For more information about the project, please refer to the main [PROJECT_OVERVIEW.md](../PROJECT_OVERVIEW.md) file.
+
+## 🚀 Deployment
+
+The frontend is automatically deployed to GitHub Pages when changes are pushed to the main branch. You can access the live version at:
+https://m0hany.github.io/shopify-dashboard/
