@@ -1,6 +1,7 @@
 import '@shopify/shopify-api/adapters/node';
-import { shopifyApi, ApiVersion, Session, RequestReturn } from '@shopify/shopify-api';
-import config from '../config/server';
+import { shopifyApi, ApiVersion, Session, RequestReturn, AuthScopes } from '@shopify/shopify-api';
+import { OrderStatus } from '../types/order';
+import { logger } from '../utils/logger';
 
 interface CustomerDetails {
   id: string;
@@ -44,24 +45,27 @@ export interface ShopifyOrder {
   };
 }
 
+const SHOPIFY_SCOPES = new AuthScopes([
+  'read_orders',
+  'write_orders',
+  'read_fulfillments',
+  'write_fulfillments',
+  'read_customers',
+  'write_customers',
+  'read_tags',
+  'write_tags'
+]);
+
 // Initialize Shopify API client
 const shopify = shopifyApi({
-  apiSecretKey: config.shopify.apiSecret,
-  adminApiAccessToken: config.shopify.accessToken,
+  apiKey: process.env.SHOPIFY_API_KEY || '',
+  apiSecretKey: process.env.SHOPIFY_API_SECRET || '',
+  scopes: SHOPIFY_SCOPES,
+  hostName: process.env.SHOPIFY_SHOP_NAME || '',
   apiVersion: ApiVersion.October23,
-  hostName: config.shopify.storeUrl,
   isEmbeddedApp: false,
   isCustomStoreApp: true,
-  scopes: [
-    'read_orders',
-    'write_orders',
-    'read_fulfillments',
-    'write_fulfillments',
-    'read_customers',
-    'write_customers',
-    'read_tags',
-    'write_tags'
-  ],
+  adminApiAccessToken: process.env.SHOPIFY_ACCESS_TOKEN || ''
 });
 
 export class ShopifyService {
@@ -70,14 +74,17 @@ export class ShopifyService {
 
   constructor() {
     this.session = new Session({
-      id: `offline_${config.shopify.storeUrl}`,
-      shop: config.shopify.storeUrl,
-      state: 'state',
-      isOnline: false,
-      accessToken: config.shopify.accessToken,
+      id: '1',
+      shop: process.env.SHOPIFY_SHOP_URL || '',
+      state: 'active',
+      isOnline: true,
+      accessToken: process.env.SHOPIFY_ACCESS_TOKEN || '',
+      scope: SHOPIFY_SCOPES.toString()
     });
+
     this.client = new shopify.clients.Rest({
       session: this.session,
+      apiVersion: ApiVersion.October23
     });
   }
 
@@ -108,7 +115,7 @@ export class ShopifyService {
 
       return responseBody.data.customer;
     } catch (error) {
-      console.error('Error fetching customer details:', error);
+      logger.error('Error fetching customer details:', error);
       throw new Error('Failed to fetch customer details from Shopify');
     }
   }
@@ -131,15 +138,39 @@ export class ShopifyService {
           fields: 'id,name,email,phone,total_price,financial_status,fulfillment_status,tags,created_at,updated_at,line_items,customer,shipping_address,line_items.variant_title,note'
         };
 
-        if (params.status) query.status = params.status;
+        // Map status to tag for filtering
+        if (params.status) {
+          const statusToTag: Record<string, string> = {
+            'pending': 'customer_confirmed',
+            'confirmed': 'customer_confirmed',
+            'ready-to-ship': 'ready to ship',
+            'shipped': 'shipped',
+            'fulfilled': 'fulfilled',
+            'cancelled': 'cancelled',
+            'paid': 'paid'
+          };
+          
+          const tag = statusToTag[params.status];
+          if (tag) {
+            query.tag = tag;
+          }
+        }
+
         if (params.created_at_min) query.created_at_min = params.created_at_min;
         if (params.created_at_max) query.created_at_max = params.created_at_max;
         if (pageInfo) query.page_info = pageInfo;
 
+        interface ShopifyOrderResponse {
+          orders: ShopifyOrder[];
+        }
+
         const response = await this.client.get({
-          path: '/admin/api/2022-10/orders.json',
+          path: '/admin/api/2023-10/orders.json',
           query,
-        }) as unknown as RequestReturn<{ orders?: ShopifyOrder[] }>;
+        }) as RequestReturn & { 
+          headers: Headers;
+          body: ShopifyOrderResponse;
+        };
 
         if (!response.body?.orders) {
           throw new Error('No orders found in response');
@@ -162,7 +193,7 @@ export class ShopifyService {
                   }
                 };
               } catch (error) {
-                console.error(`Failed to fetch details for customer ${order.customer.id}:`, error);
+                logger.error(`Failed to fetch details for customer ${order.customer.id}:`, error);
                 return order;
               }
             }
@@ -172,34 +203,27 @@ export class ShopifyService {
 
         allOrders.push(...ordersWithCustomerDetails);
 
-        // Stop if we've reached the limit
-        if (params.limit && allOrders.length >= params.limit) {
-          return allOrders.slice(0, params.limit);
-        }
-
-        const linkHeader = response.headers['link'] as string;
-        if (linkHeader) {
-          const nextPageMatch = linkHeader.match(/<([^>]+)>; rel="next"/);
-          hasNextPage = !!nextPageMatch;
-          if (nextPageMatch) {
-            const nextPageUrl = new URL(nextPageMatch[1]);
-            pageInfo = nextPageUrl.searchParams.get('page_info') || '';
+        // Check if there are more pages using the Link header
+        const linkHeader = response.headers['link'] || response.headers['Link'];
+        if (linkHeader && typeof linkHeader === 'string' && linkHeader.includes('rel="next"')) {
+          const match = linkHeader.match(/page_info=([^>]+)>/);
+          if (match) {
+            pageInfo = match[1];
           }
         } else {
           hasNextPage = false;
         }
+
+        // If we've reached the requested limit, stop fetching
+        if (params.limit && allOrders.length >= params.limit) {
+          hasNextPage = false;
+          allOrders.splice(params.limit); // Trim to exact limit
+        }
       }
 
       return allOrders;
-    } catch (error: any) {
-      console.error('Error fetching orders:', {
-        error,
-        storeUrl: config.shopify.storeUrl,
-        customDomain: '007j3b-hp.com',
-        hasAccessToken: true,
-        errorDetails: error.response?.body || error.message,
-        requestUrl: error.response?.url,
-      });
+    } catch (error) {
+      logger.error('Error fetching orders:', error);
       throw new Error('Failed to fetch orders from Shopify');
     }
   }
@@ -484,14 +508,26 @@ export class ShopifyService {
           }
         }
       });
-    } catch (error) {
+    } catch (error: unknown) {
+      // Type guard to check if error is an object with response property
+      interface ShopifyError {
+        message: string;
+        response?: {
+          body?: unknown;
+          url?: string;
+        };
+      }
+
+      const shopifyError = error as ShopifyError;
+      
       console.error('Error fulfilling order:', {
-        error,
+        error: shopifyError,
         orderId: id,
-        errorDetails: error.response?.body || error.message,
-        requestUrl: error.response?.url
+        errorDetails: shopifyError.response?.body || shopifyError.message,
+        requestUrl: shopifyError.response?.url
       });
-      throw new Error(`Failed to fulfill order in Shopify: ${error.message}`);
+      
+      throw new Error(`Failed to fulfill order in Shopify: ${shopifyError.message}`);
     }
   }
 
@@ -527,6 +563,143 @@ export class ShopifyService {
       throw new Error(error instanceof Error ? error.message : 'Failed to delete order from Shopify');
     }
   }
+
+  async findOrderByCustomerDetails(customerName: string, customerPhone: string): Promise<ShopifyOrder | null> {
+    try {
+      // Get all orders
+      const response = await this.client.get({
+        path: 'orders',
+        query: {
+          status: 'any',
+          limit: 250
+        }
+      });
+
+      const orders = response.body.orders;
+
+      // Format the search phone number
+      let searchCustomerPhone = customerPhone.replace(/\D/g, '');
+      // Add leading 2 if not present, keeping the leading 0
+      if (!searchCustomerPhone.startsWith('2')) {
+        searchCustomerPhone = '2' + searchCustomerPhone;
+      }
+
+      console.log('Formatted search phone:', {
+        original: customerPhone,
+        formatted: searchCustomerPhone
+      });
+
+      // Find matching order
+      const matchingOrder = orders.find((order: ShopifyOrder) => {
+        const orderCustomerName = `${order.customer?.first_name} ${order.customer?.last_name}`.toLowerCase();
+        let orderShippingPhone = order.shipping_address?.phone?.replace(/\D/g, '');
+
+        // Format the shipping address phone number the same way
+        if (orderShippingPhone && !orderShippingPhone.startsWith('2')) {
+          orderShippingPhone = '2' + orderShippingPhone;
+        }
+
+        console.log('Comparing phones:', {
+          orderName: orderCustomerName,
+          searchName: customerName.toLowerCase(),
+          orderPhone: orderShippingPhone,
+          searchPhone: searchCustomerPhone
+        });
+
+        return orderCustomerName === customerName.toLowerCase() && 
+               orderShippingPhone === searchCustomerPhone;
+      });
+
+      return matchingOrder || null;
+    } catch (error) {
+      console.error('Error finding order by customer details:', error);
+      throw error;
+    }
+  }
+
+  async addOrderTag(orderId: number, tag: string): Promise<void> {
+    try {
+      // Get the current order to check existing tags
+      const order = await this.getOrder(orderId);
+      if (!order) {
+        throw new Error('Order not found');
+      }
+
+      // Get existing tags and ensure they are trimmed
+      const existingTags = typeof order.tags === 'string' 
+        ? order.tags.split(',').map((tag: string) => tag.trim())
+        : Array.isArray(order.tags)
+          ? order.tags.map((tag: string) => tag.trim())
+          : [];
+
+      // Add new tag if it doesn't exist
+      if (!existingTags.includes(tag.trim())) {
+        existingTags.push(tag.trim());
+      }
+
+      // Update the order with new tags
+      await this.client.put({
+        path: `orders/${orderId}`,
+        data: {
+          order: {
+            tags: existingTags.join(', ')
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error adding order tag:', error);
+      throw error;
+    }
+  }
+
+  async updateOrderTags(orderId: string, status: OrderStatus | string[]): Promise<void> {
+    try {
+      const order = await this.getOrder(parseInt(orderId));
+      if (!order) {
+        throw new Error(`Order not found: ${orderId}`);
+      }
+
+      let newTags: string[];
+      if (Array.isArray(status)) {
+        newTags = status;
+      } else {
+        // Convert OrderStatus to tags array
+        const existingTags = Array.isArray(order.tags) ? 
+          order.tags : 
+          typeof order.tags === 'string' ? 
+            order.tags.split(',').map(t => t.trim()) : 
+            [];
+
+        newTags = [
+          ...existingTags.filter(tag => !['pending', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'paid', 'cancelled'].includes(tag)),
+          status
+        ];
+      }
+
+      await this.client.put({
+        path: `/admin/api/2023-10/orders/${orderId}.json`,
+        data: {
+          order: {
+            id: orderId,
+            tags: newTags.join(',')
+          }
+        }
+      });
+
+      logger.info('Order tags updated successfully', {
+        orderId,
+        newTags
+      });
+    } catch (error) {
+      logger.error('Error updating order tags:', error);
+      throw error;
+    }
+  }
 }
 
-export const shopifyService = new ShopifyService(); 
+export const shopifyService = new ShopifyService();
+
+export const updateOrderStatus = async (orderId: number, tags: string[]): Promise<void> => {
+  const shopifyService = new ShopifyService();
+  await shopifyService.updateOrderTags(orderId.toString(), tags);
+}; 

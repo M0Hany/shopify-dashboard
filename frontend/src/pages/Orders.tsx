@@ -10,6 +10,8 @@ import { useNavigate } from 'react-router-dom';
 import { Menu, Popover, Transition } from '@headlessui/react';
 import FileUpload from '../components/FileUpload';
 import MoneyTransferUpload from '../components/MoneyTransferUpload';
+import { getPackagesList } from '../services/shipping';
+import { format } from 'date-fns';
 
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
@@ -145,6 +147,7 @@ interface Order {
   custom_start_date?: string;
   effective_created_at: string;
   note?: string;
+  packageENStatus?: string;
   customer: {
     first_name: string;
     last_name: string;
@@ -189,6 +192,129 @@ const statusOptions = [
   { value: 'all', label: 'All Orders' },
 ];
 
+interface ShippingStatusResponse {
+  tabOneOrders: any[];
+  tabTwoOrders: any[];
+  tabThreeOrders: any[];
+}
+
+interface OrderShippingStatus {
+  packageENStatus: string;
+  lastUpdated: string;
+  Barcode: string;
+}
+
+interface OrderShippingStatuses {
+  [orderId: string]: OrderShippingStatus[];
+}
+
+const findOldestShippedOrderDate = (orders: Order[]): Date => {
+  const shippedButNotFulfilledOrders = orders.filter(order => {
+    const tags = Array.isArray(order.tags) ? 
+      order.tags : 
+      typeof order.tags === 'string' ? 
+        order.tags.split(',').map(t => t.trim()) : 
+        [];
+    
+    // Check if order is shipped but not fulfilled
+    const isShipped = tags.includes('shipped');
+    const isFulfilled = tags.includes('fulfilled');
+    
+    return isShipped && !isFulfilled;
+  });
+
+  if (shippedButNotFulfilledOrders.length === 0) {
+    // If no shipped orders, use 30 days ago as default
+    const date = new Date();
+    date.setDate(date.getDate() - 30);
+    return date;
+  }
+
+  // Get shipping dates from tags
+  const shippingDates = shippedButNotFulfilledOrders
+    .map(order => {
+      const tags = Array.isArray(order.tags) ? 
+        order.tags : 
+        typeof order.tags === 'string' ? 
+          order.tags.split(',').map(t => t.trim()) : 
+          [];
+      
+      const shippingDateTag = tags.find(tag => tag.trim().startsWith('shipping_date:'));
+      if (shippingDateTag) {
+        const dateStr = shippingDateTag.trim().split(':')[1]?.trim();
+        if (dateStr) {
+          return new Date(dateStr);
+        }
+      }
+      return null;
+    })
+    .filter((date): date is Date => date !== null);
+
+  if (shippingDates.length === 0) {
+    // If no shipping dates found in tags, use 30 days ago as default
+    const date = new Date();
+    date.setDate(date.getDate() - 30);
+    return date;
+  }
+
+  return new Date(Math.min(...shippingDates.map(date => date.getTime())));
+};
+
+const fetchAllShippingStatuses = async (fromDate: Date): Promise<ShippingStatusResponse> => {
+  const toDate = new Date();
+  
+  // Format dates for API
+  const from = fromDate.toISOString().split('T')[0] + 'T20:00:00.000Z';
+  const to = toDate.toISOString().split('T')[0] + 'T20:59:59.000Z';
+
+  // Base payload
+  const basePayload = {
+    FilterModel: {
+      PageFilter: {
+        PageIndex: 1,
+        PageSize: 100
+      },
+      SearchKeyword: ""
+    },
+    From: from,
+    To: to,
+    MerchantIds: [16677],
+    WarehouseIds: [],
+    SubscriberIds: [],
+    HubId: [],
+    HubTypeId: 0,
+    PhaseId: [],
+    MylerIds: [],
+    TransferBy: [],
+    ServiceTypeId: [],
+    ServiceCategoryId: [],
+    PaymentTypeId: [],
+    StatusId: [],
+    PackageServiceId: [],
+    AttemptsNumber: null,
+    MemberId: 22376,
+    Barcodes: [],
+    PreferedTimeSlot: 0,
+    AvailableTimeslotId: 0,
+    DateTypeId: 3,
+    SearchOptionId: 1,
+    MemberCategoryID: 2
+  };
+
+  // Fetch from all tabs concurrently
+  const [tabOne, tabTwo, tabThree] = await Promise.all([
+    getPackagesList({ ...basePayload, SelectedTab: 1 }),
+    getPackagesList({ ...basePayload, SelectedTab: 2 }),
+    getPackagesList({ ...basePayload, SelectedTab: 3 })
+  ]);
+
+  return {
+    tabOneOrders: tabOne.Value.Result,
+    tabTwoOrders: tabTwo.Value.Result,
+    tabThreeOrders: tabThree.Value.Result
+  };
+};
+
 const Orders = () => {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
@@ -209,6 +335,7 @@ const Orders = () => {
   } | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [showSort, setShowSort] = useState(false);
+  const [shippingStatuses, setShippingStatuses] = useState<OrderShippingStatuses>({});
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -219,66 +346,30 @@ const Orders = () => {
   const { data: orders, isLoading, error, refetch } = useQuery<Order[]>({
     queryKey: ['orders'],
     queryFn: async (): Promise<Order[]> => {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`);
-      if (!response.ok) {
+      // First fetch orders
+      const ordersResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`);
+      if (!ordersResponse.ok) {
         throw new Error('Failed to fetch orders');
       }
-      const data = await response.json();
-      return data.map((order: Order) => {
-        // Convert tags to array if it's a string
-        const tags = typeof order.tags === 'string' 
-          ? order.tags.split(',') 
-          : Array.isArray(order.tags) 
-            ? order.tags 
-            : [];
+      const ordersData = await ordersResponse.json();
 
-        // Extract custom due date from tags
-        const customDueDateTag = tags.find((tag: string) => tag.startsWith('custom_due_date:'));
-        const customDueDate = customDueDateTag ? customDueDateTag.split(':')[1] : undefined;
+      // Find oldest shipped order date
+      const oldestDate = findOldestShippedOrderDate(ordersData);
 
-        // Extract custom create date from tags
-        const customCreateDateTag = tags.find((tag: string) => tag.startsWith('custom_create_date:'));
-        const customCreateDate = customCreateDateTag ? customCreateDateTag.split(':')[1] : undefined;
+      try {
+        // Fetch shipping statuses
+        const shippingData = await fetchAllShippingStatuses(oldestDate);
         
-        // Extract custom start date from tags
-        const customStartDateTag = tags.find((tag: string) => tag.startsWith('custom_start_date:'));
-        const customStartDate = customStartDateTag ? customStartDateTag.split(':')[1] : undefined;
+        // Match orders with shipping statuses
+        const matchedStatuses = matchOrdersWithShippingStatuses(ordersData, shippingData);
         
-        return {
-          ...order,
-          tags,
-          custom_due_date: customDueDate,
-          custom_create_date: customCreateDate,
-          custom_start_date: customStartDate,
-          effective_created_at: customStartDate || customCreateDate || order.created_at
-        };
-      })
-      // Pin priority orders at the top
-      .sort((a: Order, b: Order) => {
-        const aPriority = (Array.isArray(a.tags) ? a.tags : typeof a.tags === 'string' ? a.tags.split(',') : [])
-          .map((t: string) => t.trim())
-          .includes('priority');
-        const bPriority = (Array.isArray(b.tags) ? b.tags : typeof b.tags === 'string' ? b.tags.split(',') : [])
-          .map((t: string) => t.trim())
-          .includes('priority');
-        if (aPriority && !bPriority) return -1;
-        if (!aPriority && bPriority) return 1;
-        // Both are same priority status, now sort by days left
-        const now = convertToCairoTime(new Date());
-        const aDueDate = a.custom_due_date 
-          ? convertToCairoTime(new Date(a.custom_due_date))
-          : new Date(convertToCairoTime(new Date(a.effective_created_at)).getTime() + 14 * 24 * 60 * 60 * 1000);
-        const bDueDate = b.custom_due_date 
-          ? convertToCairoTime(new Date(b.custom_due_date))
-          : new Date(convertToCairoTime(new Date(b.effective_created_at)).getTime() + 14 * 24 * 60 * 60 * 1000);
-        const aDaysLeft = Math.ceil((aDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-        const bDaysLeft = Math.ceil((bDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-        if (aDaysLeft !== bDaysLeft) {
-          return aDaysLeft - bDaysLeft;
-        }
-        // If days left are equal, sort by order ID
-        return a.id - b.id;
-      });
+        // Update shipping statuses state
+        setShippingStatuses(matchedStatuses);
+      } catch (error) {
+        console.error('Failed to fetch shipping statuses:', error);
+      }
+
+      return ordersData;
     },
   });
 
@@ -289,7 +380,6 @@ const Orders = () => {
 
   const updateDueDateMutation = useMutation({
     mutationFn: async ({ orderId, dueDate }: { orderId: number; dueDate: string }) => {
-      console.log('Updating due date:', { orderId, dueDate });
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/due-date`, {
         method: 'PUT',
         headers: {
@@ -313,7 +403,6 @@ const Orders = () => {
 
   const updateStartDateMutation = useMutation({
     mutationFn: async ({ orderId, startDate }: { orderId: number; startDate: string }) => {
-      console.log('Updating start date:', { orderId, startDate });
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/start-date`, {
         method: 'PUT',
         headers: {
@@ -397,7 +486,6 @@ const Orders = () => {
 
   const fulfillOrderMutation = useMutation({
     mutationFn: async (orderId: number) => {
-      console.log('Attempting to fulfill order:', orderId);
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/fulfill`, {
         method: 'POST',
         headers: {
@@ -809,6 +897,71 @@ const Orders = () => {
     refetch();
   };
 
+  // Move matchOrdersWithShippingStatuses inside component
+  const matchOrdersWithShippingStatuses = (
+    orders: Order[], 
+    shippingData: ShippingStatusResponse
+  ): OrderShippingStatuses => {
+    const allShippingOrders = [
+      ...shippingData.tabOneOrders,
+      ...shippingData.tabTwoOrders,
+      ...shippingData.tabThreeOrders
+    ];
+
+    const orderStatuses: OrderShippingStatuses = {};
+
+    orders.forEach(order => {
+      // Format phone number
+      let formattedPhone = order.customer.phone.replace(/\D/g, '');
+      if (formattedPhone.startsWith('20')) {
+        formattedPhone = formattedPhone.substring(2);
+      }
+      if (!formattedPhone.startsWith('0')) {
+        formattedPhone = '0' + formattedPhone;
+      }
+
+      // Find all matching shipping statuses
+      const matchingStatuses = allShippingOrders.filter(shipping => {
+        const shippingPhone = shipping.PhoneNo?.replace(/\D/g, '') || '';
+        const normalizedShippingPhone = shippingPhone.startsWith('0') ? 
+          shippingPhone : `0${shippingPhone}`;
+        
+        return normalizedShippingPhone === formattedPhone &&
+          shipping.CustomerName?.toLowerCase().includes(order.customer.first_name.toLowerCase());
+      });
+
+      if (matchingStatuses.length > 0) {
+        orderStatuses[order.id] = matchingStatuses.map(status => ({
+          packageENStatus: status.PackageENStatus,
+          lastUpdated: status.LastUpdate || status.CreatedDate,
+          Barcode: status.Barcode
+        }));
+
+        // Check if any matching status is "Delivered" or "Confirm Delivered" and order is currently shipped
+        const tags = Array.isArray(order.tags) ? 
+          order.tags : 
+          typeof order.tags === 'string' ? 
+            order.tags.split(',').map(t => t.trim()) : 
+            [];
+
+        const deliveryStatuses = ["Delivered", "Confirm Delivered"];
+        const hasDeliveredStatus = matchingStatuses.some(status => 
+          deliveryStatuses.includes(status.PackageENStatus)
+        );
+
+        if (hasDeliveredStatus && tags.includes('shipped') && !tags.includes('fulfilled')) {
+          const today = format(new Date(), 'yyyy-MM-dd');
+          updateStatusMutation.mutate({ 
+            orderId: order.id, 
+            status: `fulfilled,fulfillment_date:${today}` 
+          });
+        }
+      }
+    });
+
+    return orderStatuses;
+  };
+
   // First, decorate orders with their original index
   const sortedOrders = (ordersState || orders)?.map((order: Order, idx: number) => ({
     ...order,
@@ -1141,6 +1294,7 @@ const Orders = () => {
               onTogglePriority={handleTogglePriority}
               onUpdateStatus={handleUpdateStatus}
               onDeleteOrder={handleDeleteOrder}
+              shippingStatuses={shippingStatuses[order.id]}
             />
           ))}
         </div>
@@ -1161,13 +1315,7 @@ const Orders = () => {
             }
           }}
           onUpdateStartDate={(date) => {
-            console.log('onUpdateStartDate called with date:', date);
-            console.log('selectedOrder:', selectedOrder);
             if (selectedOrder) {
-              console.log('Calling updateStartDateMutation with:', {
-                orderId: selectedOrder.id,
-                startDate: date
-              });
               updateStartDateMutation.mutate({
                 orderId: selectedOrder.id,
                 startDate: date

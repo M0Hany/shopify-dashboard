@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Orders from './pages/Orders';
 import Finance from './pages/Finance';
+import Shipping from './pages/Shipping';
 import { Layout } from './components/layout/Layout';
 
 const queryClient = new QueryClient();
@@ -15,6 +16,7 @@ function App() {
             <Route path="/" element={<Navigate to="/orders" replace />} />
             <Route path="/orders" element={<Orders />} />
             <Route path="/finance" element={<Finance />} />
+            <Route path="/shipping" element={<Shipping />} />
           </Routes>
         </Layout>
       </HashRouter>

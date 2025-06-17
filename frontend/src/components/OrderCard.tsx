@@ -17,70 +17,58 @@ interface OrderCardProps {
   onSendWhatsAppMessage?: (orderId: number, phone: string, message: string) => void;
   onSendConfirmationMessage?: (orderId: number, phone: string) => void;
   onDeleteOrder?: (orderId: number) => void;
+  shippingStatuses?: { packageENStatus: string; lastUpdated: string; barcode?: string }[];
 }
 
 // Add new ShippingStatus component
-const ShippingStatus: React.FC<{ shippingDate: string }> = ({ shippingDate }) => {
-  const [daysPassed, setDaysPassed] = useState(0);
-
-  useEffect(() => {
-    const calculateDaysPassed = () => {
-      try {
-        // Parse the YYYY-MM-DD date string
-        const [year, month, day] = shippingDate.split('-').map(Number);
-        const shipped = new Date(year, month - 1, day); // month is 0-based in JS Date
-        if (isNaN(shipped.getTime())) {
-          console.error('Invalid shipping date:', shippingDate);
-          return;
-        }
-        const now = new Date();
-        // Set both dates to midnight for accurate day calculation
-        const shippedMidnight = new Date(shipped.getFullYear(), shipped.getMonth(), shipped.getDate());
-        const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const diffTime = Math.abs(nowMidnight.getTime() - shippedMidnight.getTime());
+const ShippingStatus: React.FC<{ 
+  status: string; 
+  shippingStatuses?: { 
+    packageENStatus: string; 
+    lastUpdated: string; 
+    Barcode: string;
+  }[];
+  orderTags: string[];
+}> = ({ status, shippingStatuses, orderTags }) => {
+  // Get shipping date from tags
+  const getShippingDaysAgo = () => {
+    const now = new Date();
+    const shippingDateTag = orderTags.find((tag: string) => tag.trim().startsWith('shipping_date:'));
+    if (shippingDateTag) {
+      const dateStr = shippingDateTag.trim().split(':')[1]?.trim();
+      if (dateStr) {
+        const shippingDate = new Date(dateStr);
+        const diffTime = Math.abs(now.getTime() - shippingDate.getTime());
         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        setDaysPassed(diffDays);
-      } catch (error) {
-        console.error('Error calculating days passed:', error);
+        return `Shipped ${diffDays} days ago`;
       }
-    };
-
-    calculateDaysPassed();
-    // Update every minute
-    const interval = setInterval(calculateDaysPassed, 60000);
-    return () => clearInterval(interval);
-  }, [shippingDate]);
-
-  // Format the date for display
-  const formatDate = (dateStr: string) => {
-    try {
-      const [year, month, day] = dateStr.split('-').map(Number);
-      const date = new Date(year, month - 1, day);
-      if (isNaN(date.getTime())) {
-        return 'Invalid Date';
-      }
-      // Format the date in a more readable way
-      return date.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
-      });
-    } catch (error) {
-      console.error('Error formatting date:', error);
-      return 'Invalid Date';
     }
+    return 'Shipped recently';
   };
 
   return (
     <div className="flex items-center gap-2 p-2 bg-purple-50 rounded-md">
       <TruckIcon className="w-5 h-5 text-purple-600" />
-      <div className="text-sm">
-        <span className="text-purple-700 font-medium">
-          {daysPassed === 0 ? 'Shipped today' : `Shipped ${daysPassed} days ago`}
+      <div className="flex flex-col">
+        <span className="text-sm text-purple-700 font-medium">
+          {getShippingDaysAgo()}
         </span>
-        <div className="text-xs text-purple-600">
-          {formatDate(shippingDate)}
-        </div>
+        {shippingStatuses && shippingStatuses.length > 0 && (
+          <div className="text-xs text-purple-600">
+            {shippingStatuses.map((status, index) => (
+              <div key={index} className="space-y-0.5">
+                <div className="italic">
+                  {status.packageENStatus}
+                </div>
+                {status.Barcode && (
+                  <div className="font-mono text-purple-500">
+                    {status.Barcode}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -96,7 +84,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
   onUpdateStatus,
   onSendWhatsAppMessage,
   onSendConfirmationMessage,
-  onDeleteOrder
+  onDeleteOrder,
+  shippingStatuses
 }) => {
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
@@ -464,12 +453,10 @@ Your order is being picked up by the shipping company and should be arriving to 
             onClick={handleCheckboxClick}
             className="relative w-5 h-5 cursor-pointer"
           >
-            <input
-              type="checkbox"
-              checked={isSelected}
-              onChange={() => {}}
-              className="absolute w-5 h-5 cursor-pointer rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-            />
+            <div className={`absolute w-5 h-5 rounded-full border-2 ${isSelected ? 'border-blue-600' : 'border-gray-300'} bg-white`} />
+            {isSelected && (
+              <div className="absolute w-3 h-3 rounded-full bg-blue-600" style={{ top: '4px', left: '4px' }} />
+            )}
           </div>
             {!isOrderCancelled && (
               <>
@@ -649,7 +636,11 @@ Your order is being picked up by the shipping company and should be arriving to 
           <>
             {trimmedTags.includes('shipped') ? (
               <div className="mb-4">
-                <ShippingStatus shippingDate={getShippingDate() || new Date().toISOString()} />
+                <ShippingStatus 
+                  status={order.packageENStatus || 'Pending pickup'} 
+                  shippingStatuses={shippingStatuses}
+                  orderTags={trimmedTags}
+                />
               </div>
             ) : !trimmedTags.includes('fulfilled') && (
               <div className="mb-4">

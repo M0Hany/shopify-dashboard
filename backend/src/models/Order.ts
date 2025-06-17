@@ -19,6 +19,17 @@ export interface IOrder extends Document {
   }[];
   notes: string[];
   status: string;
+  customer: {
+    first_name: string;
+    last_name: string;
+    phone: string;
+  };
+  shippingAddress: {
+    address1: string;
+    city: string;
+    country: string;
+    phone: string;
+  };
 }
 
 const OrderSchema: Schema = new Schema({
@@ -39,6 +50,17 @@ const OrderSchema: Schema = new Schema({
   }],
   notes: [{ type: String }],
   status: { type: String, required: true, default: 'pending' },
+  customer: {
+    first_name: { type: String, required: true },
+    last_name: { type: String, required: true },
+    phone: { type: String, required: true },
+  },
+  shippingAddress: {
+    address1: { type: String, required: true },
+    city: { type: String, required: true },
+    country: { type: String, required: true },
+    phone: { type: String, required: true },
+  },
 }, {
   timestamps: true,
 });
@@ -70,7 +92,50 @@ OrderSchema.statics.createFromShopify = async function(shopifyOrder: ShopifyOrde
     updatedAt: new Date(shopifyOrder.updated_at),
     lineItems: shopifyOrder.line_items,
     status: tags.includes('express') ? 'express' : 'pending',
+    customer: {
+      first_name: shopifyOrder.customer.first_name,
+      last_name: shopifyOrder.customer.last_name,
+      phone: shopifyOrder.customer.phone,
+    },
+    shippingAddress: {
+      address1: shopifyOrder.shipping_address.address1,
+      city: shopifyOrder.shipping_address.city,
+      country: shopifyOrder.shipping_address.country,
+      phone: shopifyOrder.shipping_address.phone,
+    },
   });
 };
 
 export default mongoose.model<IOrder>('Order', OrderSchema); 
+
+export class Order {
+  static async findShippedNotFulfilled(): Promise<Order[]> {
+    try {
+      const response = await fetch(`${process.env.SHOPIFY_SHOP_URL}/admin/api/2023-01/orders.json?status=any&limit=250`, {
+        headers: {
+          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN as string
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch orders: ${response.statusText}`);
+      }
+
+      const data = await response.json() as { orders: any[] };
+      
+      // Filter orders that are shipped but not fulfilled
+      return data.orders.filter((order: any) => {
+        const tags = Array.isArray(order.tags) ? 
+          order.tags : 
+          typeof order.tags === 'string' ? 
+            order.tags.split(',').map((t: string) => t.trim()) : 
+            [];
+
+        return tags.includes('shipped') && !tags.includes('fulfilled');
+      });
+    } catch (error) {
+      console.error('Error finding shipped but not fulfilled orders:', error);
+      throw error;
+    }
+  }
+} 

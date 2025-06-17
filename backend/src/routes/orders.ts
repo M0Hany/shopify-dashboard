@@ -1,13 +1,17 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
+import multer from 'multer';
+import xlsx from 'xlsx';
 import { ShopifyService } from '../services/shopify';
-import { getConfig } from '../config';
+import { logger } from '../utils/logger';
 
 const router = express.Router();
 const shopifyService = new ShopifyService();
-const config = getConfig();
+
+// Configure multer for file upload
+const upload = multer({ storage: multer.memoryStorage() });
 
 // Get all orders with optional filters
-router.get('/', async (req, res) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const orders = await shopifyService.getOrders({
       limit: 250,
@@ -17,90 +21,90 @@ router.get('/', async (req, res) => {
     });
     res.json(orders);
   } catch (error) {
-    console.error('Error fetching orders:', error);
+    logger.error('Error fetching orders:', error);
     res.status(500).json({ error: 'Failed to fetch orders' });
   }
 });
 
 // Get a single order by ID
-router.get('/:id', async (req, res) => {
+router.get('/:id', async (req: Request, res: Response) => {
   try {
     const order = await shopifyService.getOrder(Number(req.params.id));
     res.json(order);
   } catch (error) {
-    console.error('Error fetching order:', error);
+    logger.error('Error fetching order:', error);
     res.status(500).json({ error: 'Failed to fetch order' });
   }
 });
 
 // Update order status
-router.put('/:id/status', async (req, res) => {
+router.put('/:id/status', async (req: Request, res: Response) => {
   try {
     await shopifyService.updateOrderStatus(Number(req.params.id), req.body.status);
     res.json({ success: true });
   } catch (error) {
-    console.error('Error updating order status:', error);
+    logger.error('Error updating order status:', error);
     res.status(500).json({ error: 'Failed to update order status' });
   }
 });
 
 // Update order due date
-router.put('/:id/due-date', async (req, res) => {
+router.put('/:id/due-date', async (req: Request, res: Response) => {
   try {
     await shopifyService.updateOrderDueDate(Number(req.params.id), req.body.custom_due_date);
     res.json({ success: true });
   } catch (error) {
-    console.error('Error updating order due date:', error);
+    logger.error('Error updating order due date:', error);
     res.status(500).json({ error: 'Failed to update order due date' });
   }
 });
 
 // Update order start date
-router.put('/:id/start-date', async (req, res) => {
+router.put('/:id/start-date', async (req: Request, res: Response) => {
   try {
-    console.log('Received start-date update request:', {
+    logger.info('Received start-date update request:', {
       orderId: req.params.id,
       customStartDate: req.body.custom_start_date,
       body: req.body
     });
     await shopifyService.updateOrderStartDate(Number(req.params.id), req.body.custom_start_date);
-    console.log('Start date update successful');
+    logger.info('Start date update successful');
     res.json({ success: true });
   } catch (error) {
-    console.error('Error updating order start date:', error);
+    logger.error('Error updating order start date:', error);
     res.status(500).json({ error: 'Failed to update order start date' });
   }
 });
 
 // Update order note
-router.put('/:id/note', async (req, res) => {
+router.put('/:id/note', async (req: Request, res: Response) => {
   try {
     await shopifyService.updateOrderNote(Number(req.params.id), req.body.note);
     res.json({ success: true });
   } catch (error) {
-    console.error('Error updating order note:', error);
+    logger.error('Error updating order note:', error);
     res.status(500).json({ error: 'Failed to update order note' });
   }
 });
 
 // Update order priority
-router.put('/:id/priority', async (req, res) => {
+router.put('/:id/priority', async (req: Request, res: Response) => {
   try {
     await shopifyService.updateOrderPriority(Number(req.params.id), req.body.isPriority);
     res.json({ success: true });
   } catch (error) {
-    console.error('Error updating order priority:', error);
+    logger.error('Error updating order priority:', error);
     res.status(500).json({ error: 'Failed to update order priority' });
   }
 });
 
 // Fulfill an order
-router.post('/:id/fulfill', async (req, res) => {
+router.post('/:id/fulfill', async (req: Request, res: Response) => {
   try {
     await shopifyService.fulfillOrder(Number(req.params.id));
     res.json({ success: true });
   } catch (error: any) {
-    console.error('Error fulfilling order:', {
+    logger.error('Error fulfilling order:', {
       error,
       orderId: req.params.id,
       errorDetails: error.response?.body || error.message,
@@ -114,22 +118,112 @@ router.post('/:id/fulfill', async (req, res) => {
   }
 });
 
-// Public endpoint to get unfulfilled orders count
-router.get('/unfulfilled-count', async (req, res) => {
+// Upload Excel file for paid orders
+router.post('/upload-paid-orders', upload.single('file'), async (req: Request, res: Response) => {
   try {
-    const orders = await shopifyService.getOrders({
-      status: 'any'
-    });
-    
-    const unfulfilledCount = orders.filter(order => {
-      const tags = Array.isArray(order.tags) ? order.tags : order.tags ? [order.tags] : [];
-      return !tags.includes('fulfilled');
-    }).length;
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
 
-    res.json({ count: unfulfilledCount });
+    // Read the Excel file
+    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const worksheet = workbook.Sheets['Transferred'];
+    
+    if (!worksheet) {
+      return res.status(400).json({ error: 'Sheet "Transferred" not found in the Excel file' });
+    }
+
+    // Convert to JSON with type assertion for array of arrays
+    const data = xlsx.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+    
+    // Skip first three rows (title, empty, headers) and process until "Totals" row
+    const validRows = [];
+    for (let i = 3; i < data.length; i++) {
+      const row = data[i];
+      
+      // Stop processing when we hit the Totals row
+      if (row[0] && row[0].toString().trim().startsWith('Totals')) {
+        break;
+      }
+
+      // Skip empty rows or rows without customer name/phone
+      if (!row || !row.length) {
+        continue;
+      }
+
+      // Validate customer name and phone (columns G and H, indices 6 and 7)
+      if (!row[6] || !row[7]) {
+        continue;
+      }
+
+      validRows.push(row);
+    }
+
+    const results = {
+      processed: 0,
+      updated: 0,
+      notFound: 0,
+      errors: 0,
+      failedTransfers: [] as Array<{
+        customerName: string;
+        customerPhone: string;
+        reason: string;
+      }>
+    };
+
+    // Get today's date in YYYY-MM-DD format
+    const today = new Date();
+    const formattedDate = today.toISOString().split('T')[0];
+
+    // Process each valid row
+    for (const row of validRows) {
+      try {
+        // Get customer name from column G (index 6) and phone from column H (index 7)
+        const customerName = row[6].toString().trim();
+        const customerPhone = row[7].toString().trim();
+
+        // Find matching order
+        const matchingOrder = await shopifyService.findOrderByCustomerDetails(customerName, customerPhone);
+        
+        if (matchingOrder) {
+          // Use current date for payment_date tag
+          const paymentDateTag = `payment_date:${formattedDate}`.trim();
+          
+          try {
+            // Update order with paid status and payment date
+            await shopifyService.updateOrderStatus(matchingOrder.id, 'paid');
+            await shopifyService.addOrderTag(matchingOrder.id, paymentDateTag);
+            
+            results.updated++;
+          } catch (updateError) {
+            results.errors++;
+            results.failedTransfers.push({
+              customerName,
+              customerPhone,
+              reason: 'Failed to update order status'
+            });
+            logger.error('Error updating order status:', updateError);
+          }
+        } else {
+          results.notFound++;
+          results.failedTransfers.push({
+            customerName,
+            customerPhone,
+            reason: 'Order not found'
+          });
+        }
+        
+        results.processed++;
+      } catch (error) {
+        logger.error('Error processing row:', error);
+        results.errors++;
+      }
+    }
+
+    res.json(results);
   } catch (error) {
-    console.error('Error fetching unfulfilled orders count:', error);
-    res.status(500).json({ error: 'Failed to fetch unfulfilled orders count' });
+    logger.error('Error processing Excel file:', error);
+    res.status(500).json({ error: 'Failed to process Excel file' });
   }
 });
 

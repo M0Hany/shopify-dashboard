@@ -16,6 +16,18 @@ const OrderTimeline: React.FC<OrderTimelineProps> = ({ createdAt, dueDate, isCus
   const now = convertToCairoTime(new Date());
   const daysLeft = calculateDaysRemaining(end, now);
 
+  // Debug logging only for order #1040
+  if (orderName === '#1040') {
+    console.log('OrderTimeline dates for #1040:', {
+      createdAt,
+      dueDate,
+      start: start.toISOString(),
+      end: end.toISOString(),
+      now: now.toISOString(),
+      daysLeft
+    });
+  }
+
   // Format date to show only month and day
   const formatDate = (date: Date) => {
     return date.toLocaleDateString('en-US', {

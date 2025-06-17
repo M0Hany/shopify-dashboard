@@ -11,7 +11,7 @@ export default defineConfig({
   },
   define: { 
     'process.env.VITE_API_URL': JSON.stringify(process.env.NODE_ENV === 'production' 
-      ? 'https://backend-i12ci3rw8-medohany68-gmailcoms-projects.vercel.app'
+      ? 'https://backend-q7sn5q55i-medohany68-gmailcoms-projects.vercel.app'
       : 'http://localhost:3000')
   } 
 }) 

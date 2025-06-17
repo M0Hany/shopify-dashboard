@@ -1,0 +1,79 @@
+{% comment %}
+  Delivery Estimator Component
+  Calculates estimated delivery time based on current unfulfilled orders
+  Assumes 3 orders completed per day
+{% endcomment %}
+
+{% assign unfulfilled_orders = 0 %}
+{% for order in shop.orders %}
+  {% unless order.fulfillment_status == 'fulfilled' or order.cancelled %}
+    {% assign unfulfilled_orders = unfulfilled_orders | plus: 1 %}
+  {% endunless %}
+{% endfor %}
+
+{% assign days_needed = unfulfilled_orders | divided_by: 3.0 | ceil %}
+{% assign weeks = days_needed | divided_by: 7 | floor %}
+{% assign remaining_days = days_needed | modulo: 7 %}
+
+<div id="delivery-estimator" class="delivery-estimator">
+  <div class="delivery-estimator__content">
+    <div class="delivery-estimator__icon">🚚</div>
+    <div class="delivery-estimator__text">
+      <span id="delivery-estimate">
+        {% if days_needed > 0 %}
+          If you order now, you'll receive it in 
+          {% if weeks > 0 %}
+            {{ weeks }} {% if weeks == 1 %}week{% else %}weeks{% endif %}
+            {% if remaining_days > 0 %}
+              and {{ remaining_days }} {% if remaining_days == 1 %}day{% else %}days{% endif %}
+            {% endif %}
+          {% else %}
+            {{ remaining_days }} {% if remaining_days == 1 %}day{% else %}days{% endif %}
+          {% endif %}
+        {% else %}
+          Ready to ship immediately!
+        {% endif %}
+      </span>
+    </div>
+  </div>
+</div>
+
+<style>
+.delivery-estimator {
+  margin: 20px 0;
+  padding: 15px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+}
+
+.delivery-estimator__content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.delivery-estimator__icon {
+  font-size: 24px;
+}
+
+.delivery-estimator__text {
+  font-size: 16px;
+  color: #495057;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+}
+
+.delivery-estimator__text strong {
+  color: #212529;
+  font-weight: 600;
+}
+</style>
+
+<script>
+(function() {
+  // Refresh the page every 5 minutes to update the estimate
+  setInterval(function() {
+    window.location.reload();
+  }, 5 * 60 * 1000);
+})();
+</script> 
