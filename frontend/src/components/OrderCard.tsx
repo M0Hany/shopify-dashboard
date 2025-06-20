@@ -1,33 +1,36 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, ChatBubbleLeftRightIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon } from '@heroicons/react/24/outline';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, ChatBubbleLeftRightIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
 import { convertToCairoTime } from '../utils/dateUtils';
 import { Menu } from '@headlessui/react';
 import { format } from 'date-fns';
+import LocationDialog, { Zone, SubZone } from './ui/LocationDialog';
+import { locationData } from '../data/locations';
+
+interface PackageStatus {
+  packageENStatus: string;
+  lastUpdated: string;
+  barcode?: string;
+}
 
 interface OrderCardProps {
   order: any;
   onClick: () => void;
   isSelected?: boolean;
   onSelect?: (orderId: number) => void;
+  onUpdateStatus?: (orderId: number, status: string) => void;
+  onDeleteOrder?: (orderId: number) => void;
   onUpdateNote?: (orderId: number, note: string) => void;
   onTogglePriority?: (orderId: number, isPriority: boolean) => void;
-  onUpdateStatus?: (orderId: number, status: string) => void;
-  onSendWhatsAppMessage?: (orderId: number, phone: string, message: string) => void;
-  onSendConfirmationMessage?: (orderId: number, phone: string) => void;
-  onDeleteOrder?: (orderId: number) => void;
-  shippingStatuses?: { packageENStatus: string; lastUpdated: string; barcode?: string }[];
+  shippingStatuses?: PackageStatus[];
+  onUpdateTags?: (orderId: number, newTags: string[]) => void;
 }
 
 // Add new ShippingStatus component
 const ShippingStatus: React.FC<{ 
   status: string; 
-  shippingStatuses?: { 
-    packageENStatus: string; 
-    lastUpdated: string; 
-    Barcode: string;
-  }[];
+  shippingStatuses?: PackageStatus[];
   orderTags: string[];
 }> = ({ status, shippingStatuses, orderTags }) => {
   // Get shipping date from tags
@@ -60,9 +63,9 @@ const ShippingStatus: React.FC<{
                 <div className="italic">
                   {status.packageENStatus}
                 </div>
-                {status.Barcode && (
+                {status.barcode && (
                   <div className="font-mono text-purple-500">
-                    {status.Barcode}
+                    {status.barcode}
                   </div>
                 )}
               </div>
@@ -79,19 +82,28 @@ const OrderCard: React.FC<OrderCardProps> = ({
   onClick, 
   isSelected = false,
   onSelect,
+  onUpdateStatus,
+  onDeleteOrder,
   onUpdateNote,
   onTogglePriority,
-  onUpdateStatus,
-  onSendWhatsAppMessage,
-  onSendConfirmationMessage,
-  onDeleteOrder,
-  shippingStatuses
+  shippingStatuses,
+  onUpdateTags
 }) => {
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [isShippedModalOpen, setIsShippedModalOpen] = useState(false);
+  const [isNeighborhoodDialogOpen, setIsNeighborhoodDialogOpen] = useState(false);
+  const [isSubzoneDialogOpen, setIsSubzoneDialogOpen] = useState(false);
+  const [isCityDialogOpen, setIsCityDialogOpen] = useState(false);
+  const [selectedNeighborhood, setSelectedNeighborhood] = useState<Zone | null>(null);
   const [whatsAppMessage, setWhatsAppMessage] = useState('');
   const [noteText, setNoteText] = useState(order.note || '');
+  const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
+  const [tempLocationSelections, setTempLocationSelections] = useState<{
+    cityId: string | null;
+    neighborhoodId: string | null;
+    subzoneId: string | null;
+  } | null>(null);
   const noteModalRef = useRef<HTMLDivElement>(null);
   const whatsAppModalRef = useRef<HTMLDivElement>(null);
   const shippedModalRef = useRef<HTMLDivElement>(null);
@@ -440,6 +452,119 @@ Your order is being picked up by the shipping company and should be arriving to 
     }
   };
 
+  // Get location IDs from tags
+  const getLocationFromTags = () => {
+    // Convert tags to array if it's a string
+    const tagsArray = typeof tags === 'string' 
+      ? tags.split(',').map(tag => tag.trim())
+      : Array.isArray(tags) 
+        ? tags.map(tag => tag.trim())
+        : [];
+
+    // Helper function to get tag value
+    const getTagValue = (prefix: string) => {
+      const tag = tagsArray.find(tag => tag.startsWith(prefix));
+      const value = tag ? tag.split(':')[1].trim() : null;
+      // Consider "null" string as null value
+      return value === "null" ? null : value;
+    };
+
+    return {
+      cityId: getTagValue('mylerz_city_id'),
+      neighborhoodId: getTagValue('mylerz_neighborhood_id'),
+      subZoneId: getTagValue('mylerz_subzone_id')
+    };
+  };
+
+  const locationIds = getLocationFromTags();
+
+  // Get city data based on either selected city or shipping address
+  const cityData = useMemo(() => {
+    const cityId = selectedCityId || locationIds.cityId;
+    if (!cityId || cityId === "null") return null;
+    
+    return locationData.Value.find(
+      city => city.Id.toString() === cityId
+    );
+  }, [selectedCityId, locationIds.cityId]);
+
+  // Get the current neighborhood data if it exists
+  const currentNeighborhood = locationIds.neighborhoodId && cityData 
+    ? cityData.Zones.find(z => z.Id.toString() === locationIds.neighborhoodId)
+    : null;
+
+  // Helper function to preserve non-location tags
+  const preserveNonLocationTags = (currentTags: string[]) => {
+    return currentTags.filter(tag => 
+      !tag.startsWith('mylerz_city_id:') &&
+      !tag.startsWith('mylerz_neighborhood_id:') &&
+      !tag.startsWith('mylerz_subzone_id:')
+    );
+  };
+
+  // Helper function to get current tags array
+  const getCurrentTags = () => {
+    return typeof tags === 'string' 
+      ? tags.split(',').map(tag => tag.trim())
+      : Array.isArray(tags) 
+        ? tags.map(tag => tag.trim())
+        : [];
+  };
+
+  // Function to commit location changes
+  const commitLocationChanges = (selections: NonNullable<typeof tempLocationSelections>) => {
+    const currentTags = getCurrentTags();
+    
+    // Preserve non-location tags
+    const preservedTags = preserveNonLocationTags(currentTags);
+    
+    // Add all location tags
+    if (selections.cityId) {
+      preservedTags.push(`mylerz_city_id:${selections.cityId}`);
+    }
+    if (selections.neighborhoodId) {
+      preservedTags.push(`mylerz_neighborhood_id:${selections.neighborhoodId}`);
+    }
+    if (selections.subzoneId) {
+      preservedTags.push(`mylerz_subzone_id:${selections.subzoneId}`);
+    }
+    
+    // Update tags once with all changes
+    if (onUpdateTags) {
+      onUpdateTags(order.id, preservedTags);
+    }
+    
+    // Clear temporary selections
+    setTempLocationSelections(null);
+  };
+
+  // Function to start location editing
+  const startLocationEdit = () => {
+    // Initialize temporary selections with current values
+    setTempLocationSelections({
+      cityId: locationIds.cityId !== "null" ? locationIds.cityId : null,
+      neighborhoodId: locationIds.neighborhoodId !== "null" ? locationIds.neighborhoodId : null,
+      subzoneId: locationIds.subZoneId !== "null" ? locationIds.subZoneId : null
+    });
+    setIsCityDialogOpen(true);
+  };
+
+  // Function to cancel location editing
+  const cancelLocationEdit = () => {
+    setTempLocationSelections(null);
+    setSelectedCityId(null);
+    setSelectedNeighborhood(null);
+    setIsCityDialogOpen(false);
+    setIsNeighborhoodDialogOpen(false);
+    setIsSubzoneDialogOpen(false);
+  };
+
+  // Check if order has any advanced status tags that prevent location editing
+  const advancedStatusTags = ['shipped', 'fulfilled', 'ready_to_ship', 'cancelled', 'paid'];
+  const canEditLocation = !advancedStatusTags.some(status => 
+    trimmedTags.includes(status.trim())
+  );
+
   return (
     <div 
       onClick={onClick}
@@ -609,6 +734,84 @@ Your order is being picked up by the shipping company and should be arriving to 
             <div className="flex items-center gap-2">
               <PhoneIcon className="w-4 h-4 text-green-500" />
               <span className="text-xs text-gray-700">{order.customer.phone}</span>
+            </div>
+          )}
+          {order.shipping_address && (
+            <div className="flex items-center gap-2">
+              <MapPinIcon className={`w-4 h-4 ${
+                locationIds.cityId && locationIds.neighborhoodId && locationIds.subZoneId &&
+                locationIds.cityId !== "null" && locationIds.neighborhoodId !== "null" && locationIds.subZoneId !== "null"
+                  ? 'text-green-500' 
+                  : 'text-red-500'
+              }`} />
+              {locationIds.cityId && locationIds.cityId !== "null" ? (
+                <div className="flex items-center gap-2 w-full">
+                  <span className="text-xs text-gray-700">
+                    {cityData?.ArName || cityData?.EnName}
+                    {locationIds.neighborhoodId && locationIds.neighborhoodId !== "null" ? (
+                      <>
+                        , {cityData?.Zones.find(z => z.Id.toString() === locationIds.neighborhoodId)?.ArName}
+                        {locationIds.subZoneId && locationIds.subZoneId !== "null" ? (
+                          <>
+                            , {cityData?.Zones
+                                .find(z => z.Id.toString() === locationIds.neighborhoodId)
+                                ?.SubZones.find(sz => sz.Id.toString() === locationIds.subZoneId)?.ArName}
+                          </>
+                        ) : canEditLocation && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startLocationEdit();
+                            }}
+                            className="ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 text-gray-600 rounded hover:bg-gray-50 transition-colors"
+                          >
+                            Edit Location
+                          </button>
+                        )}
+                      </>
+                    ) : canEditLocation && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startLocationEdit();
+                        }}
+                        className="ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 text-gray-600 rounded hover:bg-gray-50 transition-colors"
+                      >
+                        Edit Location
+                      </button>
+                    )}
+                  </span>
+                  {locationIds.cityId && locationIds.neighborhoodId && locationIds.subZoneId &&
+                   locationIds.cityId !== "null" && locationIds.neighborhoodId !== "null" && locationIds.subZoneId !== "null" && canEditLocation && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startLocationEdit();
+                      }}
+                      className="ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 text-gray-600 rounded hover:bg-gray-50 transition-colors"
+                    >
+                      Edit Location
+                    </button>
+                  )}
+                </div>
+              ) : canEditLocation ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-red-500">Missing address</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startLocationEdit();
+                    }}
+                    className="px-2 py-0.5 text-xs bg-white border border-red-300 text-red-600 rounded hover:bg-red-50 transition-colors"
+                  >
+                    Choose Location
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-red-500">Missing address</span>
+                </div>
+              )}
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -797,6 +1000,129 @@ Your order is being picked up by the shipping company and should be arriving to 
               </div>
             </div>
           </div>
+        )}
+
+        {/* Location Dialogs */}
+        {/* City Dialog */}
+        <LocationDialog<any>
+          isOpen={isCityDialogOpen}
+          onClose={() => {
+            cancelLocationEdit();
+          }}
+          title="Select City"
+          locations={locationData.Value}
+          shippingAddress={order.shipping_address}
+          selectedId={
+            tempLocationSelections?.cityId && tempLocationSelections.cityId !== "null" 
+              ? parseInt(tempLocationSelections.cityId)
+              : locationIds.cityId !== "null" 
+                ? parseInt(locationIds.cityId) 
+                : undefined
+          }
+          onSelect={(city) => {
+            // Set the selected city ID for immediate UI update
+            setSelectedCityId(city.Id.toString());
+            
+            // Update temporary selections
+            setTempLocationSelections({
+              cityId: city.Id.toString(),
+              neighborhoodId: null,
+              subzoneId: null
+            });
+            
+            setIsCityDialogOpen(false);
+            setIsNeighborhoodDialogOpen(true);
+          }}
+        />
+
+        {cityData && (
+          <>
+            {/* Neighborhood Dialog */}
+            <LocationDialog<Zone>
+              isOpen={isNeighborhoodDialogOpen}
+              onClose={() => {
+                cancelLocationEdit();
+              }}
+              title="Select Neighborhood"
+              locations={cityData.Zones}
+              shippingAddress={order.shipping_address}
+              selectedId={
+                tempLocationSelections?.neighborhoodId && tempLocationSelections.neighborhoodId !== "null"
+                  ? parseInt(tempLocationSelections.neighborhoodId)
+                  : locationIds.neighborhoodId !== "null"
+                    ? parseInt(locationIds.neighborhoodId)
+                    : undefined
+              }
+              onSelect={(neighborhood) => {
+                setSelectedNeighborhood(neighborhood);
+                
+                // Update temporary selections
+                const currentSelections = {
+                  cityId: tempLocationSelections?.cityId || locationIds.cityId || "",
+                  neighborhoodId: neighborhood.Id.toString(),
+                  subzoneId: null
+                };
+                setTempLocationSelections(currentSelections);
+
+                if (neighborhood.SubZones.length === 1) {
+                  const subzone = neighborhood.SubZones[0];
+                  // Update temporary selections with both neighborhood and subzone
+                  const selections = {
+                    cityId: currentSelections.cityId,
+                    neighborhoodId: neighborhood.Id.toString(),
+                    subzoneId: subzone.Id.toString()
+                  };
+                  setTempLocationSelections(selections);
+                  
+                  // Commit changes since we're done with selection
+                  commitLocationChanges(selections);
+                  setIsNeighborhoodDialogOpen(false);
+                } else {
+                  setIsNeighborhoodDialogOpen(false);
+                  setIsSubzoneDialogOpen(true);
+                }
+              }}
+            />
+
+            {/* Subzone Dialog */}
+            {selectedNeighborhood && (
+              <LocationDialog<SubZone>
+                isOpen={isSubzoneDialogOpen}
+                onClose={() => {
+                  cancelLocationEdit();
+                }}
+                title="Select SubZone"
+                locations={selectedNeighborhood.SubZones}
+                shippingAddress={order.shipping_address}
+                selectedId={
+                  tempLocationSelections?.subzoneId && tempLocationSelections.subzoneId !== "null"
+                    ? parseInt(tempLocationSelections.subzoneId)
+                    : locationIds.subZoneId !== "null"
+                      ? parseInt(locationIds.subZoneId)
+                      : undefined
+                }
+                onSelect={(subzone) => {
+                  // Get current selections or use existing location IDs
+                  const currentSelections = tempLocationSelections || {
+                    cityId: locationIds.cityId || "",
+                    neighborhoodId: selectedNeighborhood.Id.toString(),
+                    subzoneId: null
+                  };
+
+                  // Update temporary selections and commit changes
+                  const finalSelections = {
+                    cityId: currentSelections.cityId,
+                    neighborhoodId: currentSelections.neighborhoodId,
+                    subzoneId: subzone.Id.toString()
+                  };
+                  
+                  // Commit all changes at once
+                  commitLocationChanges(finalSelections);
+                  setIsSubzoneDialogOpen(false);
+                }}
+              />
+            )}
+          </>
         )}
       </div>
     </div>

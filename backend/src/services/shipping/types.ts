@@ -179,4 +179,10 @@ export interface City {
   EnName: string;
   Id: number;
   Zones: Zone[];
+}
+
+export interface ShippingTokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
 } 

@@ -11,6 +11,9 @@ import { getConfig } from './config';
 import express from 'express';
 import { schedulerService } from './services/scheduler.service';
 import { logger } from './utils/logger';
+import { scheduleShippingStatusCheck } from './jobs/shippingStatusChecker';
+import { scheduleAddressTagCheck } from './jobs/addressTagChecker';
+import { CronJob } from 'cron';
 
 const app = express();
 const config = getConfig();
@@ -63,53 +66,46 @@ app.get('/api/test', (req, res) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
-    services: {
-      database: true, // Add actual check
-      shipping: true, // Add actual check
-      scheduler: true // Add actual check
-    }
-  });
+  res.json({ status: 'healthy' });
 });
 
 // Error handling
 app.use(errorHandler);
 
-const port = process.env.PORT || 3000;
-
 // Start the server
-const startServer = async () => {
+app.listen(config.port, async () => {
+  logger.info(`Server is running on port ${config.port}`);
+  logger.info(`Environment: ${process.env.NODE_ENV}`);
+  
   try {
-    // Start scheduler
-    schedulerService.startAll();
-
-    app.listen(port, () => {
-      logger.info(`Server is running on port ${port}`);
-      logger.info(`Environment: ${process.env.NODE_ENV}`);
-      
-      // Verify Supabase connection
-      if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
-        logger.info('Supabase configuration found');
-      } else {
-        logger.error('Missing Supabase configuration');
-        process.exit(1);
+    // Run initial checks
+    logger.info('Running initial checks...');
+    await scheduleShippingStatusCheck();
+    await scheduleAddressTagCheck();
+    logger.info('Initial checks completed');
+    
+    // Schedule recurring checks
+    const shippingCron = new CronJob('*/30 * * * *', async () => {
+      try {
+        await scheduleShippingStatusCheck();
+      } catch (error) {
+        logger.error('Error in shipping status check:', error);
       }
-    });
-
-    // Graceful shutdown
-    process.on('SIGTERM', async () => {
-      logger.info('SIGTERM received. Starting graceful shutdown...');
-      schedulerService.stopAll();
-      // Add other cleanup tasks here
-      process.exit(0);
-    });
-
+    }, null, true, 'Africa/Cairo');
+    
+    const addressCron = new CronJob('*/30 * * * *', async () => {
+      try {
+        await scheduleAddressTagCheck();
+      } catch (error) {
+        logger.error('Error in address tag check:', error);
+      }
+    }, null, true, 'Africa/Cairo');
+    
+    shippingCron.start();
+    addressCron.start();
+    
+    logger.info('Scheduled jobs started successfully');
   } catch (error) {
-    logger.error('Failed to start server:', error);
-    process.exit(1);
+    logger.error('Failed to initialize scheduled jobs:', error);
   }
-};
-
-// Start the server
-startServer(); 
+}); 

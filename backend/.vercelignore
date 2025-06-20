@@ -1,0 +1,17 @@
+.wwebjs_auth/
+node_modules/
+logs/
+dist/
+.vercel/
+.husky/
+.git/
+*.log
+.env
+.env.*
+.eslintrc.json
+.prettierrc
+jest.config.js
+Dockerfile
+docker-compose.yml
+README.md
+BACKEND_README.md 

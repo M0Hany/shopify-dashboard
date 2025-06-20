@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "scripts": {
     "start": "node dist/index.js",
+    "start:prod": "NODE_ENV=production node dist/index.js",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
     "test": "jest",
@@ -47,6 +48,7 @@
     "multer": "^2.0.0",
     "puppeteer": "^24.8.0",
     "qrcode-terminal": "^0.12.0",
+    "redis": "^5.5.6",
     "tree-kill": "^1.2.2",
     "whatsapp-web.js": "^1.27.0",
     "winston": "^3.17.0",

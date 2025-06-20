@@ -5,8 +5,6 @@ import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { convertToCairoTime, calculateDaysRemaining } from '../utils/dateUtils';
 import OrderTimeline from './OrderTimeline';
-import WhatsAppMessageSender from './WhatsAppMessageSender';
-import { useQuery } from '@tanstack/react-query';
 
 interface OrderDetailsProps {
   order: any;
@@ -102,27 +100,6 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({
   const startDateTag = tags.find((tag: string) => tag.startsWith('custom_start_date:'));
   const isCustomDueDate = !!dueDateTag;
   const isCustomStartDate = !!startDateTag;
-
-  // Get WhatsApp connection status
-  const { data: whatsappStatus } = useQuery({
-    queryKey: ['whatsapp-status'],
-    queryFn: async () => {
-      try {
-        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/status`);
-        if (!response.ok) {
-          return { isReady: false, queueLength: 0, isProcessingQueue: false };
-        }
-        const data = await response.json();
-        return data.data;
-      } catch (error) {
-        console.error('Error fetching WhatsApp status:', error);
-        return { isReady: false, queueLength: 0, isProcessingQueue: false };
-      }
-    },
-    // Only fetch when drawer is open to avoid unnecessary requests
-    enabled: isOpen,
-    refetchInterval: isOpen ? 10000 : false, // Refetch every 10 seconds when open
-  });
 
   return (
     <>

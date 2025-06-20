@@ -1,6 +1,11 @@
 import request from 'supertest';
-import app from '../app';
+import express from 'express';
+import { shippingRoutes } from '../routes/shipping';
 import { ShippingService } from '../services/shipping/ShippingService';
+
+const app = express();
+app.use(express.json());
+app.use('/api/shipping', shippingRoutes);
 
 // Define interfaces for the payload structure
 interface PageFilter {
@@ -41,7 +46,7 @@ interface GetPackagesListPayload {
   MemberCategoryID: number;
 }
 
-describe('Shipping Integration Tests', () => {
+describe('Shipping API', () => {
   let shippingService: ShippingService;
 
   beforeAll(() => {

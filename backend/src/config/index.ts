@@ -8,12 +8,27 @@ interface ShippingConfig {
   apiUrl: string;
   username: string;
   password: string;
+  merchantId: string;
+  memberId: string;
 }
 
 interface Config {
   port: number;
+  nodeEnv: string;
+  auth0: {
+    domain: string;
+    audience: string;
+    clientId: string;
+  };
+  redis: {
+    host: string;
+    port: number;
+    password: string | null;
+    maxRetriesPerRequest: number;
+    retryStrategy: (times: number) => number | null;
+  };
   shopify: {
-    shopUrl: string;
+    shopName: string;
     accessToken: string;
   };
   database: {
@@ -34,9 +49,27 @@ interface Config {
 export function getConfig(): Config {
   return {
     port: parseInt(process.env.PORT || '3000', 10),
+    nodeEnv: process.env.NODE_ENV || 'development',
+    auth0: {
+      domain: process.env.AUTH0_DOMAIN || 'default-domain',
+      audience: process.env.AUTH0_AUDIENCE || 'default-audience',
+      clientId: process.env.AUTH0_CLIENT_ID || 'default-client-id'
+    },
+    redis: {
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT || '6379', 10),
+      password: process.env.REDIS_PASSWORD || null,
+      maxRetriesPerRequest: 1,
+      retryStrategy: (times: number) => {
+        if (times > 3) {
+          return null;
+        }
+        return Math.min(times * 1000, 3000);
+      }
+    },
     shopify: {
-      shopUrl: process.env.SHOPIFY_SHOP_URL || '',
-      accessToken: process.env.SHOPIFY_ACCESS_TOKEN || '',
+      shopName: process.env.SHOPIFY_SHOP_NAME || 'default-shop',
+      accessToken: process.env.SHOPIFY_ACCESS_TOKEN || 'default-token'
     },
     database: {
       host: process.env.DB_HOST || 'localhost',
@@ -51,8 +84,10 @@ export function getConfig(): Config {
     },
     shipping: {
       apiUrl: process.env.SHIPPING_API_URL || 'https://api.mylerz.net',
-      username: process.env.SHIPPING_USERNAME || '',
-      password: process.env.SHIPPING_PASSWORD || '',
+      username: process.env.SHIPPING_USERNAME || 'ocd',
+      password: process.env.SHIPPING_PASSWORD || 'H@ni2003',
+      merchantId: process.env.SHIPPING_MERCHANT_ID || '',
+      memberId: process.env.SHIPPING_MEMBER_ID || '',
     },
     allowedOrigins: [
       'https://m0hany.github.io',

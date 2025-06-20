@@ -145,4 +145,180 @@ export const getExpectedCharges = async (
     console.error('Failed to get expected charges:', error);
     throw error;
   }
+};
+
+export const SHIPPING_TAGS = {
+  CITY_ID: 'mylerz_city_id',
+  NEIGHBORHOOD_ID: 'mylerz_neighborhood_id',
+  SUBZONE_ID: 'mylerz_subzone_id'
+};
+
+export const addShippingLocationTags = async (orderId: string, governorate: string) => {
+  try {
+    // Get locations from API
+    const locationsData = await getLocations();
+    
+    // Find the city in the locations data
+    const city = locationsData.Value.find(
+      city => 
+        city.EnName.toLowerCase() === governorate.toLowerCase() || 
+        city.ArName === governorate
+    );
+
+    if (!city) {
+      throw new Error(`Unknown governorate: ${governorate}`);
+    }
+
+    // Prepare tags with just the city ID for now
+    // Neighborhood and SubZone will be set by user through UI
+    const tags = [
+      `${SHIPPING_TAGS.CITY_ID}:${city.Id}`,
+      `${SHIPPING_TAGS.NEIGHBORHOOD_ID}:null`,
+      `${SHIPPING_TAGS.SUBZONE_ID}:null`
+    ];
+
+    // Add tags to Shopify order
+    // TODO: Implement the actual Shopify API call here
+    console.log('Adding tags to order:', orderId, tags);
+  } catch (error) {
+    console.error('Error adding shipping location tags:', error);
+    throw error;
+  }
+};
+
+export const getShippingLocationFromTags = (tags: string[]) => {
+  const normalizedTags = tags.map(tag => tag.trim().toLowerCase());
+  
+  const cityId = normalizedTags
+    .find(tag => tag.startsWith(SHIPPING_TAGS.CITY_ID.toLowerCase()))
+    ?.split(':')[1];
+    
+  const neighborhoodId = normalizedTags
+    .find(tag => tag.startsWith(SHIPPING_TAGS.NEIGHBORHOOD_ID.toLowerCase()))
+    ?.split(':')[1];
+    
+  const subZoneId = normalizedTags
+    .find(tag => tag.startsWith(SHIPPING_TAGS.SUBZONE_ID.toLowerCase()))
+    ?.split(':')[1];
+
+  return {
+    cityId: cityId || null,
+    neighborhoodId: neighborhoodId || null,
+    subZoneId: subZoneId || null
+  };
+};
+
+interface ShopifyOrder {
+  id: number;
+  name: string;
+  shipping_address: {
+    province: string;
+    city: string;
+    phone: string;
+  };
+  tags: string | string[];
+}
+
+interface AddressTagsResult {
+  total: number;
+  successful: number;
+  failed: number;
+  errors: string[];
+}
+
+export const addBulkAddressTags = async (orders: ShopifyOrder[]): Promise<AddressTagsResult> => {
+  try {
+    const response = await fetch(`${API_URL}/api/orders/bulk-add-address-tags`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ orders }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to add address tags');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error adding address tags:', error);
+    throw error;
+  }
+};
+
+// Types from backend
+interface SubZone {
+  Id: number;
+  Code: string;
+  ArName: string;
+  EnName: string;
+}
+
+interface Zone {
+  Id: number;
+  EnName: string;
+  ArName: string;
+  SubZoneId: number;
+  SubZones: SubZone[];
+}
+
+interface City {
+  Id: number;
+  EnName: string;
+  ArName: string;
+  Zones: Zone[];
+}
+
+interface LocationResponse {
+  Value: City[];
+}
+
+// Get locations from API
+export const getLocations = async (): Promise<LocationResponse> => {
+  const response = await axios.get(`${API_URL}/api/shipping/locations`);
+  return response.data;
+};
+
+// Create shipping order with location data from API
+export const createShippingOrder = async (order: any) => {
+  try {
+    // Get locations data from API
+    const locationsData = await getLocations();
+    const governorate = order.shipping_address.province.trim();
+    
+    // Find the city in the locations data
+    const city = locationsData.Value.find(
+      city => 
+        city.EnName.toLowerCase() === governorate.toLowerCase() || 
+        city.ArName === governorate
+    );
+
+    if (!city) {
+      throw new Error(`Unknown governorate: ${governorate}`);
+    }
+
+    // Use the city ID from the API data
+    const locationInfo = {
+      cityId: city.Id.toString(),
+      // These will be set by the user through the UI now
+      neighborhoodId: null,
+      subZoneId: null
+    };
+
+    // Create the shipping order payload
+    const payload = {
+      // ... your shipping order payload
+      cityId: locationInfo.cityId,
+      neighborhoodId: locationInfo.neighborhoodId,
+      subZoneId: locationInfo.subZoneId,
+    };
+
+    // Make the API call to create the shipping order
+    const response = await axios.post(`${API_URL}/api/shipping/orders`, payload);
+    return response.data;
+  } catch (error) {
+    console.error('Error creating shipping order:', error);
+    throw error;
+  }
 }; 

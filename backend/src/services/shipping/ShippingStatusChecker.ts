@@ -13,7 +13,7 @@ interface ShippingStatusResponse {
 
 export class ShippingStatusChecker {
   private static readonly DELIVERY_STATUSES = ["Delivered", "Confirm Delivered"];
-  private static shippingService = new ShippingService();
+  private static shippingService = ShippingService.getInstance();
   private static shopifyService = new ShopifyService();
   private static whatsappService = new WhatsAppService();
 

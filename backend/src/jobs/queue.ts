@@ -1,28 +1,25 @@
 import Queue from 'bull';
+import { config } from '../config';
 import { logger } from '../utils/logger';
 import { statusService } from '../services/status.service';
 import { OrderStatus } from '../types/order';
 
-// Queue for processing status changes
-export const statusQueue = new Queue<{
-  orderId: string;
-  previousStatus: OrderStatus;
-  newStatus: OrderStatus;
-  reason?: string;
-}>('status-updates', {
+// Create queues with Redis configuration
+export const shippingQueue = new Queue('shipping-operations', {
   redis: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT || '6379'),
-    password: process.env.REDIS_PASSWORD
+    host: config.redis.host,
+    port: config.redis.port,
+    maxRetriesPerRequest: config.redis.maxRetriesPerRequest,
+    retryStrategy: config.redis.retryStrategy
   }
 });
 
-// Queue for shipping operations
-export const shippingQueue = new Queue('shipping-operations', {
+export const statusQueue = new Queue('status-updates', {
   redis: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT || '6379'),
-    password: process.env.REDIS_PASSWORD
+    host: config.redis.host,
+    port: config.redis.port,
+    maxRetriesPerRequest: config.redis.maxRetriesPerRequest,
+    retryStrategy: config.redis.retryStrategy
   }
 });
 
@@ -50,19 +47,42 @@ shippingQueue.process(async (job) => {
   }
 });
 
-// Error handling
-[statusQueue, shippingQueue].forEach(queue => {
-  queue.on('error', (error) => {
-    logger.error('Queue error', { queue: queue.name, error });
-  });
+// Error handling for queues
+let hasLoggedShippingError = false;
+let hasLoggedStatusError = false;
 
-  queue.on('failed', (job, error) => {
-    logger.error('Job failed', { 
-      queue: queue.name, 
-      jobId: job.id, 
-      error 
-    });
-  });
+shippingQueue.on('error', (error) => {
+  if (!hasLoggedShippingError) {
+    logger.error('Shipping queue error:', error);
+    hasLoggedShippingError = true;
+  }
+});
+
+statusQueue.on('error', (error) => {
+  if (!hasLoggedStatusError) {
+    logger.error('Status queue error:', error);
+    hasLoggedStatusError = true;
+  }
+});
+
+// Reset error flags when connection is successful
+shippingQueue.on('ready', () => {
+  hasLoggedShippingError = false;
+  logger.info('Shipping queue connected successfully');
+});
+
+statusQueue.on('ready', () => {
+  hasLoggedStatusError = false;
+  logger.info('Status queue connected successfully');
+});
+
+// Log successful job completion
+shippingQueue.on('completed', (job) => {
+  logger.info('Job completed', { jobId: job.id, queue: 'shipping-operations' });
+});
+
+statusQueue.on('completed', (job) => {
+  logger.info('Job completed', { jobId: job.id, queue: 'status-updates' });
 });
 
 // Clean up completed jobs

@@ -4,14 +4,26 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/ 
 export default defineConfig({ 
   plugins: [react()], 
-  base: process.env.NODE_ENV === 'production' ? '/shopify-dashboard/' : '/', 
+  base: '/', 
   server: {
     port: 5173,
     strictPort: true,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        secure: false
+      }
+    }
+  },
+  preview: {
+    port: 5173,
+    strictPort: true,
+    host: true
   },
   define: { 
     'process.env.VITE_API_URL': JSON.stringify(process.env.NODE_ENV === 'production' 
-      ? 'https://backend-2kbctosa5-medohany68-gmailcoms-projects.vercel.app'
+      ? 'http://backend:3000'
       : 'http://localhost:3000')
   } 
 }) 

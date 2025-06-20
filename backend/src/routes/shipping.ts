@@ -1,26 +1,18 @@
+import express from 'express';
+import { ShippingController } from '../controllers/shippingController';
+import { Request, Response } from 'express';
+import { locationData, LocationResponse } from '../data/locations';
 import { Router } from 'express';
 import { ShippingService } from '../services/shipping/ShippingService';
-import { OrderDTO } from '../services/shipping/types';
-import { ShippingStatusChecker } from '../services/shipping/ShippingStatusChecker';
-import { ShippingController } from '../controllers/shippingController';
 import { logger } from '../utils/logger';
+import { shopifyService } from '../services/shopify';
+import { ShippingStatusChecker } from '../services/shipping/ShippingStatusChecker';
+import { OrderDTO } from '../services/shipping/types';
 
-const router = Router();
-const shippingService = new ShippingService();
+const router = express.Router();
 const shippingController = new ShippingController();
+const shippingService = ShippingService.getInstance();
 const statusChecker = new ShippingStatusChecker();
-
-// Authentication
-router.post('/auth', async (req, res) => {
-  try {
-    const { grant_type, username, password } = req.body;
-    const response = await shippingService.authenticate(username, password);
-    res.json(response);
-  } catch (error) {
-    console.error('Error authenticating:', error);
-    res.status(500).json({ error: 'Failed to authenticate' });
-  }
-});
 
 // Get Packages List
 router.post('/packages/list', async (req, res) => {
@@ -109,22 +101,35 @@ router.post('/check-status', async (req, res) => {
   }
 });
 
+// Test endpoint to manually trigger address tag check
+router.post('/check-address-tags', async (req, res) => {
+  try {
+    logger.info('Manual address tag check triggered');
+    const result = await shippingService.processUntaggedOrders();
+    logger.info('Manual address tag check completed', result);
+    res.json({ 
+      message: 'Address tag check completed',
+      result 
+    });
+  } catch (error) {
+    logger.error('Error triggering address tag check:', error);
+    res.status(500).json({ error: 'Failed to trigger address tag check' });
+  }
+});
+
 // Shipping locations endpoints
-router.get('/locations', shippingController.getAllLocations);
-router.get('/location-ids', shippingController.findLocationIds);
+router.get('/locations', shippingController.getLocations);
 
 // Add a new route to test the GetAllPickup endpoint
 router.get('/test-get-all-locations', async (req, res) => {
   try {
-    const shippingService = ShippingService.getInstance();
     const result = await shippingService.getAllLocations();
     
     // Log the full data structure
     logger.info('GetAllLocations test result:', {
-      success: result.success,
-      message: result.message,
-      dataCount: result.data?.length || 0,
-      firstCity: result.data?.[0] // Log first city as sample
+      responseReceived: !!result,
+      dataCount: result?.Value?.length || 0,
+      firstCity: result?.Value?.[0] // Log first city as sample
     });
 
     // Return the actual data
@@ -135,6 +140,17 @@ router.get('/test-get-all-locations', async (req, res) => {
       error: 'Failed to test GetAllLocations', 
       details: error?.message || 'Unknown error' 
     });
+  }
+});
+
+// Add the locations endpoint
+router.get('/locations', async (req: Request, res: Response) => {
+  try {
+    const response: LocationResponse = locationData;
+    res.json(response);
+  } catch (error) {
+    console.error('Error fetching locations:', error);
+    res.status(500).json({ error: 'Failed to fetch locations' });
   }
 });
 

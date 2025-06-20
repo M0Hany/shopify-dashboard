@@ -42,6 +42,12 @@ export interface ShopifyOrder {
   };
   shipping_address: {
     phone: string;
+    address1: string;
+    address2?: string;
+    city: string;
+    province: string;
+    zip: string;
+    country: string;
   };
 }
 
@@ -125,6 +131,7 @@ export class ShopifyService {
     status?: string;
     created_at_min?: string;
     created_at_max?: string;
+    excluded_tags?: string;
   }): Promise<ShopifyOrder[]> {
     try {
       const allOrders: ShopifyOrder[] = [];
@@ -135,11 +142,11 @@ export class ShopifyService {
         const query: Record<string, string | number> = {
           limit: params.limit ? Math.min(250, params.limit - allOrders.length) : 250,
           status: 'any',
-          fields: 'id,name,email,phone,total_price,financial_status,fulfillment_status,tags,created_at,updated_at,line_items,customer,shipping_address,line_items.variant_title,note'
+          fields: 'id,name,email,phone,total_price,financial_status,fulfillment_status,tags,created_at,updated_at,line_items,customer,shipping_address,shipping_address.address1,shipping_address.address2,shipping_address.city,shipping_address.province,shipping_address.zip,shipping_address.country,line_items.variant_title,note'
         };
 
         // Map status to tag for filtering
-        if (params.status) {
+        if (params.status && params.status !== 'any') {
           const statusToTag: Record<string, string> = {
             'pending': 'customer_confirmed',
             'confirmed': 'customer_confirmed',
@@ -150,9 +157,28 @@ export class ShopifyService {
             'paid': 'paid'
           };
           
-          const tag = statusToTag[params.status];
+          const tag = statusToTag[params.status.trim()];
           if (tag) {
             query.tag = tag;
+          }
+        }
+
+        // Add excluded tags as a query filter
+        if (params.excluded_tags) {
+          const excludedTagsList = params.excluded_tags
+            .split(',')
+            .map(tag => tag.trim())
+            .filter(tag => tag); // Remove empty strings
+
+          logger.debug('Processing excluded tags:', {
+            original: params.excluded_tags,
+            processed: excludedTagsList
+          });
+
+          // Use Shopify's query syntax for tag filtering
+          if (excludedTagsList.length > 0) {
+            const tagFilter = excludedTagsList.map(tag => `NOT tag:${tag}`).join(' AND ');
+            query.query = tagFilter;
           }
         }
 
@@ -160,13 +186,15 @@ export class ShopifyService {
         if (params.created_at_max) query.created_at_max = params.created_at_max;
         if (pageInfo) query.page_info = pageInfo;
 
+        logger.debug('Fetching orders with query:', query);
+
         interface ShopifyOrderResponse {
           orders: ShopifyOrder[];
         }
 
         const response = await this.client.get({
           path: '/admin/api/2023-10/orders.json',
-          query,
+          query
         }) as RequestReturn & { 
           headers: Headers;
           body: ShopifyOrderResponse;

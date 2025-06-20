@@ -1,5 +1,10 @@
 # Mylerz API Integration Parameters
 
+## Endpoint
+```
+POST https://api.mylerz.net/api/package/SavePackageList
+```
+
 ## Order Information
 | Parameter | Source | Type | Description |
 |-----------|--------|------|-------------|
@@ -122,19 +127,11 @@ order.shipping_address = {
 }
 ```
 
-### Lookup Data
-The following parameters need to be retrieved from a separate API endpoint:
-```
-GET https://api.mylerz.net/api/loockup/GetAllPickup
-```
-
 | Parameter | Source | Type | Description |
 |-----------|--------|------|-------------|
-| CityId | Lookup API | string | City identifier (e.g., "1") |
-| NeighborhoodId | Lookup API | string | Neighborhood identifier (e.g., "41") |
-| SubZoneId | Lookup API | string | Sub-zone identifier (e.g., "46") |
-
-These IDs should be mapped based on the customer's address information and stored for use in the delivery form.
+| CityId | Shopify tag `mylerz_city_id:1` | string | City identifier (e.g., "1") |
+| NeighborhoodId | Shopify tag `mylerz_neighborhood_id:280` | string | Neighborhood identifier (e.g., "280") |
+| SubZoneId | Shopify tag `mylerz_subzone_id:282` | string | Sub-zone identifier (e.g., "282") |
 
 ## Phone Number Formatting
 When extracting the phone number from `order.customer.phone`, ensure proper formatting:

@@ -3,9 +3,11 @@ import multer from 'multer';
 import xlsx from 'xlsx';
 import { ShopifyService } from '../services/shopify';
 import { logger } from '../utils/logger';
+import { addLocationTags } from '../services/shopify';
+import { shopifyService } from '../services/shopify';
 
 const router = express.Router();
-const shopifyService = new ShopifyService();
+const shopifyServiceInstance = new ShopifyService();
 
 // Configure multer for file upload
 const upload = multer({ storage: multer.memoryStorage() });
@@ -13,7 +15,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Get all orders with optional filters
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const orders = await shopifyService.getOrders({
+    const orders = await shopifyServiceInstance.getOrders({
       limit: 250,
       status: req.query.status as string,
       created_at_min: req.query.created_at_min as string,
@@ -29,7 +31,7 @@ router.get('/', async (req: Request, res: Response) => {
 // Get a single order by ID
 router.get('/:id', async (req: Request, res: Response) => {
   try {
-    const order = await shopifyService.getOrder(Number(req.params.id));
+    const order = await shopifyServiceInstance.getOrder(Number(req.params.id));
     res.json(order);
   } catch (error) {
     logger.error('Error fetching order:', error);
@@ -40,7 +42,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 // Update order status
 router.put('/:id/status', async (req: Request, res: Response) => {
   try {
-    await shopifyService.updateOrderStatus(Number(req.params.id), req.body.status);
+    await shopifyServiceInstance.updateOrderStatus(Number(req.params.id), req.body.status);
     res.json({ success: true });
   } catch (error) {
     logger.error('Error updating order status:', error);
@@ -51,7 +53,7 @@ router.put('/:id/status', async (req: Request, res: Response) => {
 // Update order due date
 router.put('/:id/due-date', async (req: Request, res: Response) => {
   try {
-    await shopifyService.updateOrderDueDate(Number(req.params.id), req.body.custom_due_date);
+    await shopifyServiceInstance.updateOrderDueDate(Number(req.params.id), req.body.custom_due_date);
     res.json({ success: true });
   } catch (error) {
     logger.error('Error updating order due date:', error);
@@ -67,7 +69,7 @@ router.put('/:id/start-date', async (req: Request, res: Response) => {
       customStartDate: req.body.custom_start_date,
       body: req.body
     });
-    await shopifyService.updateOrderStartDate(Number(req.params.id), req.body.custom_start_date);
+    await shopifyServiceInstance.updateOrderStartDate(Number(req.params.id), req.body.custom_start_date);
     logger.info('Start date update successful');
     res.json({ success: true });
   } catch (error) {
@@ -79,7 +81,7 @@ router.put('/:id/start-date', async (req: Request, res: Response) => {
 // Update order note
 router.put('/:id/note', async (req: Request, res: Response) => {
   try {
-    await shopifyService.updateOrderNote(Number(req.params.id), req.body.note);
+    await shopifyServiceInstance.updateOrderNote(Number(req.params.id), req.body.note);
     res.json({ success: true });
   } catch (error) {
     logger.error('Error updating order note:', error);
@@ -90,7 +92,7 @@ router.put('/:id/note', async (req: Request, res: Response) => {
 // Update order priority
 router.put('/:id/priority', async (req: Request, res: Response) => {
   try {
-    await shopifyService.updateOrderPriority(Number(req.params.id), req.body.isPriority);
+    await shopifyServiceInstance.updateOrderPriority(Number(req.params.id), req.body.isPriority);
     res.json({ success: true });
   } catch (error) {
     logger.error('Error updating order priority:', error);
@@ -101,7 +103,7 @@ router.put('/:id/priority', async (req: Request, res: Response) => {
 // Fulfill an order
 router.post('/:id/fulfill', async (req: Request, res: Response) => {
   try {
-    await shopifyService.fulfillOrder(Number(req.params.id));
+    await shopifyServiceInstance.fulfillOrder(Number(req.params.id));
     res.json({ success: true });
   } catch (error: any) {
     logger.error('Error fulfilling order:', {
@@ -183,7 +185,7 @@ router.post('/upload-paid-orders', upload.single('file'), async (req: Request, r
         const customerPhone = row[7].toString().trim();
 
         // Find matching order
-        const matchingOrder = await shopifyService.findOrderByCustomerDetails(customerName, customerPhone);
+        const matchingOrder = await shopifyServiceInstance.findOrderByCustomerDetails(customerName, customerPhone);
         
         if (matchingOrder) {
           // Use current date for payment_date tag
@@ -191,8 +193,8 @@ router.post('/upload-paid-orders', upload.single('file'), async (req: Request, r
           
           try {
             // Update order with paid status and payment date
-            await shopifyService.updateOrderStatus(matchingOrder.id, 'paid');
-            await shopifyService.addOrderTag(matchingOrder.id, paymentDateTag);
+            await shopifyServiceInstance.updateOrderStatus(matchingOrder.id, 'paid');
+            await shopifyServiceInstance.addOrderTag(matchingOrder.id, paymentDateTag);
             
             results.updated++;
           } catch (updateError) {
@@ -224,6 +226,123 @@ router.post('/upload-paid-orders', upload.single('file'), async (req: Request, r
   } catch (error) {
     logger.error('Error processing Excel file:', error);
     res.status(500).json({ error: 'Failed to process Excel file' });
+  }
+});
+
+router.post('/bulk-add-address-tags', async (req, res) => {
+  try {
+    const { orders } = req.body;
+    
+    if (!Array.isArray(orders)) {
+      logger.error('Invalid request: orders is not an array');
+      return res.status(400).json({ error: 'Orders must be an array' });
+    }
+
+    logger.info(`Received request to add address tags to ${orders.length} orders`);
+
+    // Debug logging for each order
+    orders.forEach((order, index) => {
+      logger.info(`Order ${index + 1} data:`, {
+        id: order?.id,
+        name: order?.name,
+        city: order?.shipping_address?.city,
+        address: order?.shipping_address?.address1,
+        currentTags: order?.tags,
+        phone: order?.shipping_address?.phone
+      });
+    });
+
+    logger.info('Starting to process orders for address tags');
+    const results = await Promise.allSettled(
+      orders.map(order => {
+        logger.info(`Processing order ${order.id} (${order.name})`);
+        return addLocationTags(order.id.toString(), order.tags);
+      })
+    );
+
+    const summary = {
+      total: orders.length,
+      successful: results.filter(r => r.status === 'fulfilled').length,
+      failed: results.filter(r => r.status === 'rejected').length,
+      errors: results
+        .map((r, i) => {
+          if (r.status === 'rejected') {
+            const error = (r as PromiseRejectedResult).reason;
+            const orderInfo = orders[i];
+            const errorMessage = `Order ${orderInfo?.name || orderInfo?.id || 'unknown'}: ${error?.message || 'Unknown error'}`;
+            logger.error(`Failed to add address tags: ${errorMessage}`);
+            return errorMessage;
+          }
+          return null;
+        })
+        .filter(Boolean)
+    };
+
+    logger.info('Bulk address tags update completed', {
+      ...summary,
+      successfulOrders: orders
+        .filter((_, i) => results[i].status === 'fulfilled')
+        .map(o => o.name || o.id)
+    });
+
+    res.json(summary);
+  } catch (error) {
+    logger.error('Error in bulk address tags update:', error);
+    res.status(500).json({ error: 'Failed to update address tags' });
+  }
+});
+
+// Update order tags
+router.put('/:id/tags', async (req: Request, res: Response) => {
+  try {
+    const orderId = req.params.id;
+    const newTags = req.body.tags;
+
+    logger.info('Received tag update request:', {
+      orderId,
+      newTags,
+      body: req.body,
+      headers: req.headers
+    });
+
+    if (!Array.isArray(newTags)) {
+      logger.error('Invalid tags format:', { newTags });
+      return res.status(400).json({ error: 'Tags must be an array' });
+    }
+
+    await shopifyServiceInstance.updateOrderTags(orderId, newTags);
+    
+    logger.info('Tags update successful:', {
+      orderId,
+      newTags
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Error updating order tags:', {
+      error,
+      orderId: req.params.id,
+      body: req.body
+    });
+    res.status(500).json({ error: 'Failed to update order tags' });
+  }
+});
+
+// Add location tags
+router.post('/:orderId/location-tags', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { locationTags } = req.body;
+
+    if (!locationTags || !Array.isArray(locationTags)) {
+      res.status(400).json({ error: 'Location tags are required' });
+      return;
+    }
+
+    await addLocationTags(orderId, locationTags);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to add location tags' });
   }
 });
 

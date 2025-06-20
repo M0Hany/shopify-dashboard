@@ -10,8 +10,9 @@ import { useNavigate } from 'react-router-dom';
 import { Menu, Popover, Transition } from '@headlessui/react';
 import FileUpload from '../components/FileUpload';
 import MoneyTransferUpload from '../components/MoneyTransferUpload';
-import { getPackagesList } from '../services/shipping';
+import { getPackagesList, addBulkAddressTags } from '../services/shipping';
 import { format } from 'date-fns';
+import { toast } from 'react-hot-toast';
 
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
@@ -336,6 +337,7 @@ const Orders = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [showSort, setShowSort] = useState(false);
   const [shippingStatuses, setShippingStatuses] = useState<OrderShippingStatuses>({});
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -343,7 +345,7 @@ const Orders = () => {
     }
   }, [isAuthenticated, navigate]);
 
-  const { data: orders, isLoading, error, refetch } = useQuery<Order[]>({
+  const { data: orders, isLoading: ordersLoading, error, refetch } = useQuery<Order[]>({
     queryKey: ['orders'],
     queryFn: async (): Promise<Order[]> => {
       // First fetch orders
@@ -1065,6 +1067,123 @@ const Orders = () => {
     }
   }, [ordersState]);
 
+  // Helper function to check if an order has complete address tags
+  const hasCompleteAddressTags = (order: any) => {
+    const tags = Array.isArray(order.tags) ? order.tags.map((t: string) => t.trim()) : 
+                typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) :
+                [];
+    
+    // Helper function to get tag value
+    const getTagValue = (prefix: string): string | null => {
+      const tag = tags.find((tag: string) => tag.startsWith(prefix));
+      const value = tag ? tag.split(':')[1].trim() : null;
+      return value === "null" ? null : value;
+    };
+
+    const cityId = getTagValue('mylerz_city_id');
+    const neighborhoodId = getTagValue('mylerz_neighborhood_id');
+    const subZoneId = getTagValue('mylerz_subzone_id');
+
+    return cityId && neighborhoodId && subZoneId &&
+           cityId !== "null" && neighborhoodId !== "null" && subZoneId !== "null";
+  };
+
+  // Check if all selected orders have complete address tags
+  const allSelectedOrdersHaveCompleteTags = selectedOrders.length > 0 && 
+    selectedOrders.every(orderId => {
+      const order = orders?.find(o => o.id === orderId);
+      return order && hasCompleteAddressTags(order);
+    });
+
+  const createShipmentsMutation = useMutation({
+    mutationFn: async (orderIds: number[]) => {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/shipping/create-shipments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ orderIds }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to create shipments');
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      toast.success(`Successfully created ${data.successful} shipments`);
+      if (data.failed > 0) {
+        toast.error(`Failed to create ${data.failed} shipments`);
+      }
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      setSelectedOrders([]);
+    },
+    onError: (error: any) => {
+      toast.error(error.message || 'Failed to create shipments');
+      console.error('Error creating shipments:', error);
+    }
+  });
+
+  const handleCreateShipments = async () => {
+    if (!selectedOrders.length) {
+      toast.error('Please select at least one order');
+      return;
+    }
+
+    // Validate that all selected orders have the required location tags
+    const ordersWithMissingTags = orders?.filter(order => {
+      if (!selectedOrders.includes(order.id)) return false;
+
+      const tags = Array.isArray(order.tags) ? order.tags :
+                  typeof order.tags === 'string' ? order.tags.split(',').map(t => t.trim()) :
+                  [];
+
+      const hasAllLocationTags = tags.some(tag => tag.startsWith('mylerz_city_id:')) &&
+                                tags.some(tag => tag.startsWith('mylerz_neighborhood_id:')) &&
+                                tags.some(tag => tag.startsWith('mylerz_subzone_id:'));
+
+      return !hasAllLocationTags;
+    });
+
+    if (ordersWithMissingTags && ordersWithMissingTags.length > 0) {
+      toast.error('Some orders are missing location tags. Please add address tags first.');
+      return;
+    }
+
+    try {
+      await createShipmentsMutation.mutateAsync(selectedOrders);
+    } catch (error) {
+      // Error handling is done in the mutation
+    }
+  };
+
+  const updateTagsMutation = useMutation({
+    mutationFn: async ({ orderId, newTags }: { orderId: number; newTags: string[] }) => {
+      const response = await fetch(`/api/orders/${orderId}/tags`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ tags: newTags }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to update tags');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    },
+    onError: (error) => {
+      console.error('Error updating tags:', error);
+    }
+  });
+
+  const handleUpdateTags = (orderId: number, newTags: string[]) => {
+    updateTagsMutation.mutate({ orderId, newTags });
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -1205,6 +1324,25 @@ const Orders = () => {
               Extract Delivery Form ({selectedOrders.length})
             </button>
 
+            {/* Add Shipments button */}
+            <button
+              onClick={handleCreateShipments}
+              disabled={createShipmentsMutation.isPending || !allSelectedOrdersHaveCompleteTags}
+              className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 disabled:bg-purple-400 disabled:cursor-not-allowed"
+            >
+              {createShipmentsMutation.isPending ? (
+                <>
+                  <svg className="animate-spin h-4 w-4 mr-2" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Creating Shipments...
+                </>
+              ) : (
+                'Add Shipments'
+              )}
+            </button>
+
             <Menu as="div" className="relative inline-block text-left">
               {({ open }) => (
                 <>
@@ -1294,6 +1432,7 @@ const Orders = () => {
               onTogglePriority={handleTogglePriority}
               onUpdateStatus={handleUpdateStatus}
               onDeleteOrder={handleDeleteOrder}
+              onUpdateTags={handleUpdateTags}
               shippingStatuses={shippingStatuses[order.id]}
             />
           ))}
