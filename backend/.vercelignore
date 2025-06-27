@@ -1,0 +1,12 @@
+.wwebjs_auth/
+node_modules/
+.vercel/
+.husky/
+.git/
+*.log
+.eslintrc.json
+.prettierrc
+Dockerfile
+docker-compose.yml
+README.md
+BACKEND_README.md 
