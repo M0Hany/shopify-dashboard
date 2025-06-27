@@ -15,6 +15,15 @@ ENV NODE_ENV=production
 # Build the project
 RUN npm run build
 
+# Create a non-root user
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Set correct ownership
+RUN chown -R appuser:appgroup /app
+
+# Switch to non-root user
+USER appuser
+
 # Expose port
 EXPOSE 5173
 
