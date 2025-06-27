@@ -7,9 +7,13 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    host: true,
+    watch: {
+      usePolling: true
+    },
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'https://localhost:3000',
         changeOrigin: true,
         secure: false
       }
@@ -18,11 +22,12 @@ export default defineConfig({
   preview: {
     port: 5173,
     strictPort: true,
-    host: true
+    host: true,
+    allowedHosts: ['ocdcrochet.store', 'www.ocdcrochet.store']
   },
   define: { 
     'process.env.VITE_API_URL': JSON.stringify(process.env.NODE_ENV === 'production' 
-      ? 'http://165.22.25.137:3000'
-      : 'http://localhost:3000')
+      ? 'https://ocdcrochet.store'
+      : 'https://localhost:3000')
   } 
 }) 

@@ -1,45 +1,22 @@
-# Build stage
-FROM node:18-alpine as builder
-
-WORKDIR /app
-
-# Install dependencies
-COPY package*.json ./
-RUN npm install
-
-# Copy source code and environment files
-COPY . .
-COPY .env.docker .env.production
-
-# Build the application
-RUN npm run build
-
-# Production stage
 FROM node:18-alpine
 
 WORKDIR /app
 
-# Create a non-root user first
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-
-# Copy package files and install dependencies including Vite
+# Install dependencies first (better caching)
 COPY package*.json ./
-COPY vite.config.ts ./
 RUN npm install
 
-# Copy the build from builder stage
-COPY --from=builder /app/dist ./dist
+# Copy source code
+COPY . .
 
-# Set correct ownership and permissions
-RUN chown -R appuser:appgroup /app && \
-    chmod -R 755 /app
+# Set environment to production
+ENV NODE_ENV=production
 
-# Switch to non-root user
-USER appuser
+# Build the project
+RUN npm run build
 
 # Expose port
 EXPOSE 5173
 
-# Start the application
-ENV NODE_ENV=production
-CMD ["npx", "vite", "preview", "--port", "5173", "--host"] 
+# Start the preview server
+CMD ["npm", "run", "preview", "--", "--host", "--port", "5173"] 

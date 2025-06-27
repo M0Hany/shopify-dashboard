@@ -1,12 +1,8 @@
 import React, { useState } from 'react';
+import { api } from '../config/api';
 
 interface FileUploadProps {
-  onUploadComplete: (results: {
-    processed: number;
-    updated: number;
-    notFound: number;
-    errors: number;
-  }) => void;
+  onUploadComplete: (results: any) => void;
 }
 
 const FileUpload: React.FC<FileUploadProps> = ({ onUploadComplete }) => {
@@ -31,21 +27,14 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadComplete }) => {
     formData.append('file', file);
 
     try {
-      console.log('Sending request to:', `${import.meta.env.VITE_API_URL}/api/orders/upload-paid-orders`);
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/upload-paid-orders`, {
-        method: 'POST',
-        body: formData,
+      const response = await api.post('/api/orders/upload-paid-orders', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
       });
 
-      console.log('Response status:', response.status);
-      const data = await response.json();
-      console.log('Response data:', data);
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to upload file');
-      }
-
-      onUploadComplete(data.results);
+      console.log('Response data:', response.data);
+      onUploadComplete(response.data.results);
     } catch (err) {
       console.error('=== UPLOAD ERROR ===', err);
       setError(err instanceof Error ? err.message : 'An error occurred while uploading the file');
