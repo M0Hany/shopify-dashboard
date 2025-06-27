@@ -42,8 +42,8 @@ module.exports = {
       max_memory_restart: '1G',
       env_production: {
         NODE_ENV: 'production',
-        VITE_API_BASE_URL: 'http://165.22.25.137:3000/api',
-        VITE_API_URL: 'http://165.22.25.137:3000',
+        VITE_API_BASE_URL: 'https://ocdcrochet.store/api',
+        VITE_API_URL: 'https://ocdcrochet.store',
         VITE_SHOPIFY_STORE_URL: 'your-store-url',
         VITE_SHOPIFY_API_KEY: 'your-api-key'
       }
