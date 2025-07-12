@@ -53,9 +53,6 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Serve static files from the frontend build directory
-app.use(express.static(path.join(__dirname, '../../frontend/dist')));
-
 // Request logging
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.path}`);
@@ -78,9 +75,9 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy' });
 });
 
-// Serve index.html for all other routes (client-side routing)
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../../frontend/dist/index.html'));
+// API route not found
+app.use('/api/*', (req, res) => {
+  res.status(404).json({ error: 'API endpoint not found' });
 });
 
 // Error handling
