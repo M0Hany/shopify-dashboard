@@ -248,12 +248,13 @@ export class WhatsAppService {
     customerName: string
   ): Promise<void> {
     await this.sendTemplateMessage(phone, 'order_confirmed', [
-      { type: 'text', text: customerName }
+      { type: 'text', text: customerName },
+      { type: 'text', text: orderNumber }
     ]);
   }
 
   // Order Ready Notification
-  async sendOrderReady(phone: string): Promise<void> {
+  async sendOrderReady(phone: string, orderNumber: string): Promise<void> {
     try {
       const formattedPhone = this.formatPhoneNumber(phone);
       
@@ -268,11 +269,14 @@ export class WhatsAppService {
       }
 
       logger.info('Sending WhatsApp order_ready message', {
-        phone: formattedPhone
+        phone: formattedPhone,
+        orderNumber
       });
 
-      // Use the pre-approved template instead of interactive message
-      await this.sendTemplateMessage(formattedPhone, 'order_ready', []);
+      // Use the pre-approved template with order number parameter
+      await this.sendTemplateMessage(formattedPhone, 'order_ready', [
+        { type: 'text', text: orderNumber }
+      ]);
 
       logger.info('WhatsApp order_ready message sent successfully');
     } catch (error) {
@@ -288,6 +292,7 @@ export class WhatsAppService {
       logger.error('Error sending WhatsApp order_ready message:', {
         error,
         phone,
+        orderNumber,
         timestamp: new Date().toISOString()
       });
       throw new Error('Failed to send WhatsApp order_ready message');

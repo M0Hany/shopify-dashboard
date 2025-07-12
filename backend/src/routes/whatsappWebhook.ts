@@ -29,13 +29,17 @@ router.post('/test-message', async (req, res) => {
 // Send order ready notification
 router.post('/order-ready', async (req, res) => {
   try {
-    const { phone } = req.body;
+    const { phone, orderNumber } = req.body;
     
     if (!phone) {
       return res.status(400).json({ error: 'Phone number is required' });
     }
 
-    await whatsappService.sendOrderReady(phone);
+    if (!orderNumber) {
+      return res.status(400).json({ error: 'Order number is required' });
+    }
+
+    await whatsappService.sendOrderReady(phone, orderNumber);
 
     res.json({ success: true, message: 'Order ready notification sent successfully' });
   } catch (error) {
@@ -140,14 +144,18 @@ router.post('/webhook', express.json(), async (req, res) => {
                 // Get the customer's phone number
                 const customerPhone = message.from;
                 
-                logger.info('Starting order search for customer:', {
+                logger.info('Processing customer confirmation:', {
                   phone: customerPhone,
                   messageId: message.id,
                   timestamp: new Date().toISOString()
                 });
 
                 try {
-                  // Find the order by phone number
+                  // Try to extract order number from message context
+                  // This would be available if the customer is responding to a template message
+                  // that includes the order number
+                  
+                  // For now, we'll use the phone number approach but log for debugging
                   const orders = await shopifyService.getOrdersByPhone(customerPhone);
                   
                   logger.info('Found orders for customer:', {
@@ -155,6 +163,7 @@ router.post('/webhook', express.json(), async (req, res) => {
                     orderCount: orders.length,
                     orders: orders.map(order => ({
                       id: order.id,
+                      name: order.name,
                       tags: order.tags,
                       shippingPhone: order.shipping_address?.phone
                     }))
@@ -182,6 +191,7 @@ router.post('/webhook', express.json(), async (req, res) => {
                     
                     logger.info('Checking order tags:', {
                       orderId: order.id,
+                      orderName: order.name,
                       tags,
                       hasReadyTag,
                       hasConfirmedTag,
@@ -194,6 +204,7 @@ router.post('/webhook', express.json(), async (req, res) => {
                   if (targetOrder) {
                     logger.info('Found target order to update:', {
                       orderId: targetOrder.id,
+                      orderName: targetOrder.name,
                       currentTags: targetOrder.tags,
                       timestamp: new Date().toISOString()
                     });
@@ -209,6 +220,7 @@ router.post('/webhook', express.json(), async (req, res) => {
                     
                     logger.info('Updating order tags:', {
                       orderId: targetOrder.id,
+                      orderName: targetOrder.name,
                       oldTags: currentTags,
                       newTags,
                       timestamp: new Date().toISOString()
@@ -218,6 +230,7 @@ router.post('/webhook', express.json(), async (req, res) => {
 
                     logger.info('Successfully updated order tags:', {
                       orderId: targetOrder.id,
+                      orderName: targetOrder.name,
                       phone: customerPhone,
                       newTags,
                       timestamp: new Date().toISOString()

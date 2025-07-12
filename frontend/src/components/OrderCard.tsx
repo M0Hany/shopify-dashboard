@@ -606,7 +606,10 @@ Your order is being picked up by the shipping company and should be arriving to 
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ phone: order.customer.phone }),
+        body: JSON.stringify({ 
+          phone: order.customer.phone,
+          orderNumber: order.name // Include order number (e.g., "#1023")
+        }),
       });
 
       if (!response.ok) {

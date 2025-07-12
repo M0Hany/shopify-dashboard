@@ -592,6 +592,68 @@ export class ShopifyService {
     }
   }
 
+  async findOrderByBarcode(barcode: string): Promise<ShopifyOrder | null> {
+    try {
+      // Get all orders
+      const response = await this.client.get({
+        path: 'orders',
+        query: {
+          status: 'any',
+          limit: 250
+        }
+      });
+
+      const orders = response.body.orders;
+
+      // Find matching order by barcode in tags
+      const matchingOrder = orders.find((order: ShopifyOrder) => {
+        const tags = Array.isArray(order.tags) ? 
+          order.tags : 
+          typeof order.tags === 'string' ? 
+            order.tags.split(',').map(t => t.trim()) : 
+            [];
+        
+        const barcodeTag = tags.find(tag => tag.startsWith('shipping_barcode:'));
+        if (!barcodeTag) {
+          return false;
+        }
+
+        const orderBarcode = barcodeTag.split(':')[1]?.trim();
+        return orderBarcode === barcode.trim();
+      });
+
+      return matchingOrder || null;
+    } catch (error) {
+      console.error('Error finding order by barcode:', error);
+      throw error;
+    }
+  }
+
+  async findOrderByOrderNumber(orderNumber: string): Promise<ShopifyOrder | null> {
+    try {
+      // Get all orders
+      const response = await this.client.get({
+        path: 'orders',
+        query: {
+          status: 'any',
+          limit: 250
+        }
+      });
+
+      const orders = response.body.orders;
+
+      // Find matching order by order number (name field)
+      const matchingOrder = orders.find((order: ShopifyOrder) => {
+        return order.name === orderNumber;
+      });
+
+      return matchingOrder || null;
+    } catch (error) {
+      console.error('Error finding order by order number:', error);
+      throw error;
+    }
+  }
+
   async findOrderByCustomerDetails(customerName: string, customerPhone: string): Promise<ShopifyOrder | null> {
     try {
       // Get all orders

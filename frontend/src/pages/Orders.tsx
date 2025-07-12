@@ -876,24 +876,27 @@ const Orders = () => {
     const orderStatuses: OrderShippingStatuses = {};
 
     orders.forEach(order => {
-      // Format phone number
-      let formattedPhone = order.customer.phone.replace(/\D/g, '');
-      if (formattedPhone.startsWith('20')) {
-        formattedPhone = formattedPhone.substring(2);
-      }
-      if (!formattedPhone.startsWith('0')) {
-        formattedPhone = '0' + formattedPhone;
+      // Get shipping barcode from order tags
+      const tags = Array.isArray(order.tags) ? 
+        order.tags : 
+        typeof order.tags === 'string' ? 
+          order.tags.split(',').map(t => t.trim()) : 
+          [];
+      
+      const barcodeTag = tags.find(tag => tag.startsWith('shipping_barcode:'));
+      if (!barcodeTag) {
+        return; // Skip orders without shipping barcode
       }
 
-      // Find all matching shipping statuses
-      const matchingStatuses = allShippingOrders.filter(shipping => {
-        const shippingPhone = shipping.PhoneNo?.replace(/\D/g, '') || '';
-        const normalizedShippingPhone = shippingPhone.startsWith('0') ? 
-          shippingPhone : `0${shippingPhone}`;
-        
-        return normalizedShippingPhone === formattedPhone &&
-          shipping.CustomerName?.toLowerCase().includes(order.customer.first_name.toLowerCase());
-      });
+      const orderBarcode = barcodeTag.split(':')[1]?.trim();
+      if (!orderBarcode) {
+        return; // Skip if barcode is empty
+      }
+
+      // Find matching shipping status by barcode
+      const matchingStatuses = allShippingOrders.filter(shipping => 
+        shipping.Barcode?.trim() === orderBarcode.trim()
+      );
 
       if (matchingStatuses.length > 0) {
         orderStatuses[order.id] = matchingStatuses.map(status => ({
@@ -903,12 +906,6 @@ const Orders = () => {
         }));
 
         // Check if any matching status is "Delivered" or "Confirm Delivered" and order is currently shipped
-        const tags = Array.isArray(order.tags) ? 
-          order.tags : 
-          typeof order.tags === 'string' ? 
-            order.tags.split(',').map(t => t.trim()) : 
-            [];
-
         const deliveryStatuses = ["Delivered", "Confirm Delivered"];
         const hasDeliveredStatus = matchingStatuses.some(status => 
           deliveryStatuses.includes(status.PackageENStatus)

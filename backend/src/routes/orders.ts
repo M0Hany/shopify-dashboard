@@ -152,13 +152,13 @@ router.post('/upload-paid-orders', upload.single('file'), async (req: Request, r
         break;
       }
 
-      // Skip empty rows or rows without customer name/phone
+      // Skip empty rows or rows without barcode
       if (!row || !row.length) {
         continue;
       }
 
-      // Validate customer name and phone (columns G and H, indices 6 and 7)
-      if (!row[6] || !row[7]) {
+      // Validate barcode (column A, index 0)
+      if (!row[0]) {
         continue;
       }
 
@@ -184,12 +184,21 @@ router.post('/upload-paid-orders', upload.single('file'), async (req: Request, r
     // Process each valid row
     for (const row of validRows) {
       try {
-        // Get customer name from column G (index 6) and phone from column H (index 7)
-        const customerName = row[6].toString().trim();
-        const customerPhone = row[7].toString().trim();
+        // Get barcode from column A (index 0)
+        const barcode = row[0]?.toString().trim();
+        
+        if (!barcode) {
+          results.errors++;
+          results.failedTransfers.push({
+            customerName: 'N/A',
+            customerPhone: 'N/A',
+            reason: 'No barcode found in column A'
+          });
+          continue;
+        }
 
-        // Find matching order
-        const matchingOrder = await shopifyServiceInstance.findOrderByCustomerDetails(customerName, customerPhone);
+        // Find matching order by barcode
+        const matchingOrder = await shopifyServiceInstance.findOrderByBarcode(barcode);
         
         if (matchingOrder) {
           // Use current date for payment_date tag
@@ -204,8 +213,8 @@ router.post('/upload-paid-orders', upload.single('file'), async (req: Request, r
           } catch (updateError) {
             results.errors++;
             results.failedTransfers.push({
-              customerName,
-              customerPhone,
+              customerName: matchingOrder.customer?.first_name || 'N/A',
+              customerPhone: matchingOrder.customer?.phone || 'N/A',
               reason: 'Failed to update order status'
             });
             logger.error('Error updating order status:', updateError);
@@ -213,9 +222,9 @@ router.post('/upload-paid-orders', upload.single('file'), async (req: Request, r
         } else {
           results.notFound++;
           results.failedTransfers.push({
-            customerName,
-            customerPhone,
-            reason: 'Order not found'
+            customerName: 'N/A',
+            customerPhone: 'N/A',
+            reason: `Order not found for barcode: ${barcode}`
           });
         }
         

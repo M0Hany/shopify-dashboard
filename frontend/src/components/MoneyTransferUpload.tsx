@@ -112,6 +112,13 @@ const MoneyTransferUpload: React.FC<MoneyTransferUploadProps> = ({ onUploadCompl
                 <XMarkIcon className="w-5 h-5 text-gray-400" />
               </button>
             </div>
+            
+            <div className="mb-4 p-3 bg-blue-50 rounded-md">
+              <p className="text-sm text-blue-700">
+                <strong>Note:</strong> This upload now matches orders using shipping barcodes from column A. 
+                Make sure your Excel file has barcodes in the first column starting from row 4.
+              </p>
+            </div>
 
             <div
               {...getRootProps()}
@@ -156,8 +163,8 @@ const MoneyTransferUpload: React.FC<MoneyTransferUploadProps> = ({ onUploadCompl
                       <div className="max-h-40 overflow-y-auto">
                         {uploadResults.failedTransfers.map((transfer, index) => (
                           <div key={index} className="p-2 bg-white rounded border border-red-100 mb-2">
-                            <p className="font-medium">{transfer.customerName}</p>
-                            <p className="text-gray-600">{transfer.customerPhone}</p>
+                            <p className="font-medium">{transfer.customerName !== 'N/A' ? transfer.customerName : 'Unknown Customer'}</p>
+                            <p className="text-gray-600">{transfer.customerPhone !== 'N/A' ? transfer.customerPhone : 'No Phone'}</p>
                             <p className="text-red-600 text-sm">{transfer.reason}</p>
                           </div>
                         ))}
