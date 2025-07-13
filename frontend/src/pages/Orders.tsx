@@ -696,7 +696,7 @@ const Orders = () => {
           : [];
         
       // Remove existing status tags
-        const statusTags = ['customer_confirmed', 'ready to ship', 'shipped', 'fulfilled'];
+        const statusTags = ['customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
       const filteredTags = tags.filter((t: string) => !statusTags.includes(t));
         
         // Map frontend status values to actual tag values
@@ -770,7 +770,7 @@ const Orders = () => {
     // Define status tags with proper trimming
     const statusTags = {
       shipped: 'shipped',
-      readyToShip: 'ready to ship',
+      readyToShip: 'ready_to_ship',
       fulfilled: 'fulfilled',
       cancelled: 'cancelled',
       customerConfirmed: 'customer_confirmed',
@@ -823,7 +823,7 @@ const Orders = () => {
       paid: 'paid',
       fulfilled: 'fulfilled',
       shipped: 'shipped',
-      readyToShip: 'ready to ship',
+      readyToShip: 'ready_to_ship',
       customerConfirmed: 'customer_confirmed'
     };
     
@@ -1427,7 +1427,7 @@ ___`;
                               className={`${
                                 active ? 'bg-gray-100' : ''
                               } block w-full text-left px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 font-medium`}
-                              onClick={() => handleBulkStatusUpdate('ready to ship')}
+                              onClick={() => handleBulkStatusUpdate('ready_to_ship')}
                             >
                               Mark Ready to Ship
                             </button>

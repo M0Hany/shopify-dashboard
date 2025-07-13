@@ -112,7 +112,7 @@ const MoneyTransferUpload: React.FC<MoneyTransferUploadProps> = ({ onUploadCompl
                 <XMarkIcon className="w-5 h-5 text-gray-400" />
               </button>
             </div>
-            
+
             <div className="mb-4 p-3 bg-blue-50 rounded-md">
               <p className="text-sm text-blue-700">
                 <strong>Note:</strong> This upload now matches orders using shipping barcodes from column A. 

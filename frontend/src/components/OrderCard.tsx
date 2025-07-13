@@ -193,7 +193,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
       paid: 'paid',
       fulfilled: 'fulfilled',
       shipped: 'shipped',
-      readyToShip: 'ready to ship',
+              readyToShip: 'ready_to_ship',
       customerConfirmed: 'customer_confirmed'
     } as const;
     
@@ -206,7 +206,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
     } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.shipped)) {
       return 'shipped';
     } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.readyToShip)) {
-      return 'ready to ship';
+      return 'ready_to_ship';
     } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.customerConfirmed)) {
       return 'confirmed';
     } else {
@@ -226,7 +226,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
         return 'bg-yellow-100 text-yellow-800';
       case 'confirmed':
         return 'bg-green-600 text-white';
-      case 'ready to ship':
+      case 'ready_to_ship':
         return 'bg-blue-600 text-white font-medium';
       case 'shipped':
         return 'bg-purple-600 text-white';
@@ -851,10 +851,10 @@ Your order is being picked up by the shipping company and should be arriving to 
                         <Menu.Item>
                           {({ active }) => (
                             <button
-                              className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('ready to ship')}`}
-                              onClick={() => handleStatusChange('ready to ship')}
-                            >
-                              Ready to Ship
+                                      className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('ready_to_ship')}`}
+        onClick={() => handleStatusChange('ready_to_ship')}
+      >
+        Ready to Ship
                             </button>
                           )}
                         </Menu.Item>

@@ -72,7 +72,7 @@ export class WhatsAppService {
     phone: string,
     template: string,
     parameters: { type: string; text: string }[] = []
-  ): Promise<void> {
+  ): Promise<string | null> {
     try {
       const originalPhone = phone;
       const formattedPhone = this.formatPhoneNumber(phone);
@@ -138,17 +138,35 @@ export class WhatsAppService {
       logger.info(`WhatsApp ${template} message sent successfully`, {
         response: response.data
       });
+      return messageId;
     } catch (error) {
       // Log the full error response for debugging
       if (error instanceof AxiosError && error.response?.data) {
+        console.log('=== WHATSAPP API ERROR DETAILS ===');
+        console.log('Status:', error.response.status);
+        console.log('Status Text:', error.response.statusText);
+        console.log('Error Data:', JSON.stringify(error.response.data, null, 2));
+        console.log('URL:', error.config?.url);
+        console.log('Method:', error.config?.method);
+        console.log('==================================');
+        
         logger.error('WhatsApp API Error Response:', {
           status: error.response.status,
-          data: error.response.data
+          statusText: error.response.statusText,
+          data: error.response.data,
+          url: error.config?.url,
+          method: error.config?.method,
+          headers: error.config?.headers
         });
+      } else {
+        console.log('=== NON-AXIOS ERROR ===');
+        console.log('Error:', error);
+        console.log('Error type:', typeof error);
+        console.log('=======================');
       }
       
       logger.error(`Error sending WhatsApp ${template} message:`, {
-        error,
+        error: error instanceof Error ? error.message : error,
         phone,
         template,
         parameters
@@ -254,7 +272,7 @@ export class WhatsAppService {
   }
 
   // Order Ready Notification
-  async sendOrderReady(phone: string, orderNumber: string): Promise<void> {
+  async sendOrderReady(phone: string, orderNumber: string): Promise<string | null> {
     try {
       const formattedPhone = this.formatPhoneNumber(phone);
       
@@ -274,11 +292,12 @@ export class WhatsAppService {
       });
 
       // Use the pre-approved template with order number parameter
-      await this.sendTemplateMessage(formattedPhone, 'order_ready', [
+      const messageId = await this.sendTemplateMessage(formattedPhone, 'order_ready', [
         { type: 'text', text: orderNumber }
       ]);
 
       logger.info('WhatsApp order_ready message sent successfully');
+      return messageId;
     } catch (error) {
       // Log the full error response for debugging
       if (error instanceof AxiosError && error.response?.data) {
@@ -297,5 +316,11 @@ export class WhatsAppService {
       });
       throw new Error('Failed to send WhatsApp order_ready message');
     }
+  }
+
+  // Order Received Notification
+  async sendOrderReceived(phone: string, orderNumber: string, customerName: string): Promise<void> {
+    // The order_received template has no variables, so we don't pass any parameters
+    await this.sendTemplateMessage(phone, 'order_received', []);
   }
 } 

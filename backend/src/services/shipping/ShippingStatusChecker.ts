@@ -160,7 +160,7 @@ export class ShippingStatusChecker {
           typeof order.tags === 'string' ? 
             order.tags.split(',').map(t => t.trim()) : 
             [];
-        return tags.includes('ready to ship');
+        return tags.includes('ready_to_ship');
       });
 
       logger.info(`Found ${readyToShipOrders.length} ready to ship orders`);
@@ -219,7 +219,7 @@ export class ShippingStatusChecker {
                 shippingStatus.PackageENStatus !== 'Waiting for pickup') {
               // Remove ready to ship tag and add shipped tag
               const newTags = tags.filter(tag => 
-                tag !== 'ready to ship' && !tag.startsWith('shipping_date:')
+                tag !== 'ready_to_ship' && !tag.startsWith('shipping_date:')
               );
               
               // Add shipped tag

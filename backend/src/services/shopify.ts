@@ -150,7 +150,7 @@ export class ShopifyService {
           const statusToTag: Record<string, string> = {
             'pending': 'customer_confirmed',
             'confirmed': 'customer_confirmed',
-            'ready-to-ship': 'ready to ship',
+            'ready-to-ship': 'ready_to_ship',
             'shipped': 'shipped',
             'fulfilled': 'fulfilled',
             'cancelled': 'cancelled',
@@ -289,7 +289,7 @@ export class ShopifyService {
           : [];
       
       // Filter out existing status tags and shipping date tag
-      const statusTags = ['customer_confirmed', 'ready to ship', 'shipped', 'fulfilled', 'cancelled'].map(tag => tag.trim());
+      const statusTags = ['customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'cancelled'].map(tag => tag.trim());
       const filteredTags = existingTags.filter((tag: string) => 
         !statusTags.includes(tag.trim()) &&
         !tag.startsWith('shipping_date:')
@@ -523,7 +523,7 @@ export class ShopifyService {
           : [];
       
       // Remove all status-related tags
-      const statusTags = ['customer_confirmed', 'ready to ship', 'shipped', 'express', 'overdue'];
+      const statusTags = ['customer_confirmed', 'ready_to_ship', 'shipped', 'express', 'overdue'];
       const filteredTags = existingTags.filter((tag: string) => !statusTags.includes(tag.trim()));
       
       // Update the order with the filtered tags
