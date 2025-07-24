@@ -47,4 +47,51 @@ export type Database = {
       lastSettlement?: string;
     };
   };
+  whatsapp_messages: {
+    Row: {
+      id: string;
+      message_id: string;
+      phone: string;
+      from: string;
+      to: string;
+      type: 'text' | 'template' | 'button' | 'image' | 'document' | 'audio' | 'video';
+      text?: { body: string };
+      timestamp: string;
+      status: 'sent' | 'delivered' | 'read' | 'failed';
+      direction: 'inbound' | 'outbound';
+      order_number?: string;
+      created_at: string;
+      updated_at: string;
+    };
+    Insert: {
+      id?: string;
+      message_id: string;
+      phone: string;
+      from: string;
+      to: string;
+      type: 'text' | 'template' | 'button' | 'image' | 'document' | 'audio' | 'video';
+      text?: { body: string };
+      timestamp: string;
+      status?: 'sent' | 'delivered' | 'read' | 'failed';
+      direction: 'inbound' | 'outbound';
+      order_number?: string;
+      created_at?: string;
+      updated_at?: string;
+    };
+    Update: {
+      id?: string;
+      message_id?: string;
+      phone?: string;
+      from?: string;
+      to?: string;
+      type?: 'text' | 'template' | 'button' | 'image' | 'document' | 'audio' | 'video';
+      text?: { body: string };
+      timestamp?: string;
+      status?: 'sent' | 'delivered' | 'read' | 'failed';
+      direction?: 'inbound' | 'outbound';
+      order_number?: string;
+      created_at?: string;
+      updated_at?: string;
+    };
+  };
 }; 

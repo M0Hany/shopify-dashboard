@@ -19,6 +19,13 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Get all orders with optional filters
 router.get('/', async (req: Request, res: Response) => {
   try {
+    // Add caching headers for orders endpoint
+    res.set({
+      'Cache-Control': 'public, max-age=120, s-maxage=120', // Cache for 2 minutes
+      'ETag': `orders-${Date.now()}`,
+      'Last-Modified': new Date().toUTCString()
+    });
+
     const orders = await shopifyServiceInstance.getOrders({
       limit: 250,
       status: req.query.status as string,

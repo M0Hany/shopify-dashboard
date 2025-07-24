@@ -1,6 +1,7 @@
 import axios, { AxiosError } from 'axios';
 import { logger } from '../utils/logger';
 import { WhatsAppMonitor } from './monitoring/WhatsAppMonitor';
+import { MessageService } from './messageService';
 
 export class WhatsAppService {
   private apiUrl: string;
@@ -71,7 +72,8 @@ export class WhatsAppService {
   private async sendTemplateMessage(
     phone: string,
     template: string,
-    parameters: { type: string; text: string }[] = []
+    parameters: { type: string; text: string }[] = [],
+    orderNumber?: string
   ): Promise<string | null> {
     try {
       const originalPhone = phone;
@@ -133,6 +135,19 @@ export class WhatsAppService {
       const messageId = response.data?.messages?.[0]?.id;
       if (messageId) {
         WhatsAppMonitor.updateMessageStatus(messageId, 'sent');
+        
+        // Store message in database
+        await MessageService.storeMessage({
+          message_id: messageId,
+          phone: formattedPhone,
+          from: this.phoneNumberId,
+          to: formattedPhone,
+          type: 'template',
+          text: { body: JSON.stringify({ template, parameters }) },
+          timestamp: new Date(),
+          direction: 'outbound',
+          order_number: orderNumber
+        });
       }
 
       logger.info(`WhatsApp ${template} message sent successfully`, {
@@ -186,7 +201,7 @@ export class WhatsAppService {
       { type: 'text', text: customerName },
       { type: 'text', text: orderNumber },
       { type: 'text', text: leadTime }
-    ]);
+    ], orderNumber);
   }
 
   // Production Confirmation
@@ -198,7 +213,7 @@ export class WhatsAppService {
     await this.sendTemplateMessage(phone, 'production_confirmed', [
       { type: 'text', text: orderNumber },
       { type: 'text', text: estimatedCompletion }
-    ]);
+    ], orderNumber);
   }
 
   // Ready to Ship - Delivery Scheduling
@@ -210,7 +225,7 @@ export class WhatsAppService {
     await this.sendTemplateMessage(phone, 'delivery_scheduling', [
       { type: 'text', text: orderNumber },
       { type: 'text', text: availableSlots }
-    ]);
+    ], orderNumber);
   }
 
   // Shipped - Pickup Notification
@@ -222,7 +237,7 @@ export class WhatsAppService {
     await this.sendTemplateMessage(phone, 'pickup_notification', [
       { type: 'text', text: orderNumber },
       { type: 'text', text: trackingNumber }
-    ]);
+    ], orderNumber);
   }
 
   // Fulfilled - Delivery Confirmation
@@ -234,7 +249,7 @@ export class WhatsAppService {
     await this.sendTemplateMessage(phone, 'delivery_confirmation', [
       { type: 'text', text: customerName },
       { type: 'text', text: orderNumber }
-    ]);
+    ], orderNumber);
   }
 
   // Cancelled
@@ -246,7 +261,7 @@ export class WhatsAppService {
     await this.sendTemplateMessage(phone, 'order_cancelled', [
       { type: 'text', text: orderNumber },
       { type: 'text', text: reason }
-    ]);
+    ], orderNumber);
   }
 
   // Test message for development
@@ -268,7 +283,7 @@ export class WhatsAppService {
     await this.sendTemplateMessage(phone, 'order_confirmed', [
       { type: 'text', text: customerName },
       { type: 'text', text: orderNumber }
-    ]);
+    ], orderNumber);
   }
 
   // Order Ready Notification
@@ -294,7 +309,7 @@ export class WhatsAppService {
       // Use the pre-approved template with order number parameter
       const messageId = await this.sendTemplateMessage(formattedPhone, 'order_ready', [
         { type: 'text', text: orderNumber }
-      ]);
+      ], orderNumber);
 
       logger.info('WhatsApp order_ready message sent successfully');
       return messageId;
@@ -321,6 +336,135 @@ export class WhatsAppService {
   // Order Received Notification
   async sendOrderReceived(phone: string, orderNumber: string, customerName: string): Promise<void> {
     // The order_received template has no variables, so we don't pass any parameters
-    await this.sendTemplateMessage(phone, 'order_received', []);
+    await this.sendTemplateMessage(phone, 'order_received', [], orderNumber);
+  }
+
+  // Send text message (for inbox functionality)
+  async sendTextMessage(phone: string, message: string): Promise<string | null> {
+    try {
+      const formattedPhone = this.formatPhoneNumber(phone);
+      
+      // Check rate limits before sending
+      const canSend = await WhatsAppMonitor.trackMessage(
+        `text-${Date.now()}`,
+        formattedPhone
+      );
+
+      if (!canSend) {
+        throw new Error('Rate limit exceeded');
+      }
+
+      logger.info('Sending WhatsApp text message', {
+        phone: formattedPhone,
+        message: message.substring(0, 100) + (message.length > 100 ? '...' : '')
+      });
+
+      const response = await axios.post(
+        `${this.apiUrl}/${this.phoneNumberId}/messages`,
+        {
+          messaging_product: 'whatsapp',
+          to: formattedPhone,
+          type: 'text',
+          text: {
+            body: message
+          }
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      const messageId = response.data?.messages?.[0]?.id;
+      if (messageId) {
+        WhatsAppMonitor.updateMessageStatus(messageId, 'sent');
+        
+        // Store message in database
+        await MessageService.storeMessage({
+          message_id: messageId,
+          phone: formattedPhone,
+          from: this.phoneNumberId,
+          to: formattedPhone,
+          type: 'text',
+          text: { body: message },
+          timestamp: new Date(),
+          direction: 'outbound'
+        });
+      }
+
+      logger.info('WhatsApp text message sent successfully', {
+        response: response.data
+      });
+      return messageId;
+    } catch (error) {
+      if (error instanceof AxiosError && error.response?.data) {
+        logger.error('WhatsApp API Error Response:', {
+          status: error.response.status,
+          data: error.response.data,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      logger.error('Error sending WhatsApp text message:', {
+        error,
+        phone,
+        timestamp: new Date().toISOString()
+      });
+      throw new Error('Failed to send WhatsApp text message');
+    }
+  }
+
+  // Get conversation history (for inbox functionality)
+  async getConversationHistory(phone: string, limit: number = 50): Promise<any[]> {
+    try {
+      const formattedPhone = this.formatPhoneNumber(phone);
+      
+      logger.info('Fetching WhatsApp conversation history', {
+        phone: formattedPhone,
+        limit
+      });
+
+      // Get messages from database instead of API
+      const messages = await MessageService.getConversationHistory(formattedPhone, limit);
+
+      logger.info('WhatsApp conversation history fetched successfully', {
+        messageCount: messages.length
+      });
+
+      return messages;
+    } catch (error) {
+      logger.error('Error fetching WhatsApp conversation history:', {
+        error,
+        phone,
+        timestamp: new Date().toISOString()
+      });
+      throw new Error('Failed to fetch WhatsApp conversation history');
+    }
+  }
+
+  // Get all conversations (list of phone numbers with recent messages)
+  async getAllConversations(limit: number = 20): Promise<any[]> {
+    try {
+      logger.info('Fetching all WhatsApp conversations', {
+        limit
+      });
+
+      // Get conversations from database instead of API
+      const conversations = await MessageService.getAllConversations(limit);
+
+      logger.info('WhatsApp conversations fetched successfully', {
+        conversationCount: conversations.length
+      });
+
+      return conversations;
+    } catch (error) {
+      logger.error('Error fetching WhatsApp conversations:', {
+        error,
+        timestamp: new Date().toISOString()
+      });
+      throw new Error('Failed to fetch WhatsApp conversations');
+    }
   }
 } 

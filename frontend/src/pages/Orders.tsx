@@ -1,15 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
-import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, FunnelIcon, ArrowsUpDownIcon, CheckIcon, DocumentArrowUpIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, FunnelIcon, CheckIcon, DocumentArrowUpIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { Menu, Popover, Transition } from '@headlessui/react';
 import FileUpload from '../components/FileUpload';
 import MoneyTransferUpload from '../components/MoneyTransferUpload';
-import { getPackagesList, addBulkAddressTags } from '../services/shipping';
 import { format } from 'date-fns';
 import { toast } from 'react-hot-toast';
 
@@ -192,22 +191,6 @@ const statusOptions = [
   { value: 'all', label: 'All Orders' },
 ];
 
-interface ShippingStatusResponse {
-  tabOneOrders: any[];
-  tabTwoOrders: any[];
-  tabThreeOrders: any[];
-}
-
-interface OrderShippingStatus {
-  packageENStatus: string;
-  lastUpdated: string;
-  Barcode: string;
-}
-
-interface OrderShippingStatuses {
-  [orderId: string]: OrderShippingStatus[];
-}
-
 const findOldestShippedOrderDate = (orders: Order[]): Date => {
   const shippedButNotFulfilledOrders = orders.filter(order => {
     const tags = Array.isArray(order.tags) ? 
@@ -260,77 +243,43 @@ const findOldestShippedOrderDate = (orders: Order[]): Date => {
   return new Date(Math.min(...shippingDates.map(date => date.getTime())));
 };
 
-const fetchAllShippingStatuses = async (fromDate: Date): Promise<ShippingStatusResponse> => {
-  const toDate = new Date();
-  
-  // Format dates for API
-  const from = fromDate.toISOString().split('T')[0] + 'T20:00:00.000Z';
-  const to = toDate.toISOString().split('T')[0] + 'T20:59:59.000Z';
-
-  // Base payload
-  const basePayload = {
-    FilterModel: {
-      PageFilter: {
-        PageIndex: 1,
-        PageSize: 100
-      },
-      SearchKeyword: ""
-    },
-    From: from,
-    To: to,
-    MerchantIds: [16677],
-    WarehouseIds: [],
-    SubscriberIds: [],
-    HubId: [],
-    HubTypeId: 0,
-    PhaseId: [],
-    MylerIds: [],
-    TransferBy: [],
-    ServiceTypeId: [],
-    ServiceCategoryId: [],
-    PaymentTypeId: [],
-    StatusId: [],
-    PackageServiceId: [],
-    AttemptsNumber: null,
-    MemberId: 22376,
-    Barcodes: [],
-    PreferedTimeSlot: 0,
-    AvailableTimeslotId: 0,
-    DateTypeId: 3,
-    SearchOptionId: 1,
-    MemberCategoryID: 2
-  };
-
-  // Fetch from all tabs concurrently
-  const [tabOne, tabTwo, tabThree] = await Promise.all([
-    getPackagesList({ ...basePayload, SelectedTab: 1 }),
-    getPackagesList({ ...basePayload, SelectedTab: 2 }),
-    getPackagesList({ ...basePayload, SelectedTab: 3 })
-  ]);
-
-  return {
-    tabOneOrders: tabOne.Value.Result,
-    tabTwoOrders: tabTwo.Value.Result,
-    tabThreeOrders: tabThree.Value.Result
-  };
-};
-
-interface AuthContextType {
-  token: string | null;
-  // ... other auth context properties ...
-}
-
 const Orders = () => {
   const [selectedOrders, setSelectedOrders] = useState<number[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('pending');
-  const [sortAscending, setSortAscending] = useState(true);
+  const [previousStatusFilter, setPreviousStatusFilter] = useState('pending');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [shippingStatuses, setShippingStatuses] = useState<OrderShippingStatuses>({});
+  const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
+
+  // Debounce search query to reduce unnecessary filtering
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300); // 300ms delay
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Handle search query changes
+  useEffect(() => {
+    if (searchQuery.trim()) {
+      // When searching, save current filter and switch to all orders
+      if (statusFilter !== 'all') {
+        setPreviousStatusFilter(statusFilter);
+        setStatusFilter('all');
+      }
+    } else {
+      // When search is cleared, restore previous filter
+      if (statusFilter === 'all' && previousStatusFilter !== 'all') {
+        setStatusFilter(previousStatusFilter);
+      }
+    }
+  }, [searchQuery, statusFilter, previousStatusFilter]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -341,32 +290,56 @@ const Orders = () => {
   const { data: orders, isLoading: ordersLoading, error, refetch } = useQuery<Order[]>({
     queryKey: ['orders'],
     queryFn: async (): Promise<Order[]> => {
-      // First fetch orders
+      // Fetch orders
       const ordersResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`);
       if (!ordersResponse.ok) {
         throw new Error('Failed to fetch orders');
       }
       const ordersData = await ordersResponse.json();
 
-      // Find oldest shipped order date
-      const oldestDate = findOldestShippedOrderDate(ordersData);
-
-      try {
-        // Fetch shipping statuses
-        const shippingData = await fetchAllShippingStatuses(oldestDate);
-        
-        // Match orders with shipping statuses
-        const matchedStatuses = matchOrdersWithShippingStatuses(ordersData, shippingData);
-        
-        // Update shipping statuses state
-        setShippingStatuses(matchedStatuses);
-      } catch (error) {
-        console.error('Failed to fetch shipping statuses:', error);
-      }
-
       return ordersData;
     },
+    // Specific caching options for orders
+    staleTime: 2 * 60 * 1000, // Consider data fresh for 2 minutes
+    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
+    refetchOnWindowFocus: false, // Don't refetch when window regains focus
+    refetchOnMount: false, // Don't refetch when component mounts if data exists
+    refetchOnReconnect: true, // Only refetch when reconnecting to network
   });
+
+  // Manual refresh function
+  const handleManualRefresh = useCallback(async () => {
+    try {
+      // Force a fresh refetch by invalidating the cache first
+      await queryClient.invalidateQueries({ queryKey: ['orders'] });
+      await refetch();
+      toast.success('Orders refreshed successfully');
+    } catch (error) {
+      console.error('Error refreshing orders:', error);
+      toast.error('Failed to refresh orders');
+    }
+  }, [refetch, queryClient]);
+
+  // Add state for refresh loading
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Updated manual refresh function with loading state
+  const handleManualRefreshWithLoading = useCallback(async () => {
+    if (isRefreshing) return; // Prevent multiple simultaneous refreshes
+    
+    setIsRefreshing(true);
+    try {
+      // Force a fresh refetch by invalidating the cache first
+      await queryClient.invalidateQueries({ queryKey: ['orders'] });
+      await refetch();
+      toast.success('Orders refreshed successfully');
+    } catch (error) {
+      console.error('Error refreshing orders:', error);
+      toast.error('Failed to refresh orders');
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [refetch, queryClient, isRefreshing]);
 
   const updateDueDateMutation = useMutation({
     mutationFn: async ({ orderId, dueDate }: { orderId: number; dueDate: string }) => {
@@ -550,6 +523,9 @@ const Orders = () => {
 
   const handleBulkStatusUpdate = (status: string) => {
     if (selectedOrders.length === 0) return;
+    
+    // Save current filter before bulk update
+    setPreviousStatusFilter(statusFilter);
     
     // Update each selected order's status
     selectedOrders.forEach(orderId => {
@@ -837,11 +813,6 @@ const Orders = () => {
     return 10; // pending orders should be first
   };
 
-  // Toggle sort order
-  const handleToggleSort = () => {
-    setSortAscending(!sortAscending);
-  };
-
   // Update search query handler
   const handleSearchChange = (value: string) => {
     setSearchQuery(value);
@@ -850,6 +821,10 @@ const Orders = () => {
   // Clear search handler
   const handleClearSearch = () => {
     handleSearchChange('');
+    // Restore previous filter when clearing search
+    if (statusFilter === 'all' && previousStatusFilter !== 'all') {
+      setStatusFilter(previousStatusFilter);
+    }
   };
 
   const handleUploadComplete = (results: {
@@ -859,69 +834,7 @@ const Orders = () => {
     errors: number;
   }) => {
     // Refresh orders after successful upload
-    refetch();
-  };
-
-  // Move matchOrdersWithShippingStatuses inside component
-  const matchOrdersWithShippingStatuses = (
-    orders: Order[], 
-    shippingData: ShippingStatusResponse
-  ): OrderShippingStatuses => {
-    const allShippingOrders = [
-      ...shippingData.tabOneOrders,
-      ...shippingData.tabTwoOrders,
-      ...shippingData.tabThreeOrders
-    ];
-
-    const orderStatuses: OrderShippingStatuses = {};
-
-    orders.forEach(order => {
-      // Get shipping barcode from order tags
-      const tags = Array.isArray(order.tags) ? 
-        order.tags : 
-        typeof order.tags === 'string' ? 
-          order.tags.split(',').map(t => t.trim()) : 
-          [];
-      
-      const barcodeTag = tags.find(tag => tag.startsWith('shipping_barcode:'));
-      if (!barcodeTag) {
-        return; // Skip orders without shipping barcode
-      }
-
-      const orderBarcode = barcodeTag.split(':')[1]?.trim();
-      if (!orderBarcode) {
-        return; // Skip if barcode is empty
-      }
-
-      // Find matching shipping status by barcode
-      const matchingStatuses = allShippingOrders.filter(shipping => 
-        shipping.Barcode?.trim() === orderBarcode.trim()
-      );
-
-      if (matchingStatuses.length > 0) {
-        orderStatuses[order.id] = matchingStatuses.map(status => ({
-          packageENStatus: status.PackageENStatus,
-          lastUpdated: status.LastUpdate || status.CreatedDate,
-          Barcode: status.Barcode
-        }));
-
-        // Check if any matching status is "Delivered" or "Confirm Delivered" and order is currently shipped
-        const deliveryStatuses = ["Delivered", "Confirm Delivered"];
-        const hasDeliveredStatus = matchingStatuses.some(status => 
-          deliveryStatuses.includes(status.PackageENStatus)
-        );
-
-        if (hasDeliveredStatus && tags.includes('shipped') && !tags.includes('fulfilled')) {
-          const today = format(new Date(), 'yyyy-MM-dd');
-          updateStatusMutation.mutate({ 
-            orderId: order.id, 
-            status: `fulfilled,fulfillment_date:${today}` 
-          });
-        }
-      }
-    });
-
-    return orderStatuses;
+    queryClient.invalidateQueries({ queryKey: ['orders'] });
   };
 
   // Get shipping date from tags
@@ -946,10 +859,10 @@ const Orders = () => {
   }))
   // Then filter
   .filter((order: Order & { originalIndex: number }) => {
-    const matchesSearch = searchQuery === '' || 
-      order.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      `${order.customer?.first_name} ${order.customer?.last_name}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      order.customer?.phone.includes(searchQuery);
+    const matchesSearch = debouncedSearchQuery === '' || 
+      order.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase()) ||
+      `${order.customer?.first_name} ${order.customer?.last_name}`.toLowerCase().includes(debouncedSearchQuery.toLowerCase()) ||
+      order.customer?.phone.includes(debouncedSearchQuery);
     
     const matchesStatus = filterOrdersByStatus(order);
     
@@ -1003,14 +916,9 @@ const Orders = () => {
       return aDaysLeft - bDaysLeft;
     }
 
-    // If ascending sort is enabled, sort by order ID in ascending order
-    if (sortAscending) {
-      return a.id - b.id;
-    }
-
-    // If days left are equal and not ascending sort, sort by order ID in descending order
+    // Sort by order ID in ascending order
     if (a.id !== b.id) {
-      return b.id - a.id;
+      return a.id - b.id;
     }
 
     // Final stable sort tiebreaker using original index
@@ -1223,6 +1131,105 @@ ___`;
     });
   };
 
+  // Calculate accumulated item quantities for pending orders
+  const calculatePendingItemsSummary = () => {
+    if (!orders) return { items: [], totalOrders: 0, totalPieces: 0 };
+    
+    const pendingOrders = orders.filter(order => {
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(tag => tag.trim())
+          : [];
+      
+      // Check if order is pending (no status tags and not deleted)
+      return !tags.includes('deleted') && 
+             !tags.some(tag => ['customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'cancelled', 'paid'].includes(tag.trim()));
+    });
+
+    const itemCounts: { [key: string]: number } = {};
+    let totalPieces = 0;
+
+    pendingOrders.forEach(order => {
+      order.line_items?.forEach(item => {
+        const itemKey = item.variant_title ? `${item.title} - ${item.variant_title}` : item.title;
+        itemCounts[itemKey] = (itemCounts[itemKey] || 0) + item.quantity;
+        totalPieces += item.quantity;
+      });
+    });
+
+    const sortedItems = Object.entries(itemCounts)
+      .map(([title, quantity]) => ({ title, quantity }))
+      .sort((a, b) => b.quantity - a.quantity); // Sort by quantity descending
+
+    return {
+      items: sortedItems,
+      totalOrders: pendingOrders.length,
+      totalPieces
+    };
+  };
+
+  // Production Summary Card Component
+  const ProductionSummaryCard = () => {
+    const summary = calculatePendingItemsSummary();
+    
+    if (summary.totalOrders === 0) return null;
+
+    const displayedItems = isSummaryExpanded ? summary.items : summary.items.slice(0, 5);
+
+    return (
+      <div 
+        className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow duration-200 cursor-pointer"
+        onClick={() => setIsSummaryExpanded(!isSummaryExpanded)}
+        title={isSummaryExpanded ? "Click to collapse" : "Click to see all items"}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+              <span className="text-blue-600 text-sm font-semibold">📊</span>
+            </div>
+            <div>
+              <h3 className="font-semibold text-gray-900">Production Summary</h3>
+              <p className="text-sm text-gray-600">{summary.totalOrders} pending orders</p>
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-lg font-bold text-blue-600">{summary.totalPieces}</div>
+            <div className="text-xs text-gray-500">total pieces</div>
+          </div>
+        </div>
+
+        {/* Items List */}
+        <div className="space-y-2">
+          {displayedItems.map((item, index) => (
+            <div key={index} className="flex justify-between items-center py-1 px-2 bg-white rounded border border-blue-100">
+              <span className="text-sm text-gray-700 truncate flex-1">{item.title}</span>
+              <span className="text-sm font-semibold text-blue-600 ml-2">{item.quantity}</span>
+            </div>
+          ))}
+          {!isSummaryExpanded && summary.items.length > 5 && (
+            <div className="text-xs text-blue-600 text-center py-1 font-medium">
+              +{summary.items.length - 5} more items (click to expand)
+            </div>
+          )}
+          {isSummaryExpanded && summary.items.length > 5 && (
+            <div className="text-xs text-blue-600 text-center py-1 font-medium">
+              Click to collapse
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="mt-3 pt-2 border-t border-blue-200">
+          <div className="text-xs text-gray-600 text-center">
+            Items to be produced from pending orders
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (ordersLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -1312,6 +1319,7 @@ ___`;
                           <button
                             key={option.value}
                             onClick={() => {
+                              setPreviousStatusFilter(statusFilter);
                               setStatusFilter(option.value);
                               close();
                             }}
@@ -1330,15 +1338,6 @@ ___`;
             {/* Upload Button */}
             <MoneyTransferUpload onUploadComplete={handleUploadComplete} />
 
-            {/* Sort Button (icon only) */}
-            <button
-              onClick={handleToggleSort}
-              className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              title="Sort by ID"
-            >
-              <ArrowsUpDownIcon className="w-5 h-5 text-gray-600" />
-            </button>
-
             {/* Select All Button */}
             <button
               onClick={handleSelectAll}
@@ -1349,6 +1348,16 @@ ___`;
               {selectedOrders.length > 0 && (
                 <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-xs rounded-full px-1.5 py-0.5">{selectedOrders.length}</span>
               )}
+            </button>
+
+            {/* Refresh Button */}
+            <button
+              onClick={handleManualRefreshWithLoading}
+              disabled={ordersLoading || isRefreshing}
+              className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Refresh orders"
+            >
+              <ArrowPathIcon className={`w-5 h-5 text-gray-600 ${ordersLoading || isRefreshing ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
@@ -1470,6 +1479,8 @@ ___`;
       {/* Order Grid */}
       <div className="p-2 sm:p-8">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+          {/* Production Summary Card - Only show for pending orders */}
+          {statusFilter === 'pending' && <ProductionSummaryCard />}
           {sortedOrders?.map((order: any) => (
             <OrderCard
               key={order.id}
@@ -1481,7 +1492,6 @@ ___`;
               onUpdateStatus={handleUpdateStatus}
               onDeleteOrder={handleDeleteOrder}
               onUpdateTags={handleUpdateTags}
-              shippingStatuses={shippingStatuses[order.id]}
             />
           ))}
         </div>

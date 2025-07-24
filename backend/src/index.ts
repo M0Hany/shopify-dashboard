@@ -53,6 +53,27 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
+// Specific rate limiting for orders endpoint
+const ordersLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 30, // 30 requests per 5 minutes for orders
+  message: {
+    error: 'Too many requests to orders endpoint. Please wait a few minutes before trying again.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/orders', ordersLimiter);
+
+// Add caching headers middleware
+app.use((req, res, next) => {
+  // Add cache headers for GET requests
+  if (req.method === 'GET') {
+    res.set('Cache-Control', 'public, max-age=120'); // Cache for 2 minutes
+  }
+  next();
+});
+
 // Request logging
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.path}`);
@@ -83,40 +104,25 @@ app.use('/api/*', (req, res) => {
 // Error handling
 app.use(errorHandler);
 
-// Start the server
-app.listen(config.port, async () => {
-  logger.info(`Server is running on port ${config.port}`);
-  logger.info(`Environment: ${process.env.NODE_ENV}`);
-  
+// Start server
+const PORT = config.port || 3000;
+
+const startServer = async () => {
   try {
-    // Run initial checks
-    logger.info('Running initial checks...');
-    await scheduleShippingStatusCheck();
-    await scheduleAddressTagCheck();
-    logger.info('Initial checks completed');
+    // Start scheduler service
+    schedulerService.startAll();
     
-    // Schedule recurring checks
-    const shippingCron = new CronJob('*/30 * * * *', async () => {
-      try {
-        await scheduleShippingStatusCheck();
-      } catch (error) {
-        logger.error('Error in shipping status check:', error);
-      }
-    }, null, true, 'Africa/Cairo');
+    // Schedule jobs
+    scheduleShippingStatusCheck();
+    scheduleAddressTagCheck();
     
-    const addressCron = new CronJob('*/30 * * * *', async () => {
-      try {
-        await scheduleAddressTagCheck();
-      } catch (error) {
-        logger.error('Error in address tag check:', error);
-      }
-    }, null, true, 'Africa/Cairo');
-    
-    shippingCron.start();
-    addressCron.start();
-    
-    logger.info('Scheduled jobs started successfully');
+    app.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT}`);
+    });
   } catch (error) {
-    logger.error('Failed to initialize scheduled jobs:', error);
+    logger.error('Failed to start server:', error);
+    process.exit(1);
   }
-}); 
+};
+
+startServer(); 

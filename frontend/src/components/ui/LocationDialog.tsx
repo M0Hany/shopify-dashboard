@@ -34,6 +34,7 @@ interface LocationDialogProps<T extends Zone | SubZone> {
   onSelect: (location: T) => void;
   shippingAddress?: ShippingAddress;
   selectedId?: number | null;
+  readOnly?: boolean;
 }
 
 function LocationDialog<T extends Zone | SubZone>({
@@ -43,7 +44,8 @@ function LocationDialog<T extends Zone | SubZone>({
   locations,
   onSelect,
   shippingAddress,
-  selectedId
+  selectedId,
+  readOnly = false
 }: LocationDialogProps<T>) {
   const [searchTerm, setSearchTerm] = useState('');
   const [filteredLocations, setFilteredLocations] = useState<T[]>(locations);
@@ -84,7 +86,9 @@ function LocationDialog<T extends Zone | SubZone>({
       <div className="fixed inset-0 flex items-center justify-center p-4">
         <Dialog.Panel className="mx-auto max-w-sm rounded bg-white p-4 w-full">
           <div className="flex justify-between items-center mb-4">
-            <Dialog.Title className="text-lg font-medium">{title}</Dialog.Title>
+            <Dialog.Title className="text-lg font-medium">
+              {readOnly ? 'View Address' : title}
+            </Dialog.Title>
             <button
               onClick={onClose}
               className="p-1 bg-white rounded-full hover:bg-white border border-transparent hover:border-gray-300 transition-colors"
@@ -109,26 +113,31 @@ function LocationDialog<T extends Zone | SubZone>({
             </div>
           )}
 
-          <div className="mb-4">
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search..."
-              className="w-full px-3 py-2 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
+          {!readOnly && (
+            <div className="mb-4">
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search..."
+                className="w-full px-3 py-2 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          )}
 
           <div className="max-h-96 overflow-y-auto bg-white">
             {filteredLocations.map((location) => (
               <button
                 key={location.Id}
                 onClick={() => {
-                  onSelect(location);
+                  if (!readOnly) {
+                    onSelect(location);
+                  }
                 }}
-                className={`w-full text-left px-4 py-2 bg-white hover:bg-gray-50 rounded-md mb-1 flex items-center gap-2 ${
-                  location.Id === selectedId ? 'bg-blue-50 border border-blue-200' : ''
-                }`}
+                disabled={readOnly}
+                className={`w-full text-left px-4 py-2 bg-white rounded-md mb-1 flex items-center gap-2 ${
+                  location.Id === selectedId ? 'bg-blue-50 border border-blue-200' : readOnly ? '' : 'hover:bg-gray-50'
+                } ${readOnly ? 'cursor-default' : 'cursor-pointer'}`}
               >
                 {location.Id === selectedId && (
                   <CheckIcon className="h-5 w-5 text-blue-500 flex-shrink-0" />

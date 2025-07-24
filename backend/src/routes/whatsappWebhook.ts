@@ -1,8 +1,10 @@
 import express from 'express';
 import { WhatsAppMonitor } from '../services/monitoring/WhatsAppMonitor';
 import { WhatsAppService } from '../services/whatsapp';
+import { MessageService } from '../services/messageService';
 import { logger } from '../utils/logger';
 import { ShopifyService } from '../services/shopify';
+import { supabase } from '../config/supabase';
 
 const router = express.Router();
 const whatsappService = new WhatsAppService();
@@ -93,6 +95,84 @@ router.post('/test-message', async (req, res) => {
   }
 });
 
+// Test Supabase connection
+router.get('/test-supabase', async (req, res) => {
+  try {
+    logger.info('Testing Supabase connection...');
+    
+    // Test basic connection
+    const { data: testData, error: testError } = await supabase
+      .from('whatsapp_messages')
+      .select('count')
+      .limit(1);
+    
+    if (testError) {
+      logger.error('Supabase connection test failed:', {
+        error: testError.message,
+        details: testError.details,
+        hint: testError.hint
+      });
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Supabase connection failed',
+        details: testError 
+      });
+    }
+    
+    // Test inserting a sample message
+    const testMessage = {
+      message_id: `test-${Date.now()}`,
+      phone: '201000000000',
+      from: '201000000000',
+      to: process.env.WHATSAPP_PHONE_NUMBER_ID || 'test',
+      type: 'text',
+      text: { body: 'Test message' },
+      timestamp: new Date().toISOString(),
+      status: 'sent',
+      direction: 'outbound'
+    };
+    
+    const { data: insertData, error: insertError } = await supabase
+      .from('whatsapp_messages')
+      .insert(testMessage)
+      .select()
+      .single();
+    
+    if (insertError) {
+      logger.error('Supabase insert test failed:', {
+        error: insertError.message,
+        details: insertError.details,
+        hint: insertError.hint
+      });
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Supabase insert failed',
+        details: insertError 
+      });
+    }
+    
+    // Clean up test message
+    await supabase
+      .from('whatsapp_messages')
+      .delete()
+      .eq('message_id', testMessage.message_id);
+    
+    logger.info('Supabase connection test successful');
+    res.json({ 
+      success: true, 
+      message: 'Supabase connection working',
+      testData: insertData 
+    });
+  } catch (error) {
+    logger.error('Supabase test error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Test failed',
+      details: error 
+    });
+  }
+});
+
 // Send order confirmation notification
 router.post('/order-confirmed', async (req, res) => {
   try {
@@ -173,6 +253,110 @@ router.post('/order-received', async (req, res) => {
   }
 });
 
+// Send text message (for inbox functionality)
+router.post('/send-text', async (req, res) => {
+  try {
+    const { phone, message } = req.body;
+    
+    if (!phone) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    // Send the text message
+    const messageId = await whatsappService.sendTextMessage(phone, message.trim());
+
+    res.json({ 
+      success: true, 
+      message: 'Text message sent successfully',
+      messageId 
+    });
+  } catch (error) {
+    logger.error('Error sending text message:', error);
+    res.status(500).json({ error: 'Failed to send text message' });
+  }
+});
+
+// Get conversation history for a specific phone number
+router.get('/conversation/:phone', async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const { limit = 50 } = req.query;
+    
+    if (!phone) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+
+    const messages = await whatsappService.getConversationHistory(phone, Number(limit));
+
+    res.json({ 
+      success: true, 
+      messages,
+      count: messages.length
+    });
+  } catch (error) {
+    logger.error('Error fetching conversation history:', error);
+    res.status(500).json({ error: 'Failed to fetch conversation history' });
+  }
+});
+
+// Get all conversations
+router.get('/conversations', async (req, res) => {
+  try {
+    const { limit = 20 } = req.query;
+
+    const conversations = await whatsappService.getAllConversations(Number(limit));
+
+    res.json({ 
+      success: true, 
+      conversations,
+      count: conversations.length
+    });
+  } catch (error) {
+    logger.error('Error fetching conversations:', error);
+    res.status(500).json({ error: 'Failed to fetch conversations' });
+  }
+});
+
+// Mark messages as read for a phone number
+router.post('/mark-read/:phone', async (req, res) => {
+  try {
+    const { phone } = req.params;
+    
+    if (!phone) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+
+    await MessageService.markMessagesAsRead(phone);
+
+    res.json({ 
+      success: true, 
+      message: 'Messages marked as read successfully'
+    });
+  } catch (error) {
+    logger.error('Error marking messages as read:', error);
+    res.status(500).json({ error: 'Failed to mark messages as read' });
+  }
+});
+
+// Get message statistics
+router.get('/stats', async (req, res) => {
+  try {
+    const stats = await MessageService.getMessageStats();
+
+    res.json({ 
+      success: true, 
+      stats
+    });
+  } catch (error) {
+    logger.error('Error getting message statistics:', error);
+    res.status(500).json({ error: 'Failed to get message statistics' });
+  }
+});
+
 // Verify webhook
 router.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
@@ -221,6 +405,44 @@ router.post('/webhook', express.json(), async (req, res) => {
               context: message.context,
               fullMessage: JSON.stringify(message, null, 2)
             });
+
+            // Store incoming message in database
+            try {
+              logger.info('=== STORING INCOMING MESSAGE ===', {
+                message_id: message.id,
+                phone: message.from,
+                type: message.type,
+                text: message.text,
+                timestamp: message.timestamp
+              });
+
+              await MessageService.storeMessage({
+                message_id: message.id,
+                phone: message.from,
+                from: message.from,
+                to: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
+                type: message.type,
+                text: message.text,
+                timestamp: new Date(parseInt(message.timestamp) * 1000),
+                direction: 'inbound'
+              });
+
+              logger.info('=== MESSAGE STORED SUCCESSFULLY ===', {
+                message_id: message.id,
+                phone: message.from
+              });
+            } catch (error) {
+              logger.error('Error storing incoming message', {
+                error: error instanceof Error ? error.message : error,
+                errorStack: error instanceof Error ? error.stack : undefined,
+                errorDetails: JSON.stringify(error, null, 2),
+                message_id: message.id,
+                phone: message.from,
+                type: message.type,
+                text: message.text,
+                timestamp: message.timestamp
+              });
+            }
 
             // Log the exact button text if it exists
             if (message.button) {

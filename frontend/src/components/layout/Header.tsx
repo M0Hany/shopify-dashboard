@@ -18,6 +18,7 @@ export const Header: React.FC<HeaderProps> = () => {
   const navigation = [
     { name: 'Orders', href: '/orders' },
     { name: 'Finance', href: '/finance' },
+    { name: 'WhatsApp', href: '/whatsapp' },
   ];
 
   return (

@@ -347,7 +347,8 @@ router.post('/create-shipments', async (req, res) => {
           // Add ready_to_ship tag and shipping barcode (only if customer has confirmed)
           const newTags = [
             ...existingTags.filter(tag => 
-              !tag.startsWith('shipping_barcode:')
+              !tag.startsWith('shipping_barcode:') && 
+              tag !== 'customer_confirmed'
             ),
             'ready_to_ship',
             `shipping_barcode:${shipment.BarCode}`

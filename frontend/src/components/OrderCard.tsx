@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon } from '@heroicons/react/24/outline';
+import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
 import { convertToCairoTime } from '../utils/dateUtils';
@@ -10,12 +10,7 @@ import { locationData } from '../data/locations';
 import { toast } from 'react-hot-toast';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
-
-interface PackageStatus {
-  packageENStatus: string;
-  lastUpdated: string;
-  barcode?: string;
-}
+import { useNavigate } from 'react-router-dom';
 
 interface LocationSelections {
   cityId: string | null;
@@ -31,7 +26,6 @@ interface OrderCardProps {
   onDeleteOrder?: (orderId: number) => void;
   onUpdateNote?: (orderId: number, note: string) => void;
   onTogglePriority?: (orderId: number, isPriority: boolean) => void;
-  shippingStatuses?: PackageStatus[];
   onUpdateTags?: (orderId: number, newTags: string[]) => void;
   onUpdateDueDate?: (orderId: number, date: string) => void;
   onUpdateStartDate?: (orderId: number, date: string) => void;
@@ -40,9 +34,8 @@ interface OrderCardProps {
 // Add new ShippingStatus component
 const ShippingStatus: React.FC<{ 
   status: string; 
-  shippingStatuses?: PackageStatus[];
   orderTags: string[];
-}> = ({ status, shippingStatuses, orderTags }) => {
+}> = ({ status, orderTags }) => {
   // Get shipping date from tags
   const getShippingDaysAgo = () => {
     const now = new Date();
@@ -65,7 +58,14 @@ const ShippingStatus: React.FC<{
     return barcodeTag ? barcodeTag.trim().split(':')[1]?.trim() : null;
   };
 
+  // Get shipping status from tags
+  const getShippingStatus = () => {
+    const statusTag = orderTags.find((tag: string) => tag.trim().startsWith('shipping_status:'));
+    return statusTag ? statusTag.trim().split(':')[1]?.trim() : null;
+  };
+
   const shippingBarcode = getShippingBarcode();
+  const shippingStatus = getShippingStatus();
 
   return (
     <div className="flex items-center gap-2 p-2 bg-purple-50 rounded-md">
@@ -74,15 +74,11 @@ const ShippingStatus: React.FC<{
         <span className="text-sm text-purple-700 font-medium">
           {getShippingDaysAgo()}
         </span>
-        {shippingStatuses && shippingStatuses.length > 0 && (
+        {shippingStatus && (
           <div className="text-xs text-purple-600">
-            {shippingStatuses.map((status, index) => (
-              <div key={index} className="space-y-0.5">
-                <div className="italic">
-                  {status.packageENStatus}
-                </div>
-              </div>
-            ))}
+            <div className="italic">
+              {shippingStatus}
+            </div>
           </div>
         )}
         {shippingBarcode && (
@@ -103,11 +99,11 @@ const OrderCard: React.FC<OrderCardProps> = ({
   onDeleteOrder,
   onUpdateNote,
   onTogglePriority,
-  shippingStatuses,
   onUpdateTags,
   onUpdateDueDate,
   onUpdateStartDate
 }) => {
+  const navigate = useNavigate();
   const [showNoteDialog, setShowNoteDialog] = useState(false);
   const [showWhatsAppDialog, setShowWhatsAppDialog] = useState(false);
   const [showReadyConfirmDialog, setShowReadyConfirmDialog] = useState(false);
@@ -389,6 +385,30 @@ const OrderCard: React.FC<OrderCardProps> = ({
     }
     
     return formatted;
+  };
+
+  // Function to open WhatsApp chat with customer
+  const handleWhatsAppChat = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!order.customer?.phone) return;
+    
+    const formattedPhone = formatPhoneNumber(order.customer.phone);
+    navigate(`/whatsapp?phone=${formattedPhone}`);
+  };
+
+  // Function to copy phone number to clipboard
+  const handleCopyPhone = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!order.customer?.phone) return;
+    
+    try {
+      const formattedPhone = formatPhoneNumber(order.customer.phone);
+      await navigator.clipboard.writeText(formattedPhone);
+      toast.success('Phone number copied to clipboard');
+    } catch (error) {
+      console.error('Failed to copy phone number:', error);
+      toast.error('Failed to copy phone number');
+    }
   };
   
   // Get confirmation message template
@@ -779,7 +799,14 @@ Your order is being picked up by the shipping company and should be arriving to 
             )}
           </div>
           <div className="flex items-center gap-2">
-            {isOrderCancelled ? (
+            <button
+              onClick={handleTagClick}
+              className="p-1 transition-all duration-200 bg-white rounded-md"
+              title="Manage tags"
+            >
+              <TagIcon className="w-4 h-4 text-gray-400 hover:text-gray-600" />
+            </button>
+            {isOrderCancelled && (
               <button
                 onClick={handleDeleteClick}
                 className="p-1 transition-all duration-200 bg-white rounded-md"
@@ -787,15 +814,7 @@ Your order is being picked up by the shipping company and should be arriving to 
               >
                 <TrashIcon className="w-4 h-4 text-red-500 hover:text-red-600" />
               </button>
-            ) : (
-              <>
-                <button
-                  onClick={handleTagClick}
-                  className="p-1 transition-all duration-200 bg-white rounded-md"
-                  title="Manage tags"
-                >
-                  <TagIcon className="w-4 h-4 text-gray-400 hover:text-gray-600" />
-                </button>
+            )}
             <button
               onClick={handlePriorityClick}
               className="p-1 transition-all duration-200 bg-white rounded-md"
@@ -807,8 +826,6 @@ Your order is being picked up by the shipping company and should be arriving to 
                 <StarIconOutline className="w-4 h-4 text-gray-300" />
               )}
             </button>
-              </>
-            )}
             <Menu as="div" className="relative inline-block text-left">
               {({ open }) => (
                 <>
@@ -919,6 +936,22 @@ Your order is being picked up by the shipping company and should be arriving to 
             <div className="flex items-center gap-2">
               <PhoneIcon className="w-4 h-4 text-green-500" />
               <span className="text-xs text-gray-700">{order.customer.phone}</span>
+              <div className="flex items-center gap-1 ml-auto">
+                <button
+                  onClick={handleWhatsAppChat}
+                  className="p-1 text-green-600 hover:text-green-700 bg-white hover:bg-green-50 rounded transition-colors"
+                  title="Open WhatsApp chat"
+                >
+                  <ChatBubbleLeftIcon className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={handleCopyPhone}
+                  className="p-1 text-gray-500 hover:text-gray-700 bg-white hover:bg-gray-50 rounded transition-colors"
+                  title="Copy phone number"
+                >
+                  <ClipboardDocumentIcon className="w-3 h-3" />
+                </button>
+              </div>
             </div>
           )}
           {order.shipping_address && (
@@ -942,44 +975,50 @@ Your order is being picked up by the shipping company and should be arriving to 
                                 .find(z => z.Id.toString() === locationIds.neighborhoodId)
                                 ?.SubZones.find(sz => sz.Id.toString() === locationIds.subZoneId)?.ArName}
                           </>
-                        ) : canEditLocation && (
+                        ) : (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               startLocationEdit();
                             }}
-                            className="ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 text-gray-600 rounded hover:bg-gray-50 transition-colors"
+                            className={`ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors ${
+                              canEditLocation ? 'text-gray-600' : 'text-blue-600'
+                            }`}
                           >
-                            Edit Location
+                            {canEditLocation ? 'Edit Location' : 'View Address'}
                           </button>
                         )}
                       </>
-                    ) : canEditLocation && (
+                    ) : (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           startLocationEdit();
                         }}
-                        className="ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 text-gray-600 rounded hover:bg-gray-50 transition-colors"
+                        className={`ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors ${
+                          canEditLocation ? 'text-gray-600' : 'text-blue-600'
+                        }`}
                       >
-                        Edit Location
+                        {canEditLocation ? 'Edit Location' : 'View Address'}
                       </button>
                     )}
                   </span>
                   {locationIds.cityId && locationIds.neighborhoodId && locationIds.subZoneId &&
-                   locationIds.cityId !== "null" && locationIds.neighborhoodId !== "null" && locationIds.subZoneId !== "null" && canEditLocation && (
+                   locationIds.cityId !== "null" && locationIds.neighborhoodId !== "null" && locationIds.subZoneId !== "null" && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         startLocationEdit();
                       }}
-                      className="ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 text-gray-600 rounded hover:bg-gray-50 transition-colors"
+                      className={`ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors ${
+                        canEditLocation ? 'text-gray-600' : 'text-blue-600'
+                      }`}
                     >
-                      Edit Location
+                      {canEditLocation ? 'Edit Location' : 'View Address'}
                     </button>
                   )}
                 </div>
-              ) : canEditLocation ? (
+              ) : (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-red-500">Missing address</span>
                   <button
@@ -987,14 +1026,14 @@ Your order is being picked up by the shipping company and should be arriving to 
                       e.stopPropagation();
                       startLocationEdit();
                     }}
-                    className="px-2 py-0.5 text-xs bg-white border border-red-300 text-red-600 rounded hover:bg-red-50 transition-colors"
+                    className={`px-2 py-0.5 text-xs bg-white border rounded transition-colors ${
+                      canEditLocation 
+                        ? 'border-red-300 text-red-600 hover:bg-red-50' 
+                        : 'border-blue-300 text-blue-600 hover:bg-blue-50'
+                    }`}
                   >
-                    Choose Location
+                    {canEditLocation ? 'Choose Location' : 'View Address'}
                   </button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-red-500">Missing address</span>
                 </div>
               )}
             </div>
@@ -1052,7 +1091,6 @@ Your order is being picked up by the shipping company and should be arriving to 
               <div className="mb-4">
                 <ShippingStatus 
                   status={order.packageENStatus || 'Pending pickup'} 
-                  shippingStatuses={shippingStatuses}
                   orderTags={trimmedTags}
                 />
               </div>
@@ -1260,6 +1298,7 @@ Your order is being picked up by the shipping company and should be arriving to 
                 ? parseInt(locationIds.cityId || "") 
                 : undefined
           }
+          readOnly={!canEditLocation}
           onSelect={(city) => {
             // Set the selected city ID for immediate UI update
             setSelectedCityId(city.Id.toString());
@@ -1294,6 +1333,7 @@ Your order is being picked up by the shipping company and should be arriving to 
                     ? parseInt(locationIds.neighborhoodId || "")
                     : undefined
               }
+              readOnly={!canEditLocation}
               onSelect={(neighborhood) => {
                 setSelectedNeighborhood(neighborhood);
                 
@@ -1342,23 +1382,18 @@ Your order is being picked up by the shipping company and should be arriving to 
                       ? parseInt(locationIds.subZoneId || "")
                       : undefined
                 }
+                readOnly={!canEditLocation}
                 onSelect={(subzone) => {
-                  // Get current selections or use existing location IDs
-                  const currentSelections = tempLocationSelections || {
-                    cityId: locationIds.cityId || "",
+                  // Update temporary selections with all three levels
+                  const selections = {
+                    cityId: tempLocationSelections?.cityId || locationIds.cityId || "",
                     neighborhoodId: selectedNeighborhood.Id.toString(),
-                    subzoneId: null
-                  };
-
-                  // Update temporary selections and commit changes
-                  const finalSelections = {
-                    cityId: currentSelections.cityId,
-                    neighborhoodId: currentSelections.neighborhoodId,
                     subzoneId: subzone.Id.toString()
                   };
+                  setTempLocationSelections(selections);
                   
-                  // Commit all changes at once
-                  commitLocationChanges(finalSelections);
+                  // Commit changes
+                  commitLocationChanges(selections);
                   setIsSubzoneDialogOpen(false);
                 }}
               />
