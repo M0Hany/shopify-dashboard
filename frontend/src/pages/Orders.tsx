@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
@@ -164,6 +164,7 @@ interface Order {
   financial_status: string;
   fulfillment_status: string;
   tags?: string[] | string | null;
+  payment_gateway_names?: string[]; 
   line_items: {
     title: string;
     quantity: number;
@@ -252,6 +253,9 @@ const Orders = () => {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
+  const [isSearchOverridingFilter, setIsSearchOverridingFilter] = useState(false);
+  const [suppressOrdersInvalidation, setSuppressOrdersInvalidation] = useState(false);
+  const ordersRefreshTimerRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
@@ -272,12 +276,14 @@ const Orders = () => {
       if (statusFilter !== 'all') {
         setPreviousStatusFilter(statusFilter);
         setStatusFilter('all');
+        setIsSearchOverridingFilter(true);
       }
     } else {
       // When search is cleared, restore previous filter
-      if (statusFilter === 'all' && previousStatusFilter !== 'all') {
+      if (isSearchOverridingFilter && previousStatusFilter !== 'all') {
         setStatusFilter(previousStatusFilter);
       }
+      setIsSearchOverridingFilter(false);
     }
   }, [searchQuery, statusFilter, previousStatusFilter]);
 
@@ -291,7 +297,10 @@ const Orders = () => {
     queryKey: ['orders'],
     queryFn: async (): Promise<Order[]> => {
       // Fetch orders
-      const ordersResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`);
+      const ordersResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' }
+      });
       if (!ordersResponse.ok) {
         throw new Error('Failed to fetch orders');
       }
@@ -300,12 +309,30 @@ const Orders = () => {
       return ordersData;
     },
     // Specific caching options for orders
-    staleTime: 2 * 60 * 1000, // Consider data fresh for 2 minutes
+    staleTime: 0,
+    refetchOnMount: 'always',
     gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
     refetchOnWindowFocus: false, // Don't refetch when window regains focus
-    refetchOnMount: false, // Don't refetch when component mounts if data exists
     refetchOnReconnect: true, // Only refetch when reconnecting to network
   });
+
+  // Debounced background refresh to reconcile local state with server
+  const scheduleBackgroundOrdersRefresh = useCallback(() => {
+    if (ordersRefreshTimerRef.current) {
+      clearTimeout(ordersRefreshTimerRef.current);
+    }
+    ordersRefreshTimerRef.current = window.setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    }, 300);
+  }, [queryClient]);
+
+  // Helper to update a specific order optimistically in the cache
+  const updateOrderInCache = useCallback((orderId: number, mutate: (o: Order) => Order) => {
+    queryClient.setQueryData<Order[] | undefined>(['orders'], (current) => {
+      if (!current) return current;
+      return current.map((o) => (o.id === orderId ? mutate(o) : o));
+    });
+  }, [queryClient]);
 
   // Manual refresh function
   const handleManualRefresh = useCallback(async () => {
@@ -356,12 +383,16 @@ const Orders = () => {
       }
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    onMutate: async ({ orderId, dueDate }) => {
+      await queryClient.cancelQueries({ queryKey: ['orders'] });
+      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      updateOrderInCache(orderId, (o) => ({ ...o, custom_due_date: dueDate }));
+      return { previous };
     },
-    onError: (error) => {
-      console.error('Error updating due date:', error);
-    }
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+    },
+    // Intentionally no background refresh to avoid fetching after each single update
   });
 
   const updateStartDateMutation = useMutation({
@@ -379,12 +410,16 @@ const Orders = () => {
       }
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    onMutate: async ({ orderId, startDate }) => {
+      await queryClient.cancelQueries({ queryKey: ['orders'] });
+      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      updateOrderInCache(orderId, (o) => ({ ...o, custom_start_date: startDate }));
+      return { previous };
     },
-    onError: (error) => {
-      console.error('Error updating start date:', error);
-    }
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+    },
+    // Intentionally no background refresh to avoid fetching after each single update
   });
 
   const updateNoteMutation = useMutation({
@@ -401,9 +436,16 @@ const Orders = () => {
       }
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    onMutate: async ({ orderId, note }) => {
+      await queryClient.cancelQueries({ queryKey: ['orders'] });
+      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      updateOrderInCache(orderId, (o) => ({ ...o, note }));
+      return { previous };
     },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+    },
+    // Intentionally no background refresh to avoid fetching after each single update
   });
 
   const updatePriorityMutation = useMutation({
@@ -420,31 +462,70 @@ const Orders = () => {
       }
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    onMutate: async ({ orderId, isPriority }) => {
+      await queryClient.cancelQueries({ queryKey: ['orders'] });
+      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      updateOrderInCache(orderId, (o) => {
+        const currentTags = Array.isArray(o.tags)
+          ? o.tags.map((t) => t.trim())
+          : typeof o.tags === 'string'
+            ? o.tags.split(',').map((t: string) => t.trim())
+            : [];
+        const nextTags = isPriority
+          ? currentTags.includes('priority') ? currentTags : [...currentTags, 'priority']
+          : currentTags.filter((t) => t !== 'priority');
+        return { ...o, tags: nextTags } as Order;
+      });
+      return { previous };
     },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+    },
+    // Intentionally no background refresh to avoid fetching after each single update
   });
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ orderId, status }: { orderId: number; status: string }) => {
+      // Normalize frontend status values to backend-expected tags
+      let serverStatus = status;
+      if (status === 'confirmed') serverStatus = 'customer_confirmed';
+      if (status === 'fulfill') serverStatus = 'fulfilled';
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/status`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status: serverStatus }),
       });
       if (!response.ok) {
         throw new Error('Failed to update order status');
       }
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    onMutate: async ({ orderId, status }) => {
+      await queryClient.cancelQueries({ queryKey: ['orders'] });
+      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      updateOrderInCache(orderId, (o) => {
+        const currentTags = Array.isArray(o.tags)
+          ? o.tags
+          : typeof o.tags === 'string'
+            ? o.tags.split(',').map((t: string) => t.trim())
+            : [];
+        const statusTags = ['customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+        let filtered = currentTags.filter((t: string) => !statusTags.includes(t));
+        let tagValue = status;
+        if (status === 'confirmed') tagValue = 'customer_confirmed';
+        if (status !== 'pending') filtered = [...filtered, tagValue];
+        if (status === 'fulfilled') filtered = filtered.filter((t: string) => t !== 'priority');
+        return { ...o, tags: filtered } as Order;
+      });
+      return { previous };
     },
-    onError: (error) => {
+    onError: (error, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
       console.error('Error updating order status:', error);
-    }
+    },
+    // Intentionally no background refresh to avoid fetching after each single update
   });
 
   const fulfillOrderMutation = useMutation({
@@ -468,16 +549,28 @@ const Orders = () => {
       }
       return response.json();
     },
-    onSuccess: () => {
-      console.log('Order fulfilled successfully');
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    onMutate: async (orderId: number) => {
+      await queryClient.cancelQueries({ queryKey: ['orders'] });
+      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      updateOrderInCache(orderId, (o) => {
+        const currentTags = Array.isArray(o.tags)
+          ? o.tags
+          : typeof o.tags === 'string'
+            ? o.tags.split(',').map((t: string) => t.trim())
+            : [];
+        const nextTags = [...currentTags.filter((t: string) => t !== 'priority'), 'fulfilled'];
+        return { ...o, tags: nextTags } as Order;
+      });
+      return { previous };
     },
-    onError: (error: any) => {
+    onError: (error: any, _orderId, context) => {
+      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
       console.error('Error fulfilling order:', {
         message: error.message,
         error
       });
-    }
+    },
+    // Intentionally no background refresh to avoid fetching after each single update
   });
 
   // Add delete order mutation
@@ -492,12 +585,23 @@ const Orders = () => {
       }
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    onMutate: async (orderId: number) => {
+      await queryClient.cancelQueries({ queryKey: ['orders'] });
+      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      updateOrderInCache(orderId, (o) => {
+        const currentTags = Array.isArray(o.tags)
+          ? o.tags
+          : typeof o.tags === 'string'
+            ? o.tags.split(',').map((t: string) => t.trim())
+            : [];
+        return { ...o, tags: [...currentTags, 'deleted'] } as Order;
+      });
+      return { previous };
     },
-    onError: (error) => {
-      console.error('Error deleting order:', error);
-    }
+    onError: (_err, _orderId, context) => {
+      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+    },
+    // Intentionally no background refresh to avoid fetching after each single update
   });
 
   const handleOrderSelect = (orderId: number) => {
@@ -527,13 +631,19 @@ const Orders = () => {
     // Save current filter before bulk update
     setPreviousStatusFilter(statusFilter);
     
-    // Update each selected order's status
-    selectedOrders.forEach(orderId => {
-      updateStatusMutation.mutate({ orderId, status });
-    });
-    
-    // Clear selection after update
-    setSelectedOrders([]);
+    // Batch updates to avoid multiple invalidations/refetches
+    (async () => {
+      setSuppressOrdersInvalidation(true);
+      try {
+        await Promise.allSettled(
+          selectedOrders.map(orderId => updateStatusMutation.mutateAsync({ orderId, status }))
+        );
+      } finally {
+        setSuppressOrdersInvalidation(false);
+      }
+      scheduleBackgroundOrdersRefresh();
+      setSelectedOrders([]);
+    })();
   };
 
   const handleExport = () => {
@@ -859,10 +969,15 @@ const Orders = () => {
   }))
   // Then filter
   .filter((order: Order & { originalIndex: number }) => {
-    const matchesSearch = debouncedSearchQuery === '' || 
-      order.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase()) ||
-      `${order.customer?.first_name} ${order.customer?.last_name}`.toLowerCase().includes(debouncedSearchQuery.toLowerCase()) ||
-      order.customer?.phone.includes(debouncedSearchQuery);
+    const query = debouncedSearchQuery.toLowerCase();
+    const nameStr = (order.name || '').toLowerCase();
+    const customerNameStr = `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.toLowerCase();
+    const phoneStr = (order.customer?.phone || '').toLowerCase();
+
+    const matchesSearch = query === '' ||
+      nameStr.includes(query) ||
+      customerNameStr.includes(query) ||
+      phoneStr.includes(query);
     
     const matchesStatus = filterOrdersByStatus(order);
     
@@ -982,10 +1097,28 @@ const Orders = () => {
   };
 
   // Check if all selected orders have complete address tags
-  const allSelectedOrdersHaveCompleteTags = selectedOrders.length > 0 && 
+  // Helper: detect instapay order and whether it is marked paid
+  const isInstapayOrder = (order: any) => {
+    const gateways = Array.isArray(order?.payment_gateway_names) ? order.payment_gateway_names : [];
+    const gatewayStr = gateways.join(' ').toLowerCase();
+    const mentionsInsta = gatewayStr.includes('instapay') || gatewayStr.includes('pay via instapay');
+    const tags = Array.isArray(order?.tags) ? order.tags : typeof order?.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) : [];
+    return mentionsInsta || tags.includes('instapay') || tags.includes('instapay_paid');
+  };
+
+  const isInstapayPaid = (order: any) => {
+    const tags = Array.isArray(order?.tags) ? order.tags : typeof order?.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) : [];
+    return tags.includes('instapay_paid');
+  };
+
+  const allSelectedOrdersAreShippable = selectedOrders.length > 0 &&
     selectedOrders.every(orderId => {
       const order = orders?.find(o => o.id === orderId);
-      return order && hasCompleteAddressTags(order);
+      if (!order) return false;
+      const addressOk = hasCompleteAddressTags(order);
+      if (!addressOk) return false;
+      if (isInstapayOrder(order) && !isInstapayPaid(order)) return false;
+      return true;
     });
 
   const createShipmentsMutation = useMutation({
@@ -1009,7 +1142,7 @@ const Orders = () => {
       if (data.failed > 0) {
         toast.error(`Failed to create ${data.failed} shipments`);
       }
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      scheduleBackgroundOrdersRefresh();
       setSelectedOrders([]);
     },
     onError: (error: any) => {
@@ -1044,6 +1177,16 @@ const Orders = () => {
       return;
     }
 
+    // Block InstaPay orders that are not marked paid
+    const unpaidInstaPayOrders = orders?.filter(order => {
+      if (!selectedOrders.includes(order.id)) return false;
+      return isInstapayOrder(order) && !isInstapayPaid(order);
+    });
+    if (unpaidInstaPayOrders && unpaidInstaPayOrders.length > 0) {
+      toast.error('Some InstaPay orders are not marked as paid. Please set InstaPay to Paid first.');
+      return;
+    }
+
     try {
       await createShipmentsMutation.mutateAsync(selectedOrders);
     } catch (error) {
@@ -1066,12 +1209,16 @@ const Orders = () => {
       }
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    onMutate: async ({ orderId, newTags }: { orderId: number; newTags: string[] }) => {
+      await queryClient.cancelQueries({ queryKey: ['orders'] });
+      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      updateOrderInCache(orderId, (o) => ({ ...o, tags: newTags }));
+      return { previous };
     },
-    onError: (error) => {
-      console.error('Error updating tags:', error);
-    }
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+    },
+    // Intentionally no background refresh to avoid fetching after each single update
   });
 
   const handleUpdateTags = (orderId: number, newTags: string[]) => {
@@ -1321,6 +1468,7 @@ ___`;
                             onClick={() => {
                               setPreviousStatusFilter(statusFilter);
                               setStatusFilter(option.value);
+                              setIsSearchOverridingFilter(false);
                               close();
                             }}
                             className={`w-full text-left px-4 py-2 text-sm bg-white ${statusFilter === option.value ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-gray-700'} hover:bg-gray-100`}
@@ -1384,7 +1532,7 @@ ___`;
               // Show Add Shipments button for non-shipped orders
             <button
               onClick={handleCreateShipments}
-              disabled={createShipmentsMutation.isPending || !allSelectedOrdersHaveCompleteTags}
+              disabled={createShipmentsMutation.isPending || !allSelectedOrdersAreShippable}
               className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 disabled:bg-purple-400 disabled:cursor-not-allowed"
             >
               {createShipmentsMutation.isPending ? (
@@ -1460,7 +1608,7 @@ ___`;
                               className={`${
                                 active ? 'bg-gray-100' : ''
                               } block w-full text-left px-4 py-2 text-sm text-white bg-emerald-600 hover:bg-emerald-700`}
-                              onClick={() => handleBulkStatusUpdate('fulfill')}
+                              onClick={() => handleBulkStatusUpdate('fulfilled')}
                             >
                               Mark Fulfilled
                             </button>

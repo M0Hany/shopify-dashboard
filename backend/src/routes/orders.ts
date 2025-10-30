@@ -19,11 +19,9 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Get all orders with optional filters
 router.get('/', async (req: Request, res: Response) => {
   try {
-    // Add caching headers for orders endpoint
+    // Disable caching for dynamic orders data to ensure fresh responses
     res.set({
-      'Cache-Control': 'public, max-age=120, s-maxage=120', // Cache for 2 minutes
-      'ETag': `orders-${Date.now()}`,
-      'Last-Modified': new Date().toUTCString()
+      'Cache-Control': 'no-store'
     });
 
     const orders = await shopifyServiceInstance.getOrders({
@@ -53,7 +51,11 @@ router.get('/:id', async (req: Request, res: Response) => {
 // Update order status
 router.put('/:id/status', async (req: Request, res: Response) => {
   try {
-    await shopifyServiceInstance.updateOrderStatus(Number(req.params.id), req.body.status);
+    // Normalize incoming status values from frontend
+    let status: string = (req.body.status || '').toString();
+    if (status === 'confirmed') status = 'customer_confirmed';
+    if (status === 'fulfill') status = 'fulfilled';
+    await shopifyServiceInstance.updateOrderStatus(Number(req.params.id), status);
     res.json({ success: true });
   } catch (error) {
     logger.error('Error updating order status:', error);

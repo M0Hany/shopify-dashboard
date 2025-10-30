@@ -182,6 +182,10 @@ function mapOrderToMylerz(order: any): any {
     : typeof order.tags === 'string'
       ? order.tags.split(',').map((t: string) => t.trim())
       : [];
+  const gateways = Array.isArray(order.payment_gateway_names) ? order.payment_gateway_names : [];
+  const gatewayStr = gateways.join(' ').toLowerCase();
+  const isInstapay = gatewayStr.includes('instapay') || gatewayStr.includes('pay via instapay') || tags.includes('instapay') || tags.includes('instapay_paid');
+  const instapayPaid = tags.includes('instapay_paid');
   const cityId = getTagValue(tags, 'mylerz_city_id:');
   const neighborhoodId = getTagValue(tags, 'mylerz_neighborhood_id:');
   const subZoneId = getTagValue(tags, 'mylerz_subzone_id:');
@@ -204,11 +208,14 @@ function mapOrderToMylerz(order: any): any {
     EnName: "MylerzMain"
   };
 
+  // Decide payment model: COD vs Prepaid (InstaPay paid)
+  const isPrepaid = isInstapay && instapayPaid;
+
   return {
-    ValueOfGoods: Number(order.total_price),
+    ValueOfGoods: isPrepaid ? 0 : Number(order.total_price),
     hasValueOfGoodsError: false,
     HasError: false,
-    HaveCOD: false,
+    HaveCOD: !isPrepaid,
     DisableRefNumber: false,
     WareHouses: [warehouse],
     subscriberItemList: [subscriber],
@@ -217,12 +224,12 @@ function mapOrderToMylerz(order: any): any {
     packageNo: String(order.name).replace('#', ''),
     Description: 'crochet',
     TotalWeight: 0.5,
-    DeliveryCost: Number(order.total_price),
+    DeliveryCost: null,
     ServiceTypeId: 1,
     ServiceDatetypeID: 2,
     ServiceDate: now.toISOString(),
     ServiceCategoryId: 1,
-    PaymentTypeId: 2,
+    PaymentTypeId: isPrepaid ? 1 : 2,
     PackageSourceId: 3,
     CustomerName: `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim(),
     mobileNo: formatPhone(order.shipping_address?.phone || ''),
@@ -294,7 +301,7 @@ function mapOrderToMylerz(order: any): any {
     disabledObj1: true,
     SubscriberId: 9,
     PackagePiecesLength: 1,
-    hasCOD: true,
+    hasCOD: !isPrepaid,
     hasAddressCategoryError: false,
     hasCityError: false,
     hasPaymentTypeError: false,

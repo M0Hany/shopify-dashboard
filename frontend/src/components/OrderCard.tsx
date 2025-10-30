@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import instapayLogo from '../assets/instapay.png';
 import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
@@ -135,6 +136,17 @@ const OrderCard: React.FC<OrderCardProps> = ({
   
   // Ensure all tags are trimmed before searching
   const trimmedTags = tags.map((tag: string) => tag.trim());
+  const isInstapayPaid = trimmedTags.includes('instapay_paid');
+  const isInstapayOrder = useMemo(() => {
+    const paymentGateways: string[] = Array.isArray((order as any)?.payment_gateway_names)
+      ? (order as any).payment_gateway_names
+      : typeof (order as any)?.payment_gateway_names === 'string'
+        ? [(order as any).payment_gateway_names]
+        : [];
+    const gatewayStr = paymentGateways.join(' ').toLowerCase();
+    const gatewayMentionsInstaPay = gatewayStr.includes('instapay') || gatewayStr.includes('pay via instapay');
+    return gatewayMentionsInstaPay || trimmedTags.includes('instapay') || isInstapayPaid;
+  }, [order, trimmedTags, isInstapayPaid]);
   const dueDateTag = trimmedTags.find((tag: string) => tag.startsWith('custom_due_date:'));
   const startDateTag = trimmedTags.find((tag: string) => tag.startsWith('custom_start_date:'));
   
@@ -799,13 +811,8 @@ Your order is being picked up by the shipping company and should be arriving to 
             )}
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleTagClick}
-              className="p-1 transition-all duration-200 bg-white rounded-md"
-              title="Manage tags"
-            >
-              <TagIcon className="w-4 h-4 text-gray-400 hover:text-gray-600" />
-            </button>
+            {/* Tag button will be moved after InstaPay block to keep order: Priority -> InstaPay -> Tags */}
+            
             {isOrderCancelled && (
               <button
                 onClick={handleDeleteClick}
@@ -826,12 +833,89 @@ Your order is being picked up by the shipping company and should be arriving to 
                 <StarIconOutline className="w-4 h-4 text-gray-300" />
               )}
             </button>
+
+            {isInstapayOrder && (
+              <Menu as="div" className="relative inline-block text-left">
+                {({ open }) => (
+                  <>
+                    <div>
+                      <Menu.Button
+                        className="p-1 bg-white rounded-md focus:outline-none"
+                        title="InstaPay payment status"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <img
+                          src={instapayLogo}
+                          alt="InstaPay"
+                          className={`h-[15px] w-auto ${isInstapayPaid ? 'opacity-100' : 'opacity-30'}`}
+                        />
+                      </Menu.Button>
+                    </div>
+                    {open && (
+                      <Menu.Items
+                        static
+                        className="absolute right-0 mt-1 w-32 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="py-1">
+                          <Menu.Item>
+                            {({ active }) => (
+                              <button
+                                className={`block w-full text-left px-3 py-1.5 text-sm ${active ? 'bg-gray-100' : 'bg-white'} ${isInstapayPaid ? 'text-green-700' : 'text-gray-700'}`}
+                                onClick={() => {
+                                  const currentTags = Array.isArray(order.tags)
+                                    ? order.tags.map((t: string) => t.trim())
+                                    : typeof order.tags === 'string'
+                                      ? order.tags.split(',').map((t: string) => t.trim())
+                                      : [];
+                                  if (!currentTags.includes('instapay_paid')) {
+                                    const updated = [...currentTags, 'instapay_paid'];
+                                    onUpdateTags && onUpdateTags(order.id, updated);
+                                  }
+                                }}
+                              >
+                                Paid
+                              </button>
+                            )}
+                          </Menu.Item>
+                          <Menu.Item>
+                            {({ active }) => (
+                              <button
+                                className={`block w-full text-left px-3 py-1.5 text-sm ${active ? 'bg-gray-100' : 'bg-white'} ${!isInstapayPaid ? 'text-red-700' : 'text-gray-700'}`}
+                                onClick={() => {
+                                  const currentTags = Array.isArray(order.tags)
+                                    ? order.tags.map((t: string) => t.trim())
+                                    : typeof order.tags === 'string'
+                                      ? order.tags.split(',').map((t: string) => t.trim())
+                                      : [];
+                                  const updated = currentTags.filter((t: string) => t !== 'instapay_paid');
+                                  onUpdateTags && onUpdateTags(order.id, updated);
+                                }}
+                              >
+                                Not paid
+                              </button>
+                            )}
+                          </Menu.Item>
+                        </div>
+                      </Menu.Items>
+                    )}
+                  </>
+                )}
+              </Menu>
+            )}
+            <button
+              onClick={handleTagClick}
+              className="p-1 transition-all duration-200 bg-white rounded-md"
+              title="Manage tags"
+            >
+              <TagIcon className="w-4 h-4 text-gray-400 hover:text-gray-600" />
+            </button>
             <Menu as="div" className="relative inline-block text-left">
               {({ open }) => (
                 <>
                   <div>
                     <Menu.Button 
-                      className={`inline-flex items-center justify-center px-3 py-1.5 rounded-full text-sm font-medium ${getStatusColor(currentStatus)}`}
+                      className={`inline-flex items-center justify-center px-3 py-1.5 rounded-full text-sm font-medium leading-4 ${getStatusColor(currentStatus)}`}
                       onClick={(e) => e.stopPropagation()}
                     >
                       {currentStatus}
