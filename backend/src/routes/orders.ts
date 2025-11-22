@@ -51,10 +51,12 @@ router.get('/:id', async (req: Request, res: Response) => {
 // Update order status
 router.put('/:id/status', async (req: Request, res: Response) => {
   try {
-    // Normalize incoming status values from frontend
-    let status: string = (req.body.status || '').toString();
-    if (status === 'confirmed') status = 'customer_confirmed';
-    if (status === 'fulfill') status = 'fulfilled';
+    // Normalize incoming status values from frontend (trimmed and case-insensitive)
+    let status: string = (req.body.status || '').toString().trim();
+    const statusLower = status.toLowerCase();
+    if (statusLower === 'confirmed') status = 'customer_confirmed';
+    else if (statusLower === 'fulfill') status = 'fulfilled';
+    else if (statusLower === 'order-ready') status = 'order_ready';
     await shopifyServiceInstance.updateOrderStatus(Number(req.params.id), status);
     res.json({ success: true });
   } catch (error) {

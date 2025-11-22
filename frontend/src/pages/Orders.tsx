@@ -11,6 +11,7 @@ import FileUpload from '../components/FileUpload';
 import MoneyTransferUpload from '../components/MoneyTransferUpload';
 import { format } from 'date-fns';
 import { toast } from 'react-hot-toast';
+import { useNotifications } from '../hooks/useNotifications';
 
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
@@ -183,6 +184,7 @@ const convertToCairoTime = (date: Date): Date => {
 
 const statusOptions = [
   { value: 'pending', label: 'Pending Orders' },
+  { value: 'order-ready', label: 'Order Ready' },
   { value: 'confirmed', label: 'Confirmed Orders' },
   { value: 'ready-to-ship', label: 'Ready to Ship' },
   { value: 'shipped', label: 'Shipped' },
@@ -259,6 +261,7 @@ const Orders = () => {
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
+  const { showNotification } = useNotifications();
 
   // Debounce search query to reduce unnecessary filtering
   useEffect(() => {
@@ -486,10 +489,11 @@ const Orders = () => {
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ orderId, status }: { orderId: number; status: string }) => {
-      // Normalize frontend status values to backend-expected tags
-      let serverStatus = status;
-      if (status === 'confirmed') serverStatus = 'customer_confirmed';
-      if (status === 'fulfill') serverStatus = 'fulfilled';
+      // Normalize frontend status values to backend-expected tags (trimmed and case-insensitive)
+      let serverStatus = status.trim();
+      if (status.trim().toLowerCase() === 'confirmed') serverStatus = 'customer_confirmed';
+      else if (status.trim().toLowerCase() === 'fulfill') serverStatus = 'fulfilled';
+      else if (status.trim().toLowerCase() === 'order-ready') serverStatus = 'order_ready';
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/status`, {
         method: 'PUT',
         headers: {
@@ -511,12 +515,18 @@ const Orders = () => {
           : typeof o.tags === 'string'
             ? o.tags.split(',').map((t: string) => t.trim())
             : [];
-        const statusTags = ['customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
-        let filtered = currentTags.filter((t: string) => !statusTags.includes(t));
-        let tagValue = status;
-        if (status === 'confirmed') tagValue = 'customer_confirmed';
-        if (status !== 'pending') filtered = [...filtered, tagValue];
-        if (status === 'fulfilled') filtered = filtered.filter((t: string) => t !== 'priority');
+        // Remove existing status tags (case-insensitive)
+        const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+        let filtered = currentTags.filter((t: string) => {
+          const trimmed = t.trim().toLowerCase();
+          return !statusTags.some(st => st.trim().toLowerCase() === trimmed);
+        });
+        // Map frontend status to tag value (trimmed)
+        let tagValue = status.trim();
+        if (status.trim().toLowerCase() === 'confirmed') tagValue = 'customer_confirmed';
+        else if (status.trim().toLowerCase() === 'order-ready') tagValue = 'order_ready';
+        if (status.trim().toLowerCase() !== 'pending') filtered = [...filtered, tagValue.trim()];
+        if (status.trim().toLowerCase() === 'fulfilled') filtered = filtered.filter((t: string) => t.trim().toLowerCase() !== 'priority');
         return { ...o, tags: filtered } as Order;
       });
       return { previous };
@@ -630,6 +640,63 @@ const Orders = () => {
     
     // Save current filter before bulk update
     setPreviousStatusFilter(statusFilter);
+    
+    // Helper to get current status from order tags
+    const getOrderStatus = (order: Order): string => {
+      const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) : [];
+      const trimmedTags = tags.map((tag: string) => tag.trim().toLowerCase());
+      
+      if (trimmedTags.includes('cancelled')) return 'cancelled';
+      if (trimmedTags.includes('paid')) return 'paid';
+      if (trimmedTags.includes('fulfilled')) return 'fulfilled';
+      if (trimmedTags.includes('shipped')) return 'shipped';
+      if (trimmedTags.includes('ready_to_ship')) return 'ready_to_ship';
+      if (trimmedTags.includes('customer_confirmed')) return 'confirmed';
+      if (trimmedTags.includes('order_ready')) return 'order-ready';
+      return 'pending';
+    };
+    
+    // Check for status transitions and show notifications (one notification per bulk operation)
+    const normalizedNewStatus = status.trim().toLowerCase();
+    const selectedOrdersData = orders?.filter(order => selectedOrders.includes(order.id)) || [];
+    
+    // Count orders that match the transition pattern
+    let pendingToReadyCount = 0;
+    let readyToConfirmedCount = 0;
+    let toReadyToShipCount = 0;
+    
+    selectedOrdersData.forEach(order => {
+      const currentStatus = getOrderStatus(order);
+      const normalizedCurrent = currentStatus.trim().toLowerCase();
+      
+      if (normalizedCurrent === 'pending' && normalizedNewStatus === 'order-ready') {
+        pendingToReadyCount++;
+      } else if (normalizedCurrent === 'order-ready' && normalizedNewStatus === 'confirmed') {
+        readyToConfirmedCount++;
+      } else if (normalizedNewStatus === 'ready_to_ship' && (normalizedCurrent === 'confirmed' || normalizedCurrent === 'order-ready')) {
+        toReadyToShipCount++;
+      }
+    });
+    
+    // Show one notification per transition type
+    if (pendingToReadyCount > 0) {
+      showNotification('Bulk: Orders Ready', {
+        body: `${pendingToReadyCount} order(s) marked as ready`,
+        tag: `bulk-order-ready-${Date.now()}`,
+      });
+    }
+    if (readyToConfirmedCount > 0) {
+      showNotification('Bulk: Orders Confirmed', {
+        body: `${readyToConfirmedCount} order(s) confirmed`,
+        tag: `bulk-order-confirmed-${Date.now()}`,
+      });
+    }
+    if (toReadyToShipCount > 0) {
+      showNotification('Bulk: Ready to Ship', {
+        body: `${toReadyToShipCount} order(s) ready to ship`,
+        tag: `bulk-ready-to-ship-${Date.now()}`,
+      });
+    }
     
     // Batch updates to avoid multiple invalidations/refetches
     (async () => {
@@ -781,19 +848,24 @@ const Orders = () => {
           ? currentTags.split(',').map((t: string) => t.trim())
           : [];
         
-      // Remove existing status tags
-        const statusTags = ['customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
-      const filteredTags = tags.filter((t: string) => !statusTags.includes(t));
+      // Remove existing status tags (trimmed and case-insensitive)
+        const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+      const filteredTags = tags.filter((t: string) => {
+        const trimmed = t.trim().toLowerCase();
+        return !statusTags.some(st => st.trim().toLowerCase() === trimmed);
+      });
         
-        // Map frontend status values to actual tag values
-        let tagValue = status;
-        if (status === 'confirmed') {
+        // Map frontend status values to actual tag values (trimmed)
+        let tagValue = status.trim();
+        if (status.trim().toLowerCase() === 'confirmed') {
           tagValue = 'customer_confirmed';
+        } else if (status.trim().toLowerCase() === 'order-ready') {
+          tagValue = 'order_ready';
         }
         
         // Add the new status tag if it's not "pending"
-        if (status !== 'pending') {
-        filteredTags.push(tagValue);
+        if (status.trim().toLowerCase() !== 'pending') {
+        filteredTags.push(tagValue.trim());
         }
 
         // If status is fulfilled, remove priority tag
@@ -853,8 +925,9 @@ const Orders = () => {
       return true;
     }
 
-    // Define status tags with proper trimming
+    // Define status tags with proper trimming (case-insensitive comparison)
     const statusTags = {
+      orderReady: 'order_ready',
       shipped: 'shipped',
       readyToShip: 'ready_to_ship',
       fulfilled: 'fulfilled',
@@ -866,18 +939,25 @@ const Orders = () => {
     switch(statusFilter) {
       case 'pending':
         // Show only pending orders (no status tags)
-        // Exclude orders with any status tag including customer_confirmed
-        return !trimmedTags.some(tag => [
-          statusTags.shipped,
-          statusTags.readyToShip,
-          statusTags.fulfilled,
-          statusTags.cancelled,
-          statusTags.paid,
-          statusTags.customerConfirmed
-        ].includes(tag.trim()));
+        // Exclude orders with any status tag including order_ready and customer_confirmed
+        return !trimmedTags.some(tag => {
+          const trimmed = tag.trim().toLowerCase();
+          return [
+            statusTags.orderReady.toLowerCase(),
+            statusTags.shipped.toLowerCase(),
+            statusTags.readyToShip.toLowerCase(),
+            statusTags.fulfilled.toLowerCase(),
+            statusTags.cancelled.toLowerCase(),
+            statusTags.paid.toLowerCase(),
+            statusTags.customerConfirmed.toLowerCase()
+          ].includes(trimmed);
+        });
+      case 'order-ready':
+        // Show only orders with order_ready tag (case-insensitive)
+        return trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.orderReady.toLowerCase());
       case 'confirmed':
-        // Show only orders with customer_confirmed tag
-        return trimmedTags.some(tag => tag.trim() === statusTags.customerConfirmed);
+        // Show only orders with customer_confirmed tag (case-insensitive)
+        return trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.customerConfirmed.toLowerCase());
       case 'ready-to-ship':
         return trimmedTags.some(tag => tag.trim() === statusTags.readyToShip);
       case 'shipped':
@@ -903,23 +983,25 @@ const Orders = () => {
     const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',') : [];
     const trimmedTags = tags.map((t: string) => t.trim());
     
-    // Define status tags with proper trimming
+    // Define status tags with proper trimming (case-insensitive)
     const statusTags = {
       cancelled: 'cancelled',
       paid: 'paid',
       fulfilled: 'fulfilled',
       shipped: 'shipped',
       readyToShip: 'ready_to_ship',
-      customerConfirmed: 'customer_confirmed'
+      customerConfirmed: 'customer_confirmed',
+      orderReady: 'order_ready'
     };
     
     // Return priority number based on status (higher number = lower in sort)
-    if (trimmedTags.some(tag => tag.trim() === statusTags.cancelled)) return 70;
-    if (trimmedTags.some(tag => tag.trim() === statusTags.paid)) return 60;
-    if (trimmedTags.some(tag => tag.trim() === statusTags.fulfilled)) return 50;
-    if (trimmedTags.some(tag => tag.trim() === statusTags.shipped)) return 40;
-    if (trimmedTags.some(tag => tag.trim() === statusTags.readyToShip)) return 30;
-    if (trimmedTags.some(tag => tag.trim() === statusTags.customerConfirmed)) return 20;
+    if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.cancelled.toLowerCase())) return 70;
+    if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.paid.toLowerCase())) return 60;
+    if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.fulfilled.toLowerCase())) return 50;
+    if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.shipped.toLowerCase())) return 40;
+    if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.readyToShip.toLowerCase())) return 30;
+    if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.customerConfirmed.toLowerCase())) return 20;
+    if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.orderReady.toLowerCase())) return 15;
     return 10; // pending orders should be first
   };
 
@@ -1289,9 +1371,12 @@ ___`;
           ? order.tags.split(',').map(tag => tag.trim())
           : [];
       
-      // Check if order is pending (no status tags and not deleted)
-      return !tags.includes('deleted') && 
-             !tags.some(tag => ['customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'cancelled', 'paid'].includes(tag.trim()));
+      // Check if order is pending (no status tags and not deleted) - case-insensitive
+      return !tags.some(tag => tag.trim().toLowerCase() === 'deleted') && 
+             !tags.some(tag => {
+               const trimmed = tag.trim().toLowerCase();
+               return ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'cancelled', 'paid'].some(st => st.toLowerCase() === trimmed);
+             });
     });
 
     const itemCounts: { [key: string]: number } = {};

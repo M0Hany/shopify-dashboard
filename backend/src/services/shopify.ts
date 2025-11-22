@@ -289,15 +289,16 @@ export class ShopifyService {
           ? order.tags.map((tag: string) => tag.trim())
           : [];
       
-      // Filter out existing status tags and shipping date tag
-      const statusTags = ['customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'cancelled'].map(tag => tag.trim());
-      const filteredTags = existingTags.filter((tag: string) => 
-        !statusTags.includes(tag.trim()) &&
-        !tag.startsWith('shipping_date:')
-      );
+      // Filter out existing status tags and shipping date tag (case-insensitive)
+      const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'cancelled'].map(tag => tag.trim().toLowerCase());
+      const filteredTags = existingTags.filter((tag: string) => {
+        const trimmed = tag.trim().toLowerCase();
+        return !statusTags.includes(trimmed) && !tag.trim().startsWith('shipping_date:');
+      });
 
       // Add new status tag if not pending (ensure it's trimmed)
-      if (status !== 'pending') {
+      const trimmedStatus = status.trim().toLowerCase();
+      if (trimmedStatus !== 'pending') {
         filteredTags.push(status.trim());
       }
 

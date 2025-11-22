@@ -12,6 +12,7 @@ import { toast } from 'react-hot-toast';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { useNavigate } from 'react-router-dom';
+import { useNotifications } from '../hooks/useNotifications';
 
 interface LocationSelections {
   cityId: string | null;
@@ -105,6 +106,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
   onUpdateStartDate
 }) => {
   const navigate = useNavigate();
+  const { showNotification } = useNotifications();
   const [showNoteDialog, setShowNoteDialog] = useState(false);
   const [showWhatsAppDialog, setShowWhatsAppDialog] = useState(false);
   const [showReadyConfirmDialog, setShowReadyConfirmDialog] = useState(false);
@@ -195,28 +197,31 @@ const OrderCard: React.FC<OrderCardProps> = ({
     // Trim all tags for consistent matching
     const trimmedTags = tags.map((tag: string) => tag.trim());
     
-    // Define status tags with proper trimming
+    // Define status tags with proper trimming (case-insensitive)
     const statusTags = {
       cancelled: 'cancelled',
       paid: 'paid',
       fulfilled: 'fulfilled',
       shipped: 'shipped',
-              readyToShip: 'ready_to_ship',
-      customerConfirmed: 'customer_confirmed'
+      readyToShip: 'ready_to_ship',
+      customerConfirmed: 'customer_confirmed',
+      orderReady: 'order_ready'
     } as const;
     
-    if (trimmedTags.some((tag: string) => tag.trim() === statusTags.cancelled)) {
+    if (trimmedTags.some((tag: string) => tag.trim().toLowerCase() === statusTags.cancelled.toLowerCase())) {
       return 'cancelled';
-    } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.paid)) {
+    } else if (trimmedTags.some((tag: string) => tag.trim().toLowerCase() === statusTags.paid.toLowerCase())) {
       return 'paid';
-    } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.fulfilled)) {
+    } else if (trimmedTags.some((tag: string) => tag.trim().toLowerCase() === statusTags.fulfilled.toLowerCase())) {
       return 'fulfilled';
-    } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.shipped)) {
+    } else if (trimmedTags.some((tag: string) => tag.trim().toLowerCase() === statusTags.shipped.toLowerCase())) {
       return 'shipped';
-    } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.readyToShip)) {
+    } else if (trimmedTags.some((tag: string) => tag.trim().toLowerCase() === statusTags.readyToShip.toLowerCase())) {
       return 'ready_to_ship';
-    } else if (trimmedTags.some((tag: string) => tag.trim() === statusTags.customerConfirmed)) {
+    } else if (trimmedTags.some((tag: string) => tag.trim().toLowerCase() === statusTags.customerConfirmed.toLowerCase())) {
       return 'confirmed';
+    } else if (trimmedTags.some((tag: string) => tag.trim().toLowerCase() === statusTags.orderReady.toLowerCase())) {
+      return 'order-ready';
     } else {
       return 'pending';
     }
@@ -232,6 +237,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
     switch (status) {
       case 'pending':
         return 'bg-yellow-100 text-yellow-800';
+      case 'order-ready':
+        return 'bg-orange-500 text-white';
       case 'confirmed':
         return 'bg-green-600 text-white';
       case 'ready_to_ship':
@@ -258,6 +265,30 @@ const OrderCard: React.FC<OrderCardProps> = ({
     // Update the local status immediately for UI feedback
     setCurrentStatus(newStatus);
     
+    // Show browser notification for specific status transitions
+    const normalizedPrev = previousStatus.trim().toLowerCase();
+    const normalizedNew = newStatus.trim().toLowerCase();
+    
+    if (normalizedPrev === 'pending' && normalizedNew === 'order-ready') {
+      showNotification('Order Ready', {
+        body: `Order ${order.name} is now ready`,
+        tag: `order-ready-${order.id}`,
+      });
+    } else if (normalizedPrev === 'order-ready' && normalizedNew === 'confirmed') {
+      showNotification('Order Confirmed', {
+        body: `Order ${order.name} has been confirmed by customer`,
+        tag: `order-confirmed-${order.id}`,
+      });
+    } else if (normalizedNew === 'ready_to_ship') {
+      // Check if coming from confirmed or order-ready
+      if (normalizedPrev === 'confirmed' || normalizedPrev === 'order-ready') {
+        showNotification('Ready to Ship', {
+          body: `Order ${order.name} is ready to ship`,
+          tag: `ready-to-ship-${order.id}`,
+        });
+      }
+    }
+    
     // If the new status is shipped, open the shipping notification modal
     // Use setTimeout to ensure the modal opens after the status update is processed
     if (newStatus === 'shipped') {
@@ -280,8 +311,13 @@ const OrderCard: React.FC<OrderCardProps> = ({
     
     // Send status update to the server
     if (onUpdateStatus) {
-      // Map the status to the correct tag
-      const statusTag = newStatus === 'confirmed' ? 'customer_confirmed' : newStatus;
+      // Map the status to the correct tag (trimmed and case-insensitive)
+      let statusTag = newStatus.trim();
+      if (newStatus.trim().toLowerCase() === 'confirmed') {
+        statusTag = 'customer_confirmed';
+      } else if (newStatus.trim().toLowerCase() === 'order-ready') {
+        statusTag = 'order_ready';
+      }
       onUpdateStatus(order.id, statusTag);
     }
   };
@@ -936,6 +972,16 @@ Your order is being picked up by the shipping company and should be arriving to 
                               onClick={() => handleStatusChange('pending')}
                             >
                               Pending
+                            </button>
+                          )}
+                        </Menu.Item>
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('order-ready')}`}
+                              onClick={() => handleStatusChange('order-ready')}
+                            >
+                              Order Ready
                             </button>
                           )}
                         </Menu.Item>

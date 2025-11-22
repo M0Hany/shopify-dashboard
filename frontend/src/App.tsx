@@ -4,6 +4,7 @@ import Orders from './pages/Orders';
 import Finance from './pages/Finance';
 import WhatsAppInbox from './pages/WhatsAppInbox';
 import { Layout } from './components/layout/Layout';
+import { useNotifications } from './hooks/useNotifications';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,6 +30,9 @@ const queryClient = new QueryClient({
 });
 
 function App() {
+  // Request notification permission on app load
+  useNotifications();
+
   return (
     <QueryClientProvider client={queryClient}>
       <HashRouter>
