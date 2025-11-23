@@ -1657,6 +1657,18 @@ ___`;
                             <button
                               className={`${
                                 active ? 'bg-gray-100' : ''
+                              } block w-full text-left px-4 py-2 text-sm text-white bg-orange-500 hover:bg-orange-600`}
+                              onClick={() => handleBulkStatusUpdate('order-ready')}
+                            >
+                              Mark Order Ready
+                            </button>
+                          )}
+                        </Menu.Item>
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`${
+                                active ? 'bg-gray-100' : ''
                               } block w-full text-left px-4 py-2 text-sm text-white bg-green-600 hover:bg-green-700`}
                               onClick={() => handleBulkStatusUpdate('confirmed')}
                             >
