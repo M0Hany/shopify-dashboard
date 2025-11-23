@@ -11,7 +11,6 @@ import FileUpload from '../components/FileUpload';
 import MoneyTransferUpload from '../components/MoneyTransferUpload';
 import { format } from 'date-fns';
 import { toast } from 'react-hot-toast';
-import { useNotifications } from '../hooks/useNotifications';
 
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
@@ -261,7 +260,6 @@ const Orders = () => {
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const { showNotification } = useNotifications();
 
   // Debounce search query to reduce unnecessary filtering
   useEffect(() => {
@@ -538,6 +536,66 @@ const Orders = () => {
     // Intentionally no background refresh to avoid fetching after each single update
   });
 
+  const bulkUpdateStatusMutation = useMutation({
+    mutationFn: async ({ orderIds, status }: { orderIds: number[]; status: string }) => {
+      // Normalize frontend status values to backend-expected tags (trimmed and case-insensitive)
+      let serverStatus = status.trim();
+      if (status.trim().toLowerCase() === 'confirmed') serverStatus = 'customer_confirmed';
+      else if (status.trim().toLowerCase() === 'fulfill') serverStatus = 'fulfilled';
+      else if (status.trim().toLowerCase() === 'order-ready') serverStatus = 'order_ready';
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/bulk/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ orderIds, status: serverStatus }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to bulk update order status');
+      }
+      return response.json();
+    },
+    onMutate: async ({ orderIds, status }) => {
+      await queryClient.cancelQueries({ queryKey: ['orders'] });
+      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      
+      // Optimistically update all orders in cache
+      orderIds.forEach(orderId => {
+        updateOrderInCache(orderId, (o) => {
+          const currentTags = Array.isArray(o.tags)
+            ? o.tags
+            : typeof o.tags === 'string'
+              ? o.tags.split(',').map((t: string) => t.trim())
+              : [];
+          // Remove existing status tags (case-insensitive)
+          const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+          let filtered = currentTags.filter((t: string) => {
+            const trimmed = t.trim().toLowerCase();
+            return !statusTags.some(st => st.trim().toLowerCase() === trimmed);
+          });
+          // Map frontend status to tag value (trimmed)
+          let tagValue = status.trim();
+          if (status.trim().toLowerCase() === 'confirmed') tagValue = 'customer_confirmed';
+          else if (status.trim().toLowerCase() === 'order-ready') tagValue = 'order_ready';
+          if (status.trim().toLowerCase() !== 'pending') filtered = [...filtered, tagValue.trim()];
+          if (status.trim().toLowerCase() === 'fulfilled') filtered = filtered.filter((t: string) => t.trim().toLowerCase() !== 'priority');
+          return { ...o, tags: filtered } as Order;
+        });
+      });
+      
+      return { previous };
+    },
+    onError: (error, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+      console.error('Error bulk updating order status:', error);
+    },
+    onSettled: () => {
+      scheduleBackgroundOrdersRefresh();
+    },
+  });
+
   const fulfillOrderMutation = useMutation({
     mutationFn: async (orderId: number) => {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/fulfill`, {
@@ -641,76 +699,19 @@ const Orders = () => {
     // Save current filter before bulk update
     setPreviousStatusFilter(statusFilter);
     
-    // Helper to get current status from order tags
-    const getOrderStatus = (order: Order): string => {
-      const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) : [];
-      const trimmedTags = tags.map((tag: string) => tag.trim().toLowerCase());
-      
-      if (trimmedTags.includes('cancelled')) return 'cancelled';
-      if (trimmedTags.includes('paid')) return 'paid';
-      if (trimmedTags.includes('fulfilled')) return 'fulfilled';
-      if (trimmedTags.includes('shipped')) return 'shipped';
-      if (trimmedTags.includes('ready_to_ship')) return 'ready_to_ship';
-      if (trimmedTags.includes('customer_confirmed')) return 'confirmed';
-      if (trimmedTags.includes('order_ready')) return 'order-ready';
-      return 'pending';
-    };
-    
-    // Check for status transitions and show notifications (one notification per bulk operation)
-    const normalizedNewStatus = status.trim().toLowerCase();
-    const selectedOrdersData = orders?.filter(order => selectedOrders.includes(order.id)) || [];
-    
-    // Count orders that match the transition pattern
-    let pendingToReadyCount = 0;
-    let readyToConfirmedCount = 0;
-    let toReadyToShipCount = 0;
-    
-    selectedOrdersData.forEach(order => {
-      const currentStatus = getOrderStatus(order);
-      const normalizedCurrent = currentStatus.trim().toLowerCase();
-      
-      if (normalizedCurrent === 'pending' && normalizedNewStatus === 'order-ready') {
-        pendingToReadyCount++;
-      } else if (normalizedCurrent === 'order-ready' && normalizedNewStatus === 'confirmed') {
-        readyToConfirmedCount++;
-      } else if (normalizedNewStatus === 'ready_to_ship' && (normalizedCurrent === 'confirmed' || normalizedCurrent === 'order-ready')) {
-        toReadyToShipCount++;
+    // Use bulk update mutation
+    bulkUpdateStatusMutation.mutate(
+      { orderIds: selectedOrders, status },
+      {
+        onSuccess: () => {
+          setSelectedOrders([]);
+          toast.success(`Successfully updated ${selectedOrders.length} order${selectedOrders.length > 1 ? 's' : ''}`);
+        },
+        onError: (error: any) => {
+          toast.error(error.message || 'Failed to bulk update orders');
+        }
       }
-    });
-    
-    // Show one notification per transition type
-    if (pendingToReadyCount > 0) {
-      showNotification('Bulk: Orders Ready', {
-        body: `${pendingToReadyCount} order(s) marked as ready`,
-        tag: `bulk-order-ready-${Date.now()}`,
-      });
-    }
-    if (readyToConfirmedCount > 0) {
-      showNotification('Bulk: Orders Confirmed', {
-        body: `${readyToConfirmedCount} order(s) confirmed`,
-        tag: `bulk-order-confirmed-${Date.now()}`,
-      });
-    }
-    if (toReadyToShipCount > 0) {
-      showNotification('Bulk: Ready to Ship', {
-        body: `${toReadyToShipCount} order(s) ready to ship`,
-        tag: `bulk-ready-to-ship-${Date.now()}`,
-      });
-    }
-    
-    // Batch updates to avoid multiple invalidations/refetches
-    (async () => {
-      setSuppressOrdersInvalidation(true);
-      try {
-        await Promise.allSettled(
-          selectedOrders.map(orderId => updateStatusMutation.mutateAsync({ orderId, status }))
-        );
-      } finally {
-        setSuppressOrdersInvalidation(false);
-      }
-      scheduleBackgroundOrdersRefresh();
-      setSelectedOrders([]);
-    })();
+    );
   };
 
   const handleExport = () => {

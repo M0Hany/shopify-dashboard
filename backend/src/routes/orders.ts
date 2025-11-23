@@ -8,6 +8,7 @@ import { shopifyService } from '../services/shopify';
 import { OrderConfirmationService } from '../services/orderConfirmation.service';
 import { WhatsAppService } from '../services/whatsapp';
 import { AxiosError } from 'axios';
+import { discordNotificationService } from '../services/discordNotifications';
 
 const router = express.Router();
 const shopifyServiceInstance = new ShopifyService();
@@ -48,16 +49,147 @@ router.get('/:id', async (req: Request, res: Response) => {
   }
 });
 
+// Helper function to determine current status from tags
+function getCurrentStatusFromTags(tags: string[] | string | null | undefined): string {
+  if (!tags) return 'pending';
+  
+  const tagArray = Array.isArray(tags)
+    ? tags.map((t: string) => t.trim().toLowerCase())
+    : typeof tags === 'string'
+      ? tags.split(',').map((t: string) => t.trim().toLowerCase())
+      : [];
+
+  if (tagArray.includes('cancelled')) return 'cancelled';
+  if (tagArray.includes('paid')) return 'paid';
+  if (tagArray.includes('fulfilled')) return 'fulfilled';
+  if (tagArray.includes('shipped')) return 'shipped';
+  if (tagArray.includes('ready_to_ship')) return 'ready_to_ship';
+  if (tagArray.includes('customer_confirmed')) return 'customer_confirmed';
+  if (tagArray.includes('order_ready')) return 'order_ready';
+  return 'pending';
+}
+
+// Bulk update order status
+router.put('/bulk/status', async (req: Request, res: Response) => {
+  try {
+    const { orderIds, status } = req.body;
+    
+    if (!Array.isArray(orderIds) || orderIds.length === 0) {
+      return res.status(400).json({ error: 'orderIds must be a non-empty array' });
+    }
+    
+    if (!status) {
+      return res.status(400).json({ error: 'status is required' });
+    }
+    
+    // Normalize incoming status values (trimmed and case-insensitive)
+    let normalizedStatus: string = status.toString().trim();
+    const statusLower = normalizedStatus.toLowerCase();
+    if (statusLower === 'confirmed') normalizedStatus = 'customer_confirmed';
+    else if (statusLower === 'fulfill') normalizedStatus = 'fulfilled';
+    else if (statusLower === 'order-ready') normalizedStatus = 'order_ready';
+    
+    const results = {
+      successful: [] as number[],
+      failed: [] as Array<{ orderId: number; error: string }>
+    };
+    
+    // Get all orders before update to determine previous statuses
+    const ordersBefore = await Promise.allSettled(
+      orderIds.map((id: number) => shopifyServiceInstance.getOrder(Number(id)))
+    );
+    
+    // Determine previous status (use first successful order's status as reference)
+    let previousStatus = 'pending';
+    const successfulOrdersBefore = ordersBefore
+      .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
+      .map(result => result.value);
+    
+    if (successfulOrdersBefore.length > 0) {
+      previousStatus = getCurrentStatusFromTags(successfulOrdersBefore[0].tags);
+    }
+    
+    const orderNames: string[] = [];
+    
+    // Update each order
+    for (let i = 0; i < orderIds.length; i++) {
+      const orderId = Number(orderIds[i]);
+      const orderBeforeResult = ordersBefore[i];
+      
+      try {
+        await shopifyServiceInstance.updateOrderStatus(orderId, normalizedStatus);
+        results.successful.push(orderId);
+        
+        // Get order name for notification (if we successfully fetched it before)
+        if (orderBeforeResult.status === 'fulfilled') {
+          orderNames.push(orderBeforeResult.value.name);
+        }
+      } catch (error: any) {
+        results.failed.push({
+          orderId,
+          error: error.message || 'Unknown error'
+        });
+      }
+    }
+    
+    // Send bulk Discord notification if any orders were successfully updated
+    if (results.successful.length > 0 && orderNames.length > 0) {
+      discordNotificationService.notifyBulkStatusChange({
+        orderCount: results.successful.length,
+        previousStatus,
+        newStatus: normalizedStatus,
+        orderNames
+      }).catch(err => {
+        logger.error('Failed to send Discord bulk notification', err);
+      });
+    }
+    
+    res.json({
+      success: true,
+      successful: results.successful.length,
+      failed: results.failed.length,
+      details: results
+    });
+  } catch (error) {
+    logger.error('Error bulk updating order status:', error);
+    res.status(500).json({ error: 'Failed to bulk update order status' });
+  }
+});
+
 // Update order status
 router.put('/:id/status', async (req: Request, res: Response) => {
   try {
+    const orderId = Number(req.params.id);
+    
+    // Get order before update to determine previous status
+    const orderBefore = await shopifyServiceInstance.getOrder(orderId);
+    const previousStatus = getCurrentStatusFromTags(orderBefore.tags);
+    
     // Normalize incoming status values from frontend (trimmed and case-insensitive)
     let status: string = (req.body.status || '').toString().trim();
     const statusLower = status.toLowerCase();
     if (statusLower === 'confirmed') status = 'customer_confirmed';
     else if (statusLower === 'fulfill') status = 'fulfilled';
     else if (statusLower === 'order-ready') status = 'order_ready';
-    await shopifyServiceInstance.updateOrderStatus(Number(req.params.id), status);
+    
+    // Update the order status
+    await shopifyServiceInstance.updateOrderStatus(orderId, status);
+    
+    // Get updated order for notification
+    const orderAfter = await shopifyServiceInstance.getOrder(orderId);
+    
+    // Send Discord notification (non-blocking)
+    discordNotificationService.notifyOrderStatusChange({
+      orderId: orderAfter.id,
+      orderName: orderAfter.name,
+      customerName: `${orderAfter.customer?.first_name || ''} ${orderAfter.customer?.last_name || ''}`.trim() || 'N/A',
+      previousStatus,
+      newStatus: status
+    }).catch(err => {
+      logger.error('Failed to send Discord notification', err);
+      // Don't fail the request if notification fails
+    });
+    
     res.json({ success: true });
   } catch (error) {
     logger.error('Error updating order status:', error);

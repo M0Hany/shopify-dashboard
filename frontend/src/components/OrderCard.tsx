@@ -12,7 +12,6 @@ import { toast } from 'react-hot-toast';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { useNavigate } from 'react-router-dom';
-import { useNotifications } from '../hooks/useNotifications';
 
 interface LocationSelections {
   cityId: string | null;
@@ -106,7 +105,6 @@ const OrderCard: React.FC<OrderCardProps> = ({
   onUpdateStartDate
 }) => {
   const navigate = useNavigate();
-  const { showNotification } = useNotifications();
   const [showNoteDialog, setShowNoteDialog] = useState(false);
   const [showWhatsAppDialog, setShowWhatsAppDialog] = useState(false);
   const [showReadyConfirmDialog, setShowReadyConfirmDialog] = useState(false);
@@ -264,30 +262,6 @@ const OrderCard: React.FC<OrderCardProps> = ({
     
     // Update the local status immediately for UI feedback
     setCurrentStatus(newStatus);
-    
-    // Show browser notification for specific status transitions
-    const normalizedPrev = previousStatus.trim().toLowerCase();
-    const normalizedNew = newStatus.trim().toLowerCase();
-    
-    if (normalizedPrev === 'pending' && normalizedNew === 'order-ready') {
-      showNotification('Order Ready', {
-        body: `Order ${order.name} is now ready`,
-        tag: `order-ready-${order.id}`,
-      });
-    } else if (normalizedPrev === 'order-ready' && normalizedNew === 'confirmed') {
-      showNotification('Order Confirmed', {
-        body: `Order ${order.name} has been confirmed by customer`,
-        tag: `order-confirmed-${order.id}`,
-      });
-    } else if (normalizedNew === 'ready_to_ship') {
-      // Check if coming from confirmed or order-ready
-      if (normalizedPrev === 'confirmed' || normalizedPrev === 'order-ready') {
-        showNotification('Ready to Ship', {
-          body: `Order ${order.name} is ready to ship`,
-          tag: `ready-to-ship-${order.id}`,
-        });
-      }
-    }
     
     // If the new status is shipped, open the shipping notification modal
     // Use setTimeout to ensure the modal opens after the status update is processed
