@@ -63,7 +63,8 @@ function getCurrentStatusFromTags(tags: string[] | string | null | undefined): s
   if (tagArray.includes('paid')) return 'paid';
   if (tagArray.includes('fulfilled')) return 'fulfilled';
   if (tagArray.includes('shipped')) return 'shipped';
-  if (tagArray.includes('ready_to_ship')) return 'ready_to_ship';
+  // Check for both ready_to_ship and ready-to-ship variations
+  if (tagArray.includes('ready_to_ship') || tagArray.includes('ready-to-ship')) return 'ready_to_ship';
   if (tagArray.includes('customer_confirmed')) return 'customer_confirmed';
   if (tagArray.includes('order_ready')) return 'order_ready';
   return 'pending';
@@ -88,6 +89,7 @@ router.put('/bulk/status', async (req: Request, res: Response) => {
     if (statusLower === 'confirmed') normalizedStatus = 'customer_confirmed';
     else if (statusLower === 'fulfill') normalizedStatus = 'fulfilled';
     else if (statusLower === 'order-ready') normalizedStatus = 'order_ready';
+    else if (statusLower === 'ready-to-ship') normalizedStatus = 'ready_to_ship';
     
     const results = {
       successful: [] as number[],
@@ -117,13 +119,15 @@ router.put('/bulk/status', async (req: Request, res: Response) => {
       const orderBeforeResult = ordersBefore[i];
       
       try {
-        await shopifyServiceInstance.updateOrderStatus(orderId, normalizedStatus);
-        results.successful.push(orderId);
-        
-        // Get order name for notification (if we successfully fetched it before)
+        // Get previous status for this specific order
+        let orderPreviousStatus = 'pending';
         if (orderBeforeResult.status === 'fulfilled') {
+          orderPreviousStatus = getCurrentStatusFromTags(orderBeforeResult.value.tags);
           orderNames.push(orderBeforeResult.value.name);
         }
+        
+        await shopifyServiceInstance.updateOrderStatus(orderId, normalizedStatus, orderPreviousStatus);
+        results.successful.push(orderId);
       } catch (error: any) {
         results.failed.push({
           orderId,
@@ -171,9 +175,17 @@ router.put('/:id/status', async (req: Request, res: Response) => {
     if (statusLower === 'confirmed') status = 'customer_confirmed';
     else if (statusLower === 'fulfill') status = 'fulfilled';
     else if (statusLower === 'order-ready') status = 'order_ready';
+    else if (statusLower === 'ready-to-ship') status = 'ready_to_ship';
     
-    // Update the order status
-    await shopifyServiceInstance.updateOrderStatus(orderId, status);
+    logger.info('Updating order status', {
+      orderId,
+      previousStatus,
+      incomingStatus: req.body.status,
+      normalizedStatus: status
+    });
+    
+    // Update the order status (pass previous status to check for ready_to_ship -> shipped transition)
+    await shopifyServiceInstance.updateOrderStatus(orderId, status, previousStatus);
     
     // Get updated order for notification
     const orderAfter = await shopifyServiceInstance.getOrder(orderId);

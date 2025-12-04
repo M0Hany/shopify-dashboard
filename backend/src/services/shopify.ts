@@ -50,6 +50,15 @@ export interface ShopifyOrder {
     zip: string;
     country: string;
   };
+  fulfillments?: Array<{
+    id: number;
+    status: string;
+    shipment_status?: string;
+    tracking_company?: string;
+    tracking_number?: string;
+    created_at?: string;
+    updated_at?: string;
+  }>;
 }
 
 const SHOPIFY_SCOPES = new AuthScopes([
@@ -143,7 +152,7 @@ export class ShopifyService {
         const query: Record<string, string | number> = {
           limit: params.limit ? Math.min(250, params.limit - allOrders.length) : 250,
           status: 'any',
-          fields: 'id,name,email,phone,total_price,financial_status,fulfillment_status,tags,created_at,updated_at,line_items,customer,shipping_address,shipping_address.address1,shipping_address.address2,shipping_address.city,shipping_address.province,shipping_address.zip,shipping_address.country,line_items.variant_title,note,payment_gateway_names'
+          fields: 'id,name,email,phone,total_price,financial_status,fulfillment_status,tags,created_at,updated_at,line_items,customer,shipping_address,shipping_address.address1,shipping_address.address2,shipping_address.city,shipping_address.province,shipping_address.zip,shipping_address.country,line_items.variant_title,note,payment_gateway_names,fulfillments'
         };
 
         // Map status to tag for filtering
@@ -274,7 +283,7 @@ export class ShopifyService {
     }
   }
 
-  async updateOrderStatus(orderId: number, status: string): Promise<void> {
+  async updateOrderStatus(orderId: number, status: string, previousStatus?: string): Promise<void> {
     try {
       // Get the current order to check existing tags
       const order = await this.getOrder(orderId);
@@ -289,8 +298,27 @@ export class ShopifyService {
           ? order.tags.map((tag: string) => tag.trim())
           : [];
       
+      // Determine previous status if not provided
+      if (!previousStatus) {
+        const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'ready-to-ship', 'shipped', 'fulfilled', 'cancelled'];
+        const existingStatusTag = existingTags.find((tag: string) => 
+          statusTags.some(st => tag.trim().toLowerCase() === st.trim().toLowerCase())
+        );
+        if (existingStatusTag) {
+          const trimmed = existingStatusTag.trim().toLowerCase();
+          // Normalize ready-to-ship to ready_to_ship
+          previousStatus = trimmed === 'ready-to-ship' ? 'ready_to_ship' : trimmed;
+        } else {
+          previousStatus = 'pending';
+        }
+      } else {
+        // Normalize previous status (handle ready-to-ship -> ready_to_ship)
+        const trimmed = previousStatus.trim().toLowerCase();
+        previousStatus = trimmed === 'ready-to-ship' ? 'ready_to_ship' : trimmed;
+      }
+      
       // Filter out existing status tags and shipping date tag (case-insensitive)
-      const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'cancelled'].map(tag => tag.trim().toLowerCase());
+      const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'ready-to-ship', 'shipped', 'fulfilled', 'cancelled'].map(tag => tag.trim().toLowerCase());
       const filteredTags = existingTags.filter((tag: string) => {
         const trimmed = tag.trim().toLowerCase();
         return !statusTags.includes(trimmed) && !tag.trim().startsWith('shipping_date:');
@@ -302,11 +330,46 @@ export class ShopifyService {
         filteredTags.push(status.trim());
       }
 
-      // If status is shipped, add shipping date tag
-      if (status === 'shipped') {
+      // If moving from ready_to_ship (or ready-to-ship) to shipped, add shipping date tag
+      const normalizedPreviousStatus = previousStatus.trim().toLowerCase();
+      const normalizedNewStatus = status.trim().toLowerCase();
+      // Check for both ready_to_ship and ready-to-ship variations
+      const isReadyToShip = normalizedPreviousStatus === 'ready_to_ship' || normalizedPreviousStatus === 'ready-to-ship';
+      const isShipped = normalizedNewStatus === 'shipped';
+      
+      logger.info('Checking shipping date tag addition', {
+        orderId,
+        previousStatus,
+        normalizedPreviousStatus,
+        status,
+        normalizedNewStatus,
+        isReadyToShip,
+        isShipped,
+        willAddShippingDate: isReadyToShip && isShipped,
+        existingTags: existingTags,
+        filteredTagsBefore: filteredTags
+      });
+      
+      if (isReadyToShip && isShipped) {
         const today = new Date();
         const shippingDate = today.toISOString().split('T')[0]; // Get only YYYY-MM-DD
-        filteredTags.push(`shipping_date:${shippingDate}`);
+        const shippingDateTag = `shipping_date:${shippingDate}`;
+        filteredTags.push(shippingDateTag);
+        logger.info('Added shipping_date tag', {
+          orderId,
+          shippingDate,
+          shippingDateTag,
+          filteredTagsAfter: filteredTags
+        });
+      } else {
+        logger.warn('Shipping date tag NOT added', {
+          orderId,
+          reason: !isReadyToShip ? 'Previous status is not ready_to_ship' : 'New status is not shipped',
+          previousStatus,
+          normalizedPreviousStatus,
+          status,
+          normalizedNewStatus
+        });
       }
 
       // Remove priority tag if status is fulfilled or cancelled
@@ -784,37 +847,48 @@ export class ShopifyService {
         path: 'orders',
         query: {
           status: 'any',
-          fields: 'id,tags,customer,shipping_address',
-          limit: 20 // Increased limit to find more potential matches
+          fields: 'id,name,created_at,tags,customer,shipping_address,customer.phone',
+          limit: 20, // Increased limit to find more potential matches
+          order: 'created_at desc' // Get most recent orders first
         }
       });
 
       const orders = response.body.orders as ShopifyOrder[];
       
-      // Filter orders where shipping address phone matches any format
+      // Filter orders where customer phone or shipping address phone matches any format
       const matchingOrders = orders.filter(order => {
         const shippingPhone = order.shipping_address?.phone?.replace(/\D/g, '').trim() || '';
+        const customerPhone = order.customer?.phone?.replace(/\D/g, '').trim() || '';
         
-        // Log each order's phone number for debugging
-        logger.info('Checking order phone:', {
+        // Log each order's phone numbers for debugging
+        logger.info('Checking order phones:', {
           orderId: order.id,
+          orderName: order.name,
           shippingPhone,
+          customerPhone,
           formats: phoneFormats
         });
 
-        // Check if any of our phone formats match the shipping phone
+        // Check if any of our phone formats match either phone
         return phoneFormats.some(format => {
           const formattedPhone = format.replace(/\D/g, '').trim();
-          const matches = shippingPhone.includes(formattedPhone);
+          const shippingMatches = shippingPhone && shippingPhone.includes(formattedPhone);
+          const customerMatches = customerPhone && customerPhone.includes(formattedPhone);
+          const matches = shippingMatches || customerMatches;
           
           // Log each comparison for debugging
-          logger.info('Phone comparison:', {
+          if (matches) {
+            logger.info('Phone match found:', {
             orderId: order.id,
+              orderName: order.name,
             shippingPhone,
+              customerPhone,
             formatTried: format,
             formattedPhone,
-            matches
+              shippingMatches,
+              customerMatches
           });
+          }
 
           return matches;
         });

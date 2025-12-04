@@ -3,9 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
-import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, FunnelIcon, CheckIcon, DocumentArrowUpIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, FunnelIcon, CheckIcon, DocumentArrowUpIcon, ArrowPathIcon, ArrowUpCircleIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Menu, Popover, Transition } from '@headlessui/react';
 import FileUpload from '../components/FileUpload';
 import MoneyTransferUpload from '../components/MoneyTransferUpload';
@@ -165,6 +165,15 @@ interface Order {
   fulfillment_status: string;
   tags?: string[] | string | null;
   payment_gateway_names?: string[]; 
+  fulfillments?: Array<{
+    id: number;
+    status: string;
+    shipment_status?: string;
+    tracking_company?: string;
+    tracking_number?: string;
+    created_at?: string;
+    updated_at?: string;
+  }>;
   line_items: {
     title: string;
     quantity: number;
@@ -256,10 +265,38 @@ const Orders = () => {
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
   const [isSearchOverridingFilter, setIsSearchOverridingFilter] = useState(false);
   const [suppressOrdersInvalidation, setSuppressOrdersInvalidation] = useState(false);
+  const [selectedSummaryItems, setSelectedSummaryItems] = useState<Set<string>>(new Set());
+  const [showScrollToTop, setShowScrollToTop] = useState(false);
   const ordersRefreshTimerRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Handle scroll to show/hide scroll-to-top button
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowScrollToTop(window.scrollY > 300);
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Scroll to top function
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Read search query from URL params on mount or when search param changes
+  useEffect(() => {
+    const searchParam = searchParams.get('search');
+    if (searchParam) {
+      setSearchQuery(searchParam);
+      // Clear the URL param after reading it
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   // Debounce search query to reduce unnecessary filtering
   useEffect(() => {
@@ -704,7 +741,7 @@ const Orders = () => {
       { orderIds: selectedOrders, status },
       {
         onSuccess: () => {
-          setSelectedOrders([]);
+    setSelectedOrders([]);
           toast.success(`Successfully updated ${selectedOrders.length} order${selectedOrders.length > 1 ? 's' : ''}`);
         },
         onError: (error: any) => {
@@ -1045,6 +1082,14 @@ const Orders = () => {
     return null;
   };
 
+  // Helper function to check if an order contains a specific item
+  const orderContainsItem = (order: Order, itemTitle: string): boolean => {
+    return order.line_items?.some(item => {
+      const itemKey = item.variant_title ? `${item.title} - ${item.variant_title}` : item.title;
+      return itemKey === itemTitle;
+    }) || false;
+  };
+
   // First, decorate orders with their original index
   const sortedOrders = (orders || [])?.map((order: Order, idx: number) => ({
     ...order,
@@ -1064,7 +1109,11 @@ const Orders = () => {
     
     const matchesStatus = filterOrdersByStatus(order);
     
-    return matchesSearch && matchesStatus;
+    // Filter by selected summary items if any are selected
+    const matchesSummaryItems = selectedSummaryItems.size === 0 || 
+      Array.from(selectedSummaryItems).some(itemTitle => orderContainsItem(order, itemTitle));
+    
+    return matchesSearch && matchesStatus && matchesSummaryItems;
   })
   // Finally sort with stable tiebreaker
   .sort((a: Order & { originalIndex: number }, b: Order & { originalIndex: number }) => {
@@ -1362,28 +1411,37 @@ ___`;
   };
 
   // Calculate accumulated item quantities for pending orders
-  const calculatePendingItemsSummary = () => {
+  const calculatePendingItemsSummary = (ordersToUse?: Order[]) => {
     if (!orders) return { items: [], totalOrders: 0, totalPieces: 0 };
     
-    const pendingOrders = orders.filter(order => {
-      const tags = Array.isArray(order.tags) 
-        ? order.tags 
-        : typeof order.tags === 'string' 
-          ? order.tags.split(',').map(tag => tag.trim())
-          : [];
-      
-      // Check if order is pending (no status tags and not deleted) - case-insensitive
-      return !tags.some(tag => tag.trim().toLowerCase() === 'deleted') && 
-             !tags.some(tag => {
-               const trimmed = tag.trim().toLowerCase();
-               return ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'cancelled', 'paid'].some(st => st.toLowerCase() === trimmed);
-             });
-    });
+    // Use selected orders if provided, otherwise use all pending orders
+    let ordersToProcess: Order[];
+    
+    if (ordersToUse && ordersToUse.length > 0) {
+      // Use provided orders (selected orders)
+      ordersToProcess = ordersToUse;
+    } else {
+      // Filter pending orders
+      ordersToProcess = orders.filter(order => {
+        const tags = Array.isArray(order.tags) 
+          ? order.tags 
+          : typeof order.tags === 'string' 
+            ? order.tags.split(',').map(tag => tag.trim())
+            : [];
+        
+        // Check if order is pending (no status tags and not deleted) - case-insensitive
+        return !tags.some(tag => tag.trim().toLowerCase() === 'deleted') && 
+               !tags.some(tag => {
+                 const trimmed = tag.trim().toLowerCase();
+                 return ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'cancelled', 'paid'].some(st => st.toLowerCase() === trimmed);
+               });
+      });
+    }
 
     const itemCounts: { [key: string]: number } = {};
     let totalPieces = 0;
 
-    pendingOrders.forEach(order => {
+    ordersToProcess.forEach(order => {
       order.line_items?.forEach(item => {
         const itemKey = item.variant_title ? `${item.title} - ${item.variant_title}` : item.title;
         itemCounts[itemKey] = (itemCounts[itemKey] || 0) + item.quantity;
@@ -1397,14 +1455,41 @@ ___`;
 
     return {
       items: sortedItems,
-      totalOrders: pendingOrders.length,
+      totalOrders: ordersToProcess.length,
       totalPieces
     };
   };
 
+  // Handle item click in summary card
+  const handleSummaryItemClick = (itemTitle: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent card expansion/collapse
+    
+    setSelectedSummaryItems(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(itemTitle)) {
+        newSet.delete(itemTitle);
+      } else {
+        newSet.add(itemTitle);
+      }
+      return newSet;
+    });
+  };
+
+  // Clear item selection when clicking outside or when orders are selected
+  useEffect(() => {
+    if (selectedOrders.length > 0) {
+      setSelectedSummaryItems(new Set());
+    }
+  }, [selectedOrders]);
+
   // Production Summary Card Component
   const ProductionSummaryCard = () => {
-    const summary = calculatePendingItemsSummary();
+    // If orders are selected, show summary for selected orders only
+    const ordersToSummarize = selectedOrders.length > 0 
+      ? orders?.filter(order => selectedOrders.includes(order.id)) || []
+      : undefined;
+    
+    const summary = calculatePendingItemsSummary(ordersToSummarize);
     
     if (summary.totalOrders === 0) return null;
 
@@ -1412,9 +1497,7 @@ ___`;
 
     return (
       <div 
-        className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow duration-200 cursor-pointer"
-        onClick={() => setIsSummaryExpanded(!isSummaryExpanded)}
-        title={isSummaryExpanded ? "Click to collapse" : "Click to see all items"}
+        className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow duration-200"
       >
         {/* Header */}
         <div className="flex items-center justify-between mb-3">
@@ -1424,30 +1507,73 @@ ___`;
             </div>
             <div>
               <h3 className="font-semibold text-gray-900">Production Summary</h3>
-              <p className="text-sm text-gray-600">{summary.totalOrders} pending orders</p>
+              <p className="text-sm text-gray-600">
+                {selectedOrders.length > 0 
+                  ? `${selectedOrders.length} selected order${selectedOrders.length > 1 ? 's' : ''}`
+                  : `${summary.totalOrders} pending orders`}
+              </p>
             </div>
           </div>
-          <div className="text-right">
-            <div className="text-lg font-bold text-blue-600">{summary.totalPieces}</div>
-            <div className="text-xs text-gray-500">total pieces</div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsSummaryExpanded(!isSummaryExpanded)}
+              className="text-xs text-blue-600 font-medium bg-white px-2 py-1 rounded hover:bg-gray-50"
+              title={isSummaryExpanded ? "Click to collapse" : "Click to see all items"}
+            >
+              {isSummaryExpanded ? 'Collapse' : 'Expand'}
+            </button>
+            {selectedSummaryItems.size > 0 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedSummaryItems(new Set());
+                }}
+                className="text-xs text-gray-600 font-medium bg-white px-2 py-1 rounded hover:bg-gray-50"
+                title="Clear filter"
+              >
+                Clear filter
+              </button>
+            )}
           </div>
         </div>
 
         {/* Items List */}
         <div className="space-y-2">
-          {displayedItems.map((item, index) => (
-            <div key={index} className="flex justify-between items-center py-1 px-2 bg-white rounded border border-blue-100">
-              <span className="text-sm text-gray-700 truncate flex-1">{item.title}</span>
-              <span className="text-sm font-semibold text-blue-600 ml-2">{item.quantity}</span>
-            </div>
-          ))}
+          {displayedItems.map((item, index) => {
+            const isSelected = selectedSummaryItems.has(item.title);
+            return (
+              <div 
+                key={index} 
+                onClick={(e) => handleSummaryItemClick(item.title, e)}
+                className={`flex justify-between items-center py-1 px-2 rounded border cursor-pointer transition-colors ${
+                  isSelected 
+                    ? 'bg-blue-200 border-blue-400 shadow-sm' 
+                    : 'bg-white border-blue-100 hover:bg-blue-50'
+                }`}
+                title={isSelected ? "Click to deselect" : "Click to filter by this item"}
+              >
+                <span className={`text-sm truncate flex-1 ${isSelected ? 'font-semibold text-blue-900' : 'text-gray-700'}`}>
+                  {item.title}
+                </span>
+                <span className={`text-sm font-semibold ml-2 ${isSelected ? 'text-blue-900' : 'text-blue-600'}`}>
+                  {item.quantity}
+                </span>
+              </div>
+            );
+          })}
           {!isSummaryExpanded && summary.items.length > 5 && (
-            <div className="text-xs text-blue-600 text-center py-1 font-medium">
+            <div 
+              className="text-xs text-blue-600 text-center py-1 font-medium cursor-pointer hover:text-blue-700"
+              onClick={() => setIsSummaryExpanded(true)}
+            >
               +{summary.items.length - 5} more items (click to expand)
             </div>
           )}
           {isSummaryExpanded && summary.items.length > 5 && (
-            <div className="text-xs text-blue-600 text-center py-1 font-medium">
+            <div 
+              className="text-xs text-blue-600 text-center py-1 font-medium cursor-pointer hover:text-blue-700"
+              onClick={() => setIsSummaryExpanded(false)}
+            >
               Click to collapse
             </div>
           )}
@@ -1456,7 +1582,9 @@ ___`;
         {/* Footer */}
         <div className="mt-3 pt-2 border-t border-blue-200">
           <div className="text-xs text-gray-600 text-center">
-            Items to be produced from pending orders
+            {selectedOrders.length > 0 
+              ? 'Items in selected orders'
+              : 'Items to be produced from pending orders'}
           </div>
         </div>
       </div>
@@ -1742,6 +1870,17 @@ ___`;
           ))}
         </div>
       </div>
+
+      {/* Scroll to Top Button */}
+      {showScrollToTop && (
+        <button
+          onClick={scrollToTop}
+          className="fixed bottom-6 right-6 z-50 bg-white rounded-full p-3 shadow-lg hover:shadow-xl transition-all duration-200 border border-gray-200"
+          title="Scroll to top"
+        >
+          <ArrowUpIcon className="w-6 h-6 text-gray-700" />
+        </button>
+      )}
     </div>
   );
 };

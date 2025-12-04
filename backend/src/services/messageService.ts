@@ -236,11 +236,21 @@ export class MessageService {
       if (todayError) throw todayError;
 
       // Get unread messages
-      const { count: unreadMessages, error: unreadError } = await supabase
+      // Check only the latest 20 inbound messages for performance
+      // Count messages where status is not 'read' (including null/undefined statuses)
+      const { data: latestInboundMessages, error: unreadError } = await supabase
         .from('whatsapp_messages')
-        .select('*', { count: 'exact', head: true })
+        .select('status')
         .eq('direction', 'inbound')
-        .neq('status', 'read');
+        .order('timestamp', { ascending: false })
+        .limit(20);
+      
+      if (unreadError) throw unreadError;
+      
+      // Count messages where status is null, undefined, or not 'read'
+      const unreadMessages = latestInboundMessages?.filter(msg => 
+        !msg.status || msg.status !== 'read'
+      ).length || 0;
 
       if (unreadError) throw unreadError;
 

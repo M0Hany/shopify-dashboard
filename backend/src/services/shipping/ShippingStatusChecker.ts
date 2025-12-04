@@ -102,8 +102,81 @@ export class ShippingStatusChecker {
 
       logger.info(`Found ${shippedOrders.length} shipped orders to check`);
 
-      // Process each shipped order
-      await Promise.all(shippedOrders.map(async (order) => {
+      // Process ShipBlu orders first (check fulfillments for delivered status)
+      const shipBluOrders = shippedOrders.filter(order => {
+        const tags = Array.isArray(order.tags) ? 
+          order.tags.map(t => t.trim().toLowerCase()) : 
+          typeof order.tags === 'string' ? 
+            order.tags.split(',').map(t => t.trim().toLowerCase()) : 
+            [];
+        return tags.includes('sent to shipblu');
+      });
+
+      logger.info(`Found ${shipBluOrders.length} ShipBlu shipped orders to check for delivery status`);
+
+      // Process ShipBlu orders - check fulfillments for delivered status
+      await Promise.all(shipBluOrders.map(async (order) => {
+        try {
+          // Check if order has fulfillments with shipment_status === "delivered"
+          if (order.fulfillments && Array.isArray(order.fulfillments) && order.fulfillments.length > 0) {
+            const deliveredFulfillment = order.fulfillments.find(
+              (fulfillment: any) => fulfillment.shipment_status?.toLowerCase() === 'delivered'
+            );
+
+            if (deliveredFulfillment) {
+              // Get current tags
+              const tags = Array.isArray(order.tags) ? 
+                order.tags.map(t => t.trim()) : 
+                typeof order.tags === 'string' ? 
+                  order.tags.split(',').map(t => t.trim()) : 
+                  [];
+
+              // Remove shipped tag and add fulfilled tag
+              const newTags = tags.filter(tag => 
+                tag.toLowerCase() !== 'shipped' && !tag.toLowerCase().startsWith('fulfillment_date:')
+              );
+              
+              // Add fulfilled tag
+              newTags.push('fulfilled');
+              
+              // Add fulfillment date tag
+              const today = format(new Date(), 'yyyy-MM-dd');
+              newTags.push(`fulfillment_date:${today}`);
+
+              // Update order tags
+              await this.shopifyService.updateOrderTags(order.id.toString(), newTags);
+              
+              logger.info('Updated ShipBlu order status to fulfilled (delivered)', {
+                orderId: order.id,
+                orderName: order.name,
+                shipmentStatus: deliveredFulfillment.shipment_status,
+                previousStatus: 'shipped',
+                newStatus: 'fulfilled'
+              });
+            }
+          }
+        } catch (error) {
+          logger.error('Error processing ShipBlu shipped order', {
+            error,
+            orderId: order.id
+          });
+        }
+      }));
+
+      // Process other shipped orders (non-ShipBlu) - check Mylerz shipping status
+      const nonShipBluShippedOrders = shippedOrders.filter(order => {
+        const tags = Array.isArray(order.tags) ? 
+          order.tags.map(t => t.trim().toLowerCase()) : 
+          typeof order.tags === 'string' ? 
+            order.tags.split(',').map(t => t.trim().toLowerCase()) : 
+            [];
+        return !tags.includes('sent to shipblu');
+      });
+
+      logger.info(`Found ${nonShipBluShippedOrders.length} non-ShipBlu shipped orders to check`);
+
+      // Process each non-ShipBlu shipped order
+      await Promise.all(nonShipBluShippedOrders.map(async (order) => {
         try {
           // Get barcode from order tags
           const tags = Array.isArray(order.tags) ? 

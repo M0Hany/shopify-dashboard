@@ -5,10 +5,41 @@ import { MessageService } from '../services/messageService';
 import { logger } from '../utils/logger';
 import { ShopifyService } from '../services/shopify';
 import { supabase } from '../config/supabase';
+import { discordNotificationService } from '../services/discordNotifications';
 
 const router = express.Router();
 const whatsappService = new WhatsAppService();
 const shopifyService = new ShopifyService();
+
+// Helper function to format phone number consistently (same as WhatsAppService)
+function formatPhoneNumber(phone: string): string {
+  // Remove all non-numeric characters
+  let formatted = phone.replace(/\D/g, '');
+  
+  // Handle different formats
+  if (formatted.startsWith('201')) {
+    // Already has country code
+    formatted = formatted.substring(0, 12); // Limit to 12 digits
+  } else if (formatted.startsWith('20')) {
+    // Has country code without mobile prefix
+    formatted = '201' + formatted.substring(2);
+    formatted = formatted.substring(0, 12); // Limit to 12 digits
+  } else if (formatted.startsWith('01')) {
+    // Has mobile prefix with leading 0
+    formatted = '2' + formatted; // Add country code while keeping the 1
+    formatted = formatted.substring(0, 12); // Limit to 12 digits
+  } else if (formatted.startsWith('1')) {
+    // Has mobile prefix without leading 0
+    formatted = '20' + formatted;
+    formatted = formatted.substring(0, 12); // Limit to 12 digits
+  } else {
+    // Assume it's a local number without any prefixes
+    formatted = '201' + formatted;
+    formatted = formatted.substring(0, 12); // Limit to 12 digits
+  }
+
+  return formatted;
+}
 
 // In-memory storage for message ID to order number mapping
 const messageOrderMap = new Map<string, string>();
@@ -40,6 +71,65 @@ function getOrderNumberForMessage(messageId: string): string | null {
   return orderNumber || null;
 }
 
+// Helper method to find the most recent outbound message with order_number for a phone number
+async function findOrderNumberFromPreviousMessage(customerPhone: string): Promise<string | null> {
+  try {
+    // Format phone number consistently
+    const formattedPhone = formatPhoneNumber(customerPhone);
+    
+    logger.info('=== SEARCHING FOR PREVIOUS MESSAGE WITH ORDER NUMBER ===', {
+      originalPhone: customerPhone,
+      formattedPhone,
+      timestamp: new Date().toISOString()
+    });
+
+    // Query database for the most recent outbound message to this phone with an order_number
+    const { data, error } = await supabase
+      .from('whatsapp_messages')
+      .select('order_number, timestamp, message_id, to')
+      .eq('to', formattedPhone)
+      .eq('direction', 'outbound')
+      .not('order_number', 'is', null)
+      .order('timestamp', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      logger.error('Error querying database for previous message', {
+        error: error.message,
+        customerPhone: formattedPhone,
+        timestamp: new Date().toISOString()
+      });
+      return null;
+    }
+
+    if (data && data.order_number) {
+      logger.info('=== FOUND PREVIOUS MESSAGE WITH ORDER NUMBER ===', {
+        orderNumber: data.order_number,
+        messageId: data.message_id,
+        timestamp: data.timestamp,
+        to: data.to,
+        customerPhone: formattedPhone,
+        timestamp: new Date().toISOString()
+      });
+      return data.order_number;
+    }
+
+    logger.warn('No previous message with order_number found', {
+      customerPhone: formattedPhone,
+      timestamp: new Date().toISOString()
+    });
+    return null;
+  } catch (error) {
+    logger.error('Error finding order number from previous message', {
+      error: error instanceof Error ? error.message : error,
+      customerPhone,
+      timestamp: new Date().toISOString()
+    });
+    return null;
+  }
+}
+
 // Helper method to update order with customer confirmation
 async function updateOrderWithCustomerConfirmation(targetOrder: any, customerPhone: string): Promise<void> {
   logger.info('=== FOUND TARGET ORDER TO UPDATE ===', {
@@ -49,30 +139,38 @@ async function updateOrderWithCustomerConfirmation(targetOrder: any, customerPho
     timestamp: new Date().toISOString()
   });
 
-  // Add customer_confirmed tag
+  // Get current tags
   const currentTags = Array.isArray(targetOrder.tags) 
     ? targetOrder.tags.map((t: string) => t.trim())
     : typeof targetOrder.tags === 'string'
       ? targetOrder.tags.split(',').map((t: string) => t.trim())
       : [];
 
-  const newTags = [...currentTags, 'customer_confirmed'];
+  // Remove order_ready tag and add customer_confirmed tag
+  const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+  let filtered = currentTags.filter((t: string) => {
+    const trimmed = t.trim().toLowerCase();
+    return !statusTags.some(st => st.trim().toLowerCase() === trimmed);
+  });
+  
+  // Add customer_confirmed tag
+  filtered = [...filtered, 'customer_confirmed'];
   
   logger.info('=== UPDATING ORDER TAGS ===', {
     orderId: targetOrder.id,
     orderName: targetOrder.name,
     oldTags: currentTags,
-    newTags,
+    newTags: filtered,
     timestamp: new Date().toISOString()
   });
 
-  await shopifyService.updateOrderTags(targetOrder.id.toString(), newTags);
+  await shopifyService.updateOrderTags(targetOrder.id.toString(), filtered);
 
   logger.info('=== SUCCESSFULLY UPDATED ORDER TAGS ===', {
     orderId: targetOrder.id,
     orderName: targetOrder.name,
     phone: customerPhone,
-    newTags,
+    newTags: filtered,
     timestamp: new Date().toISOString()
   });
 }
@@ -431,6 +529,78 @@ router.post('/webhook', express.json(), async (req, res) => {
                 message_id: message.id,
                 phone: message.from
               });
+
+              // Try to find customer information and order number
+              let customerName: string | undefined;
+              let orderNumber: string | undefined;
+              
+              try {
+                // Try to get order number from message context or stored mapping
+                const storedOrderNumber = getOrderNumberForMessage(message.id);
+                if (storedOrderNumber) {
+                  orderNumber = storedOrderNumber;
+                } else if (message.context?.referred_product?.id) {
+                  // Could extract order info from context if available
+                }
+
+                // Try to find customer by phone number
+                try {
+                  logger.info('Looking up orders by phone', { phone: message.from });
+                  const orders = await shopifyService.getOrdersByPhone(message.from);
+                  logger.info('Orders found by phone', { 
+                    phone: message.from,
+                    count: orders?.length || 0,
+                    orderNames: orders?.map(o => o.name) || []
+                  });
+                  
+                  if (orders && orders.length > 0) {
+                    const latestOrder = orders[0];
+                    logger.info('Using latest order', {
+                      orderId: latestOrder.id,
+                      orderName: latestOrder.name,
+                      customer: latestOrder.customer
+                    });
+                    
+                    customerName = `${latestOrder.customer?.first_name || ''} ${latestOrder.customer?.last_name || ''}`.trim() || undefined;
+                    if (!orderNumber && latestOrder.name) {
+                      orderNumber = latestOrder.name;
+                      logger.info('Order number extracted', { orderNumber });
+                    } else {
+                      logger.warn('Order number not found in order', {
+                        orderId: latestOrder.id,
+                        orderName: latestOrder.name,
+                        hasName: !!latestOrder.name
+                      });
+                    }
+                  } else {
+                    logger.info('No orders found for phone', { phone: message.from });
+                  }
+                } catch (orderError) {
+                  logger.error('Error finding customer by phone', { 
+                    phone: message.from,
+                    error: orderError instanceof Error ? orderError.message : orderError,
+                    stack: orderError instanceof Error ? orderError.stack : undefined
+                  });
+                  // Non-critical, continue without customer name
+                }
+              } catch (lookupError) {
+                logger.debug('Error looking up customer info', { error: lookupError });
+                // Non-critical, continue without customer info
+              }
+
+              // Send Discord notification (non-blocking)
+              const messageTimestamp = new Date(parseInt(message.timestamp) * 1000);
+              discordNotificationService.notifyWhatsAppMessage({
+                phone: message.from,
+                customerName,
+                messageText: message.text?.body || message.text || 'No text content',
+                messageType: message.type || 'unknown',
+                orderNumber,
+                timestamp: messageTimestamp
+              }).catch(err => {
+                logger.error('Failed to send Discord WhatsApp notification', err);
+                // Don't fail the webhook if notification fails
+              });
             } catch (error) {
               logger.error('Error storing incoming message', {
                 error: error instanceof Error ? error.message : error,
@@ -507,34 +677,24 @@ router.post('/webhook', express.json(), async (req, res) => {
                 logger.info('=== CUSTOMER CONFIRMATION DETECTED ===', {
                   phone: customerPhone,
                   messageId: message.id,
+                  messageType: message.type,
                   timestamp: new Date().toISOString()
                 });
 
                 try {
-                  // Extract order number from message context
-                  let orderNumber = null;
+                  // Find order number by matching "from" (customer phone) to previous "to" (outbound message)
+                  const orderNumber = await findOrderNumberFromPreviousMessage(customerPhone);
                   
-                  // Check if there's a context (reply to a template message)
-                  if (message.context && message.context.id) {
-                    logger.info('=== MESSAGE CONTEXT FOUND ===', {
-                      contextId: message.context.id,
-                      context: message.context
-                    });
-                    
-                    // Get order number from our stored mapping
-                    orderNumber = getOrderNumberForMessage(message.context.id);
-                  }
-                  
-                  logger.info('=== EXTRACTED ORDER NUMBER ===', {
+                  logger.info('=== EXTRACTED ORDER NUMBER FROM DATABASE ===', {
                     orderNumber,
                     phone: customerPhone,
                     timestamp: new Date().toISOString()
                   });
 
                   if (!orderNumber) {
-                    logger.warn('No order number found for message context', {
+                    logger.warn('No order number found for customer phone', {
                       phone: customerPhone,
-                      contextId: message.context?.id,
+                      messageId: message.id,
                       timestamp: new Date().toISOString()
                     });
                     return;
@@ -558,7 +718,25 @@ router.post('/webhook', express.json(), async (req, res) => {
                       timestamp: new Date().toISOString()
                     });
 
-                    await updateOrderWithCustomerConfirmation(targetOrder, customerPhone);
+                    // Check if order has order_ready tag before updating
+                    const currentTags = Array.isArray(targetOrder.tags) 
+                      ? targetOrder.tags.map((t: string) => t.trim().toLowerCase())
+                      : typeof targetOrder.tags === 'string'
+                        ? targetOrder.tags.split(',').map((t: string) => t.trim().toLowerCase())
+                        : [];
+                    
+                    const hasOrderReady = currentTags.includes('order_ready');
+                    
+                    if (hasOrderReady) {
+                      await updateOrderWithCustomerConfirmation(targetOrder, customerPhone);
+                    } else {
+                      logger.warn('Order does not have order_ready tag, skipping update', {
+                        orderId: targetOrder.id,
+                        orderName: targetOrder.name,
+                        currentTags: targetOrder.tags,
+                        timestamp: new Date().toISOString()
+                      });
+                    }
                   } else {
                     logger.warn('Order not found by order number', {
                       orderNumber,
@@ -568,7 +746,7 @@ router.post('/webhook', express.json(), async (req, res) => {
                   }
                 } catch (error) {
                   logger.error('Error processing customer confirmation', {
-                    error,
+                    error: error instanceof Error ? error.message : error,
                     phone: customerPhone,
                     timestamp: new Date().toISOString(),
                     stack: error instanceof Error ? error.stack : undefined

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { useQuery } from '@tanstack/react-query';
 
 interface HeaderProps {
   onLogout?: () => void;
@@ -9,6 +10,22 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = () => {
   const { logout } = useAuth();
   const location = useLocation();
+  
+  // Check for unread WhatsApp messages
+  const { data: unreadCount = 0 } = useQuery({
+    queryKey: ['whatsapp-unread-count'],
+    queryFn: async () => {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/stats`);
+        if (!response.ok) return 0;
+        const data = await response.json();
+        return data.stats?.unreadMessages || 0;
+      } catch {
+        return 0;
+      }
+    },
+    refetchInterval: 30000, // Refetch every 30 seconds
+  });
   
   const handleLogout = () => {
     logout();
@@ -28,17 +45,21 @@ export const Header: React.FC<HeaderProps> = () => {
           <nav className="flex space-x-4">
             {navigation.map((item) => {
               const isActive = location.pathname === item.href;
+              const hasUnread = item.name === 'WhatsApp' && unreadCount > 0;
               return (
                 <Link
                   key={item.name}
                   to={item.href}
-                  className={`px-3 py-1.5 text-sm font-medium rounded-md ${
+                  className={`relative px-3 py-1.5 text-sm font-medium rounded-md ${
                     isActive
                       ? 'bg-blue-100 text-blue-700'
                       : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
                   }`}
                 >
                   {item.name}
+                  {hasUnread && (
+                    <span className="absolute top-0 right-0 w-2 h-2 bg-green-500 rounded-full transform translate-x-1 -translate-y-1"></span>
+                  )}
                 </Link>
               );
             })}

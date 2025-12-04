@@ -52,18 +52,18 @@ const OrderTimeline: React.FC<OrderTimelineProps> = ({
   // Calculate progress percentage based on priority intervals
   const calculateProgress = () => {
     if (daysLeft <= 0) return 100; // Overdue - full width
-    if (daysLeft <= 4) return 90; // High priority (1-4 days)
-    if (daysLeft <= 8) return 75; // Less priority (5-8 days)
-    if (daysLeft <= 14) return 60; // Less priority (9-14 days)
-    if (daysLeft <= 20) return 45; // Less priority (15-20 days)
-    return 30; // Default for more than 20 days
+    if (daysLeft <= 2) return 90; // High priority (1-2 days)
+    if (daysLeft <= 4) return 75; // Medium priority (3-4 days)
+    if (daysLeft <= 7) return 60; // Normal (5-7 days)
+    return 30; // Default for more than 7 days
   };
 
   // Get progress bar color based on days remaining
+  // 7-5 days: green, 4-3 days: yellow, 2-overdue: red
   const getProgressColor = () => {
-    if (daysLeft <= 0) return 'bg-red-500'; // Overdue
-    if (daysLeft <= 4) return 'bg-yellow-500'; // High priority
-    return 'bg-green-500'; // Normal
+    if (daysLeft <= 2) return 'bg-red-500'; // 2 days or overdue - red
+    if (daysLeft <= 4) return 'bg-yellow-500'; // 3-4 days - yellow
+    return 'bg-green-500'; // 5-7 days - green
   };
 
   // Ensure dates are valid
@@ -92,7 +92,11 @@ const OrderTimeline: React.FC<OrderTimelineProps> = ({
           selected={end}
           onChange={(date: Date) => onUpdateDueDate?.(date)}
           customInput={
-            <button className="text-sm text-gray-600 bg-white py-0.5 px-1.5 rounded border border-gray-200 hover:border-gray-300">
+            <button className={`text-sm py-0.5 px-1.5 rounded border ${
+              isCustom 
+                ? 'text-gray-700 bg-red-100 border-red-300 hover:border-red-400' 
+                : 'text-gray-600 bg-white border-gray-200 hover:border-gray-300'
+            }`}>
               {format(end, 'MMM d')}
               <span className="text-blue-600 ml-1">›</span>
             </button>

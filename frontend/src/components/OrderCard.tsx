@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import instapayLogo from '../assets/instapay.png';
+import whatsappLogo from '../assets/whatsapp.png';
 import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon } from '@heroicons/react/24/outline';
-import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
+import { StarIcon as StarIconSolid, PhoneArrowUpRightIcon } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
 import { convertToCairoTime } from '../utils/dateUtils';
 import { Menu } from '@headlessui/react';
@@ -36,7 +36,37 @@ interface OrderCardProps {
 const ShippingStatus: React.FC<{ 
   status: string; 
   orderTags: string[];
-}> = ({ status, orderTags }) => {
+  fulfillments?: Array<{
+    id: number;
+    status: string;
+    shipment_status?: string;
+    tracking_company?: string;
+    tracking_number?: string;
+    created_at?: string;
+    updated_at?: string;
+  }>;
+}> = ({ status, orderTags, fulfillments }) => {
+  // Check if order is shipped with ShipBlu
+  const isShipBlu = orderTags.some((tag: string) => 
+    tag.trim().toLowerCase() === 'sent to shipblu'
+  );
+
+  // Get ShipBlu delivery status from fulfillments
+  const getShipBluStatus = () => {
+    if (!isShipBlu || !fulfillments || fulfillments.length === 0) return null;
+    
+    // Find the most recent fulfillment with shipment_status
+    const fulfillmentWithStatus = fulfillments
+      .filter(f => f.shipment_status)
+      .sort((a, b) => {
+        const aDate = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+        const bDate = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+        return bDate - aDate; // Most recent first
+      })[0];
+    
+    return fulfillmentWithStatus?.shipment_status || null;
+  };
+
   // Get shipping date from tags
   const getShippingDaysAgo = () => {
     const now = new Date();
@@ -67,6 +97,33 @@ const ShippingStatus: React.FC<{
 
   const shippingBarcode = getShippingBarcode();
   const shippingStatus = getShippingStatus();
+  const shipBluStatus = getShipBluStatus();
+
+  // If ShipBlu, show ShipBlu status; otherwise show regular shipping status
+  if (isShipBlu) {
+    return (
+      <div className="flex items-center gap-2 p-2 bg-blue-50 rounded-md">
+        <TruckIcon className="w-5 h-5 text-blue-600" />
+        <div className="flex flex-col">
+          <span className="text-sm text-blue-700 font-medium">
+            {getShippingDaysAgo()}
+          </span>
+          {shipBluStatus && (
+            <div className="text-xs text-blue-600">
+              <div className="italic">
+                Delivery Status: {shipBluStatus}
+              </div>
+            </div>
+          )}
+          {shippingBarcode && (
+            <div className="text-xs font-mono text-blue-500 mt-1">
+              {shippingBarcode}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-2 p-2 bg-purple-50 rounded-md">
@@ -136,17 +193,15 @@ const OrderCard: React.FC<OrderCardProps> = ({
   
   // Ensure all tags are trimmed before searching
   const trimmedTags = tags.map((tag: string) => tag.trim());
-  const isInstapayPaid = trimmedTags.includes('instapay_paid');
-  const isInstapayOrder = useMemo(() => {
-    const paymentGateways: string[] = Array.isArray((order as any)?.payment_gateway_names)
-      ? (order as any).payment_gateway_names
-      : typeof (order as any)?.payment_gateway_names === 'string'
-        ? [(order as any).payment_gateway_names]
-        : [];
-    const gatewayStr = paymentGateways.join(' ').toLowerCase();
-    const gatewayMentionsInstaPay = gatewayStr.includes('instapay') || gatewayStr.includes('pay via instapay');
-    return gatewayMentionsInstaPay || trimmedTags.includes('instapay') || isInstapayPaid;
-  }, [order, trimmedTags, isInstapayPaid]);
+  
+  // Check if order is order-ready
+  const isOrderReady = trimmedTags.some((tag: string) => tag.trim().toLowerCase() === 'order_ready');
+  
+  // Check if manual WhatsApp confirmation has been sent
+  const hasManualWhatsAppConfirmation = trimmedTags.includes('manual_whatsapp_confirmation');
+  
+  // Check if automated WhatsApp confirmation tag exists
+  const hasAutomatedWhatsAppConfirmation = trimmedTags.includes('automated_whatsapp_confirmation');
   const dueDateTag = trimmedTags.find((tag: string) => tag.startsWith('custom_due_date:'));
   const startDateTag = trimmedTags.find((tag: string) => tag.startsWith('custom_start_date:'));
   
@@ -176,17 +231,17 @@ const OrderCard: React.FC<OrderCardProps> = ({
   if (!dueDate) {
     // Calculate due date based on start date (either custom or created_at)
     dueDate = new Date(startDate);
-    dueDate.setDate(dueDate.getDate() + 14);
+    dueDate.setDate(dueDate.getDate() + 7);
     dueDate = convertToCairoTime(dueDate);
   }
 
   // Ensure both dates are valid
   if (isNaN(startDate.getTime()) || isNaN(dueDate.getTime())) {
     console.error('Invalid dates:', { startDate, dueDate, order });
-    // Fallback to created_at + 14 days if dates are invalid
+    // Fallback to created_at + 7 days if dates are invalid
     startDate = convertToCairoTime(new Date(order.created_at));
     dueDate = new Date(startDate);
-    dueDate.setDate(dueDate.getDate() + 14);
+    dueDate.setDate(dueDate.getDate() + 7);
     dueDate = convertToCairoTime(dueDate);
   }
 
@@ -432,6 +487,34 @@ const OrderCard: React.FC<OrderCardProps> = ({
       toast.error('Failed to copy phone number');
     }
   };
+
+  // Function to dial customer phone number
+  const handleDialPhone = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!order.customer?.phone) return;
+    
+    // Format phone number for tel: link
+    const cleaned = order.customer.phone.replace(/\D/g, '');
+    const telLink = `tel:${cleaned}`;
+    
+    // Open dialer
+    window.location.href = telLink;
+  };
+
+  // Function to open WhatsApp Business app with customer number
+  const handleWhatsAppBusiness = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!order.customer?.phone) return;
+    
+    // Format phone number for WhatsApp
+    const formattedPhone = formatPhoneNumber(order.customer.phone);
+    
+    // Create WhatsApp Business link (wa.me works for both web and mobile, opens Business app on mobile)
+    const whatsAppLink = `https://wa.me/${formattedPhone}`;
+    
+    // Open WhatsApp
+    window.open(whatsAppLink, '_blank');
+  };
   
   // Get confirmation message template
   const getConfirmationTemplate = (customerName: string): string => {
@@ -448,6 +531,62 @@ Please kindly confirm 🤍`;
   const getShippingTemplate = (customerName: string): string => {
     return `Hello ${customerName}, this is OCD crochet✨
 Your order is being picked up by the shipping company and should be arriving to you in the next couple of days🚚`;
+  };
+
+  // Get manual WhatsApp confirmation message template
+  const getManualWhatsAppConfirmationTemplate = (customerFirstName: string, orderItems: any[]): string => {
+    const itemsList = orderItems.map(item => {
+      const variant = item.variant_title ? ` (${item.variant_title})` : '';
+      return `- ${item.title}${variant}`;
+    }).join('\n');
+    
+    return `Good evening ${customerFirstName}, this is OCD Crochet ✨
+
+Your order for:
+
+${itemsList}
+
+is being shipped and it usually arrives within 2–3 working days.
+
+Could you kindly confirm if you'll be available to receive it during that time? 💌`;
+  };
+
+  // Handle manual WhatsApp confirmation button click
+  const handleManualWhatsAppConfirmation = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!order.customer?.phone || !isOrderReady) return;
+    
+    // Generate the WhatsApp message
+    const message = getManualWhatsAppConfirmationTemplate(
+      order.customer.first_name || '',
+      order.line_items || []
+    );
+    
+    // Format phone number for WhatsApp
+    const formattedPhone = formatPhoneNumber(order.customer.phone);
+    
+    // Encode the message
+    const encodedMessage = encodeURIComponent(message);
+    
+    // Create WhatsApp Business link (wa.me works for both web and mobile)
+    const whatsAppLink = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
+    
+    // Open WhatsApp
+    window.open(whatsAppLink, '_blank');
+    
+    // Add the tag if it doesn't exist
+    if (!hasManualWhatsAppConfirmation && onUpdateTags) {
+      const currentTags = Array.isArray(order.tags)
+        ? order.tags.map((t: string) => t.trim())
+        : typeof order.tags === 'string'
+          ? order.tags.split(',').map((t: string) => t.trim())
+          : [];
+      
+      if (!currentTags.includes('manual_whatsapp_confirmation')) {
+        const updatedTags = [...currentTags, 'manual_whatsapp_confirmation'];
+        onUpdateTags(order.id, updatedTags);
+      }
+    }
   };
 
   const handlePriorityClick = (e: React.MouseEvent) => {
@@ -633,8 +772,85 @@ Your order is being picked up by the shipping company and should be arriving to 
   // Handle initial button click
   const handleOrderReadyClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!order.customer?.phone || isOrderConfirmed) return;
-    setShowReadyConfirmDialog(true);
+    
+    // If order is pending, change status to order-ready, add automated_whatsapp_confirmation tag, and send WhatsApp message
+    if (currentStatus === 'pending') {
+      // Check if order has customer phone number
+      if (!order.customer?.phone) {
+        toast.error('Customer phone number is required to send WhatsApp message');
+        return;
+      }
+
+      // Get current tags
+      const currentTags = Array.isArray(order.tags)
+        ? order.tags.map((t: string) => t.trim())
+        : typeof order.tags === 'string'
+          ? order.tags.split(',').map((t: string) => t.trim())
+          : [];
+      
+      // Remove existing status tags (case-insensitive)
+      const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+      let filtered = currentTags.filter((t: string) => {
+        const trimmed = t.trim().toLowerCase();
+        return !statusTags.some(st => st.trim().toLowerCase() === trimmed);
+      });
+      
+      // Add order_ready tag
+      filtered = [...filtered, 'order_ready'];
+      
+      // Add automated_whatsapp_confirmation tag if it doesn't exist
+      if (!filtered.includes('automated_whatsapp_confirmation')) {
+        filtered = [...filtered, 'automated_whatsapp_confirmation'];
+      }
+      
+      // Update tags with both order_ready and automated_whatsapp_confirmation
+      // This will make the order_ready tag appear instantly
+      if (onUpdateTags) {
+        onUpdateTags(order.id, filtered);
+      }
+      
+      // Also call onUpdateStatus to trigger backend status update endpoint
+      // (for Discord notifications, etc.)
+      // Use requestAnimationFrame to ensure tags update is applied first
+      requestAnimationFrame(() => {
+        if (onUpdateStatus) {
+          onUpdateStatus(order.id, 'order-ready');
+        }
+      });
+
+      // Send WhatsApp order_ready message
+      (async () => {
+        try {
+          const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/order-ready`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+              phone: order.customer.phone,
+              orderNumber: order.name // Include order number (e.g., "#1023")
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error('Failed to send order ready notification');
+          }
+          
+          toast.success('Order ready notification sent successfully');
+        } catch (error) {
+          console.error('Error sending order ready notification:', error);
+          toast.error('Failed to send order ready notification');
+        }
+      })();
+      
+      return;
+    }
+    
+    // If order is order-ready, show WhatsApp confirmation dialog
+    if (currentStatus === 'order-ready') {
+      if (!order.customer?.phone || isOrderConfirmed) return;
+      setShowReadyConfirmDialog(true);
+    }
   };
 
   // Handle actual confirmation after dialog
@@ -692,10 +908,21 @@ Your order is being picked up by the shipping company and should be arriving to 
     
     // Add new custom_due_date tag
     const formattedDate = format(newDueDate, 'yyyy-MM-dd');
-    const updatedTags = [...tagsWithoutDueDate, `custom_due_date:${formattedDate}`];
+    let updatedTags = [...tagsWithoutDueDate, `custom_due_date:${formattedDate}`];
+    
+    // Automatically add priority tag if it doesn't exist (custom due date = priority order)
+    if (!updatedTags.includes('priority')) {
+      updatedTags = [...updatedTags, 'priority'];
+      setLocalPriority(true); // Update local state for instant UI feedback
+    }
     
     if (onUpdateTags) {
       onUpdateTags(order.id, updatedTags);
+    }
+    
+    // Also update priority via the priority handler to ensure backend is updated
+    if (onTogglePriority && !currentTags.includes('priority')) {
+      onTogglePriority(order.id, true);
     }
   };
   
@@ -804,25 +1031,37 @@ Your order is being picked up by the shipping company and should be arriving to 
               <>
             <button
               onClick={handleNoteIconClick}
-              className="p-1 text-gray-400 hover:text-gray-600 transition-colors duration-200 bg-white rounded-md"
+              className="p-0 text-gray-400 hover:text-gray-600 transition-colors duration-200 bg-white rounded-md"
               title="Add note"
             >
               <PencilIcon className="w-4 h-4" />
             </button>
-            <button
-                    onClick={handleOrderReadyClick}
-                    disabled={isOrderConfirmed || !order.customer?.phone}
-                    className="p-1 bg-white rounded-md"
-                    title={isOrderConfirmed ? "Order already confirmed" : "Confirm order is ready"}
-            >
-                    <CheckIcon className={`w-4 h-4 ${isOrderConfirmed ? 'text-gray-300' : 'text-blue-500'}`} />
-            </button>
+            {(currentStatus === 'pending' || currentStatus === 'order-ready') && (
+              <button
+                      onClick={handleOrderReadyClick}
+                      disabled={currentStatus === 'order-ready' && (isOrderConfirmed || !order.customer?.phone)}
+                      className="p-0 bg-white rounded-md"
+                      title={
+                        currentStatus === 'pending' 
+                          ? "Mark order as ready" 
+                          : isOrderConfirmed 
+                            ? "Order already confirmed" 
+                            : "Confirm order is ready"
+                      }
+              >
+                      <CheckIcon className={`w-4 h-4 ${
+                        currentStatus === 'order-ready' && isOrderConfirmed 
+                          ? 'text-gray-300' 
+                          : hasAutomatedWhatsAppConfirmation 
+                            ? 'text-gray-700' 
+                            : 'text-blue-500'
+                      }`} />
+              </button>
+            )}
               </>
             )}
           </div>
           <div className="flex items-center gap-2">
-            {/* Tag button will be moved after InstaPay block to keep order: Priority -> InstaPay -> Tags */}
-            
             {isOrderCancelled && (
               <button
                 onClick={handleDeleteClick}
@@ -834,7 +1073,7 @@ Your order is being picked up by the shipping company and should be arriving to 
             )}
             <button
               onClick={handlePriorityClick}
-              className="p-1 transition-all duration-200 bg-white rounded-md"
+              className="p-0 transition-all duration-200 bg-white rounded-md"
               title={isPriority ? "Remove priority" : "Add priority"}
             >
               {isPriority ? (
@@ -844,78 +1083,22 @@ Your order is being picked up by the shipping company and should be arriving to 
               )}
             </button>
 
-            {isInstapayOrder && (
-              <Menu as="div" className="relative inline-block text-left">
-                {({ open }) => (
-                  <>
-                    <div>
-                      <Menu.Button
-                        className="p-1 bg-white rounded-md focus:outline-none"
-                        title="InstaPay payment status"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <img
-                          src={instapayLogo}
-                          alt="InstaPay"
-                          className={`h-[15px] w-auto ${isInstapayPaid ? 'opacity-100' : 'opacity-30'}`}
-                        />
-                      </Menu.Button>
-                    </div>
-                    {open && (
-                      <Menu.Items
-                        static
-                        className="absolute right-0 mt-1 w-32 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="py-1">
-                          <Menu.Item>
-                            {({ active }) => (
-                              <button
-                                className={`block w-full text-left px-3 py-1.5 text-sm ${active ? 'bg-gray-100' : 'bg-white'} ${isInstapayPaid ? 'text-green-700' : 'text-gray-700'}`}
-                                onClick={() => {
-                                  const currentTags = Array.isArray(order.tags)
-                                    ? order.tags.map((t: string) => t.trim())
-                                    : typeof order.tags === 'string'
-                                      ? order.tags.split(',').map((t: string) => t.trim())
-                                      : [];
-                                  if (!currentTags.includes('instapay_paid')) {
-                                    const updated = [...currentTags, 'instapay_paid'];
-                                    onUpdateTags && onUpdateTags(order.id, updated);
-                                  }
-                                }}
-                              >
-                                Paid
-                              </button>
-                            )}
-                          </Menu.Item>
-                          <Menu.Item>
-                            {({ active }) => (
-                              <button
-                                className={`block w-full text-left px-3 py-1.5 text-sm ${active ? 'bg-gray-100' : 'bg-white'} ${!isInstapayPaid ? 'text-red-700' : 'text-gray-700'}`}
-                                onClick={() => {
-                                  const currentTags = Array.isArray(order.tags)
-                                    ? order.tags.map((t: string) => t.trim())
-                                    : typeof order.tags === 'string'
-                                      ? order.tags.split(',').map((t: string) => t.trim())
-                                      : [];
-                                  const updated = currentTags.filter((t: string) => t !== 'instapay_paid');
-                                  onUpdateTags && onUpdateTags(order.id, updated);
-                                }}
-                              >
-                                Not paid
-                              </button>
-                            )}
-                          </Menu.Item>
-                        </div>
-                      </Menu.Items>
-                    )}
-                  </>
-                )}
-              </Menu>
+            {isOrderReady && (
+              <button
+                onClick={handleManualWhatsAppConfirmation}
+                className="p-0 transition-all duration-200 bg-white rounded-md"
+                title={hasManualWhatsAppConfirmation ? "WhatsApp confirmation already sent" : "Send WhatsApp shipping confirmation"}
+              >
+                <img
+                  src={whatsappLogo}
+                  alt="WhatsApp"
+                  className={`h-[25px] w-auto ${hasManualWhatsAppConfirmation ? 'opacity-100' : 'opacity-30'}`}
+                />
+              </button>
             )}
             <button
               onClick={handleTagClick}
-              className="p-1 transition-all duration-200 bg-white rounded-md"
+              className="p-0 transition-all duration-200 bg-white rounded-md"
               title="Manage tags"
             >
               <TagIcon className="w-4 h-4 text-gray-400 hover:text-gray-600" />
@@ -925,11 +1108,11 @@ Your order is being picked up by the shipping company and should be arriving to 
                 <>
                   <div>
                     <Menu.Button 
-                      className={`inline-flex items-center justify-center px-3 py-1.5 rounded-full text-sm font-medium leading-4 ${getStatusColor(currentStatus)}`}
+                      className={`inline-flex items-center justify-center px-3 py-1.5 rounded-full text-sm font-medium leading-4 whitespace-nowrap ${getStatusColor(currentStatus)}`}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {currentStatus}
-                      <ChevronDownIcon className="w-3 h-3 ml-1" />
+                      <span className="truncate">{currentStatus}</span>
+                      <ChevronDownIcon className="w-3 h-3 ml-1 flex-shrink-0" />
                     </Menu.Button>
                   </div>
                   {open && (
@@ -1046,14 +1229,32 @@ Your order is being picked up by the shipping company and should be arriving to 
                   className="p-1 text-green-600 hover:text-green-700 bg-white hover:bg-green-50 rounded transition-colors"
                   title="Open WhatsApp chat"
                 >
-                  <ChatBubbleLeftIcon className="w-3 h-3" />
+                  <ChatBubbleLeftIcon className="w-4 h-4" />
                 </button>
                 <button
                   onClick={handleCopyPhone}
                   className="p-1 text-gray-500 hover:text-gray-700 bg-white hover:bg-gray-50 rounded transition-colors"
                   title="Copy phone number"
                 >
-                  <ClipboardDocumentIcon className="w-3 h-3" />
+                  <ClipboardDocumentIcon className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={handleDialPhone}
+                  className="p-1 text-blue-600 hover:text-blue-700 bg-white hover:bg-blue-50 rounded transition-colors"
+                  title="Call customer"
+                >
+                  <PhoneArrowUpRightIcon className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={handleWhatsAppBusiness}
+                  className="p-1 bg-white hover:bg-green-50 rounded transition-colors"
+                  title="Open WhatsApp Business"
+                >
+                  <img
+                    src={whatsappLogo}
+                    alt="WhatsApp"
+                    className="w-4 h-4"
+                  />
                 </button>
               </div>
             </div>
@@ -1196,6 +1397,7 @@ Your order is being picked up by the shipping company and should be arriving to 
                 <ShippingStatus 
                   status={order.packageENStatus || 'Pending pickup'} 
                   orderTags={trimmedTags}
+                  fulfillments={order.fulfillments}
                 />
               </div>
             ) : !trimmedTags.includes('fulfilled') && (

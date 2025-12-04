@@ -11,7 +11,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from 'react-hot-toast';
 import { format } from 'date-fns';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 
 interface Message {
   id: string;
@@ -45,6 +45,7 @@ const WhatsAppInbox: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
 
   // Auto-select conversation from URL parameter
   useEffect(() => {
@@ -145,12 +146,19 @@ const WhatsAppInbox: React.FC = () => {
   };
 
   const formatPhoneNumber = (phone: string) => {
-    // Remove any non-numeric characters and format for display
-    const cleaned = phone.replace(/\D/g, '');
-    if (cleaned.startsWith('201')) {
-      return `+20 ${cleaned.substring(3, 6)} ${cleaned.substring(6, 9)} ${cleaned.substring(9)}`;
-    }
+    // Return phone number as stored in database (no formatting)
     return phone;
+  };
+
+  const handlePhoneNumberClick = (phone: string) => {
+    // Format phone number for search - remove all non-numeric characters
+    const cleaned = phone.replace(/\D/g, '');
+    
+    // Remove the first digit from the phone number
+    const searchPhone = cleaned.length > 1 ? cleaned.substring(1) : cleaned;
+    
+    // Navigate to orders page with the modified phone number in search
+    navigate(`/orders?search=${searchPhone}`);
   };
 
   const formatTimestamp = (timestamp: string | Date) => {
@@ -292,9 +300,13 @@ const WhatsAppInbox: React.FC = () => {
                   <PhoneIcon className="w-5 h-5 text-green-600" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <h2 className="font-semibold text-gray-900 truncate">
+                  <button
+                    onClick={() => handlePhoneNumberClick(selectedPhone)}
+                    className="font-semibold text-gray-900 truncate hover:text-blue-600 hover:underline transition-colors cursor-pointer text-left w-full bg-white"
+                    title="Click to find order for this phone number"
+                  >
                     {formatPhoneNumber(selectedPhone)}
-                  </h2>
+                  </button>
                   <p className="text-sm text-gray-500">WhatsApp conversation</p>
                 </div>
               </div>
