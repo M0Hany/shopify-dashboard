@@ -107,7 +107,7 @@ async function findOrderNumberFromPreviousMessage(customerPhone: string): Promis
       logger.info('=== FOUND PREVIOUS MESSAGE WITH ORDER NUMBER ===', {
         orderNumber: data.order_number,
         messageId: data.message_id,
-        timestamp: data.timestamp,
+        messageTimestamp: data.timestamp,
         to: data.to,
         customerPhone: formattedPhone,
         timestamp: new Date().toISOString()
