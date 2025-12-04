@@ -2,6 +2,9 @@ FROM node:18-alpine
 
 WORKDIR /app
 
+# Skip Puppeteer Chrome download to save space (we use WhatsApp Business API, not whatsapp-web.js)
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
 # Install dependencies first (better caching)
 COPY package*.json ./
 RUN npm install
