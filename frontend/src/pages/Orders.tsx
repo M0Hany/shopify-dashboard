@@ -179,6 +179,10 @@ interface Order {
     quantity: number;
     price: string;
     variant_title: string | null;
+    properties?: Array<{
+      name: string;
+      value: string;
+    }>;
   }[];
 }
 
@@ -1090,6 +1094,152 @@ const Orders = () => {
     }) || false;
   };
 
+  // Helper function to detect making time from line items
+  const detectMakingTime = (lineItems: any[]): number | null => {
+    if (!lineItems || lineItems.length === 0) return null;
+    
+    for (const item of lineItems) {
+      const title = item.title || '';
+      
+      // Check for "Rush My Order [3 days]" pattern in title
+      const rushMatch = title.match(/rush.*?\[(\d+)\s*days?\]/i);
+      if (rushMatch) {
+        return parseInt(rushMatch[1], 10);
+      }
+      
+      // Check for "Handmade Timeline [7 days]" pattern in title
+      const handmadeMatch = title.match(/handmade.*?\[(\d+)\s*days?\]/i);
+      if (handmadeMatch) {
+        return parseInt(handmadeMatch[1], 10);
+      }
+      
+      // Check properties for making time
+      if (item.properties && Array.isArray(item.properties)) {
+        for (const prop of item.properties) {
+          const propName = (prop.name || '').toLowerCase();
+          const propValue = prop.value || '';
+          
+          if (propName.includes('making time') || propName.includes('timeline') || propName.includes('rush')) {
+            const rushPropMatch = propValue.match(/rush.*?\[(\d+)\s*days?\]/i);
+            if (rushPropMatch) {
+              return parseInt(rushPropMatch[1], 10);
+            }
+            const handmadePropMatch = propValue.match(/handmade.*?\[(\d+)\s*days?\]/i);
+            if (handmadePropMatch) {
+              return parseInt(handmadePropMatch[1], 10);
+            }
+            const daysMatch = propValue.match(/(\d+)\s*days?/i);
+            if (daysMatch && (propValue.toLowerCase().includes('rush') || propValue.toLowerCase().includes('3'))) {
+              return parseInt(daysMatch[1], 10);
+            }
+            if (daysMatch && (propValue.toLowerCase().includes('handmade') || propValue.toLowerCase().includes('7'))) {
+              return parseInt(daysMatch[1], 10);
+            }
+          }
+        }
+      }
+      
+      if (title.toLowerCase().includes('making time') || title.toLowerCase().includes('choose your')) {
+        if (title.toLowerCase().includes('rush') || title.match(/3\s*days?/i)) {
+          return 3;
+        }
+        if (title.toLowerCase().includes('handmade') || title.match(/7\s*days?/i)) {
+          return 7;
+        }
+      }
+    }
+    
+    return null;
+  };
+
+  // Helper function to calculate days left for an order
+  const calculateDaysLeft = (order: Order): number => {
+    try {
+      const now = convertToCairoTime(new Date());
+      
+      // Get tags
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(t => t.trim())
+          : [];
+      
+      // Check for custom due date
+      const dueDateTag = tags.find((tag: string) => tag.startsWith('custom_due_date:'));
+      if (dueDateTag) {
+        const dateStr = dueDateTag.split(':')[1];
+        if (dateStr) {
+          const dueDate = convertToCairoTime(new Date(dateStr));
+          if (!isNaN(dueDate.getTime())) {
+            const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+            return daysLeft;
+          }
+        }
+      }
+      
+      // Check for custom start date
+      const startDateTag = tags.find((tag: string) => tag.startsWith('custom_start_date:'));
+      let startDate: Date;
+      
+      if (startDateTag) {
+        const dateStr = startDateTag.split(':')[1];
+        if (dateStr) {
+          const parsedDate = convertToCairoTime(new Date(dateStr));
+          if (!isNaN(parsedDate.getTime())) {
+            startDate = parsedDate;
+          } else {
+            // Fallback to created_at or effective_created_at
+            const fallbackDate = order.created_at || order.effective_created_at || new Date().toISOString();
+            startDate = convertToCairoTime(new Date(fallbackDate));
+            if (isNaN(startDate.getTime())) {
+              // Last resort: use current date
+              startDate = now;
+            }
+          }
+        } else {
+          const fallbackDate = order.created_at || order.effective_created_at || new Date().toISOString();
+          startDate = convertToCairoTime(new Date(fallbackDate));
+          if (isNaN(startDate.getTime())) {
+            startDate = now;
+          }
+        }
+      } else {
+        // Use created_at or effective_created_at, with fallbacks
+        const fallbackDate = order.created_at || order.effective_created_at;
+        if (fallbackDate) {
+          startDate = convertToCairoTime(new Date(fallbackDate));
+          if (isNaN(startDate.getTime())) {
+            startDate = now;
+          }
+        } else {
+          startDate = now;
+        }
+      }
+      
+      // Detect making time from line items
+      const makingTimeDays = detectMakingTime(order.line_items || []);
+      const daysToAdd = makingTimeDays || 7; // Default to 7 days if not detected
+      
+      // Calculate due date
+      const dueDate = new Date(startDate);
+      dueDate.setDate(dueDate.getDate() + daysToAdd);
+      const finalDueDate = convertToCairoTime(dueDate);
+      
+      // Validate final due date
+      if (isNaN(finalDueDate.getTime())) {
+        return 7; // Return default days left
+      }
+      
+      // Calculate days left
+      const daysLeft = Math.ceil((finalDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      
+      return daysLeft;
+    } catch (error) {
+      // Return a default value to prevent sorting errors
+      return 7;
+    }
+  };
+
   // First, decorate orders with their original index
   const sortedOrders = (orders || [])?.map((order: Order, idx: number) => ({
     ...order,
@@ -1143,24 +1293,31 @@ const Orders = () => {
       if (bShippingDate) return 1;
     }
 
+    // For pending orders, sort by days left first (ascending - fewest days first)
+    const isPendingA = aStatusPriority === 10; // pending orders have priority 10
+    const isPendingB = bStatusPriority === 10;
+    
+    if (isPendingA && isPendingB) {
+      const aDaysLeft = calculateDaysLeft(a);
+      const bDaysLeft = calculateDaysLeft(b);
+      if (aDaysLeft !== bDaysLeft) {
+        return aDaysLeft - bDaysLeft; // Ascending: fewest days first
+      }
+    }
+
     // Then sort by priority tag
     const aPriority = aTags.includes('priority');
     const bPriority = bTags.includes('priority');
     if (aPriority && !bPriority) return -1;
     if (!aPriority && bPriority) return 1;
 
-    // Both are same priority status, now sort by days left
-    const now = convertToCairoTime(new Date());
-    const aDueDate = a.custom_due_date 
-      ? convertToCairoTime(new Date(a.custom_due_date))
-      : new Date(convertToCairoTime(new Date(a.effective_created_at)).getTime() + 14 * 24 * 60 * 60 * 1000);
-    const bDueDate = b.custom_due_date 
-      ? convertToCairoTime(new Date(b.custom_due_date))
-      : new Date(convertToCairoTime(new Date(b.effective_created_at)).getTime() + 14 * 24 * 60 * 60 * 1000);
-    const aDaysLeft = Math.ceil((aDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-    const bDaysLeft = Math.ceil((bDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-    if (aDaysLeft !== bDaysLeft) {
-      return aDaysLeft - bDaysLeft;
+    // For non-pending orders, sort by days left
+    if (!isPendingA || !isPendingB) {
+      const aDaysLeft = calculateDaysLeft(a);
+      const bDaysLeft = calculateDaysLeft(b);
+      if (aDaysLeft !== bDaysLeft) {
+        return aDaysLeft - bDaysLeft;
+      }
     }
 
     // Sort by order ID in ascending order
@@ -1423,19 +1580,19 @@ ___`;
     } else {
       // Filter pending orders
       ordersToProcess = orders.filter(order => {
-        const tags = Array.isArray(order.tags) 
-          ? order.tags 
-          : typeof order.tags === 'string' 
-            ? order.tags.split(',').map(tag => tag.trim())
-            : [];
-        
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(tag => tag.trim())
+          : [];
+      
         // Check if order is pending (no status tags and not deleted) - case-insensitive
         return !tags.some(tag => tag.trim().toLowerCase() === 'deleted') && 
                !tags.some(tag => {
                  const trimmed = tag.trim().toLowerCase();
                  return ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'cancelled', 'paid'].some(st => st.toLowerCase() === trimmed);
                });
-      });
+    });
     }
 
     const itemCounts: { [key: string]: number } = {};
@@ -1558,7 +1715,7 @@ ___`;
                 <span className={`text-sm font-semibold ml-2 ${isSelected ? 'text-blue-900' : 'text-blue-600'}`}>
                   {item.quantity}
                 </span>
-              </div>
+            </div>
             );
           })}
           {!isSummaryExpanded && summary.items.length > 5 && (

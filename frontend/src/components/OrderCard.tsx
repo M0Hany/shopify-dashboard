@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import whatsappLogo from '../assets/whatsapp.png';
-import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon } from '@heroicons/react/24/outline';
+import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon, EllipsisHorizontalIcon, DocumentTextIcon, HashtagIcon, ClockIcon, SparklesIcon, CheckBadgeIcon, PaperAirplaneIcon, XCircleIcon, BanknotesIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid, PhoneArrowUpRightIcon } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
 import { convertToCairoTime } from '../utils/dateUtils';
@@ -178,6 +178,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const [isCityDialogOpen, setIsCityDialogOpen] = useState(false);
   const [selectedNeighborhood, setSelectedNeighborhood] = useState<Zone | null>(null);
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
+  const [itemsExpanded, setItemsExpanded] = useState(false);
   const noteModalRef = useRef<HTMLDivElement>(null);
   const whatsAppModalRef = useRef<HTMLDivElement>(null);
   const shippedModalRef = useRef<HTMLDivElement>(null);
@@ -202,6 +203,95 @@ const OrderCard: React.FC<OrderCardProps> = ({
   
   // Check if automated WhatsApp confirmation tag exists
   const hasAutomatedWhatsAppConfirmation = trimmedTags.includes('automated_whatsapp_confirmation');
+  // Utility function to detect making time from line items
+  const detectMakingTime = (lineItems: any[]): number | null => {
+    if (!lineItems || lineItems.length === 0) return null;
+    
+    // Look for addon line items that contain making time information
+    for (const item of lineItems) {
+      const title = item.title || '';
+      
+      // Check for "Rush My Order [3 days]" pattern in title
+      const rushMatch = title.match(/rush.*?\[(\d+)\s*days?\]/i);
+      if (rushMatch) {
+        return parseInt(rushMatch[1], 10);
+      }
+      
+      // Check for "Handmade Timeline [7 days]" pattern in title
+      const handmadeMatch = title.match(/handmade.*?\[(\d+)\s*days?\]/i);
+      if (handmadeMatch) {
+        return parseInt(handmadeMatch[1], 10);
+      }
+      
+      // Check properties for making time (for all line items, not just making time ones)
+      if (item.properties && Array.isArray(item.properties)) {
+        for (const prop of item.properties) {
+          const propName = (prop.name || '').toLowerCase();
+          const propValue = prop.value || '';
+          
+          // Check if this property is related to making time
+          if (propName.includes('making time') || propName.includes('timeline') || propName.includes('rush')) {
+            // Check for rush pattern
+            const rushPropMatch = propValue.match(/rush.*?\[(\d+)\s*days?\]/i);
+            if (rushPropMatch) {
+              return parseInt(rushPropMatch[1], 10);
+            }
+            // Check for handmade pattern
+            const handmadePropMatch = propValue.match(/handmade.*?\[(\d+)\s*days?\]/i);
+            if (handmadePropMatch) {
+              return parseInt(handmadePropMatch[1], 10);
+            }
+            // Check for just the number of days
+            const daysMatch = propValue.match(/(\d+)\s*days?/i);
+            if (daysMatch && (propValue.toLowerCase().includes('rush') || propValue.toLowerCase().includes('3'))) {
+              return parseInt(daysMatch[1], 10);
+            }
+            if (daysMatch && (propValue.toLowerCase().includes('handmade') || propValue.toLowerCase().includes('7'))) {
+              return parseInt(daysMatch[1], 10);
+            }
+          }
+        }
+      }
+      
+      // Check for "Choose your making time:" line items
+      if (title.toLowerCase().includes('making time') || title.toLowerCase().includes('choose your')) {
+        // If it's a making time line item, check if it has a value that indicates rush or handmade
+        if (title.toLowerCase().includes('rush') || title.match(/3\s*days?/i)) {
+          return 3;
+        }
+        if (title.toLowerCase().includes('handmade') || title.match(/7\s*days?/i)) {
+          return 7;
+        }
+      }
+    }
+    
+    return null;
+  };
+
+  // Detect making time from line items
+  const makingTimeDays = detectMakingTime(order.line_items || []);
+  const isRushOrder = makingTimeDays === 3;
+  const isHandmadeOrder = makingTimeDays === 7;
+  
+  // Separate regular line items from addon line items
+  const regularLineItems = (order.line_items || []).filter((item: any) => {
+    const title = (item.title || '').toLowerCase();
+    // Filter out addon line items (making time options)
+    return !title.includes('choose your making time') && 
+           !title.includes('making time') &&
+           !title.match(/rush.*?\[.*?days?\]/i) &&
+           !title.match(/handmade.*?\[.*?days?\]/i);
+  });
+  
+  const addonLineItems = (order.line_items || []).filter((item: any) => {
+    const title = (item.title || '').toLowerCase();
+    // Include addon line items
+    return title.includes('choose your making time') || 
+           title.includes('making time') ||
+           title.match(/rush.*?\[.*?days?\]/i) ||
+           title.match(/handmade.*?\[.*?days?\]/i);
+  });
+
   const dueDateTag = trimmedTags.find((tag: string) => tag.startsWith('custom_due_date:'));
   const startDateTag = trimmedTags.find((tag: string) => tag.startsWith('custom_start_date:'));
   
@@ -229,9 +319,10 @@ const OrderCard: React.FC<OrderCardProps> = ({
   }
   
   if (!dueDate) {
-    // Calculate due date based on start date (either custom or created_at)
+    // Calculate due date based on making time if detected, otherwise default to 7 days
+    const daysToAdd = makingTimeDays || 7;
     dueDate = new Date(startDate);
-    dueDate.setDate(dueDate.getDate() + 7);
+    dueDate.setDate(dueDate.getDate() + daysToAdd);
     dueDate = convertToCairoTime(dueDate);
   }
 
@@ -256,7 +347,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
       paid: 'paid',
       fulfilled: 'fulfilled',
       shipped: 'shipped',
-      readyToShip: 'ready_to_ship',
+              readyToShip: 'ready_to_ship',
       customerConfirmed: 'customer_confirmed',
       orderReady: 'order_ready'
     } as const;
@@ -306,6 +397,29 @@ const OrderCard: React.FC<OrderCardProps> = ({
         return 'bg-indigo-600 text-white';
       default:
         return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'pending':
+        return <ClockIcon className="w-5 h-5" />;
+      case 'order-ready':
+        return <SparklesIcon className="w-5 h-5" />;
+      case 'confirmed':
+        return <CheckBadgeIcon className="w-5 h-5" />;
+      case 'ready_to_ship':
+        return <PaperAirplaneIcon className="w-5 h-5" />;
+      case 'shipped':
+        return <TruckIcon className="w-5 h-5" />;
+      case 'fulfilled':
+        return <CheckBadgeIcon className="w-5 h-5" />;
+      case 'paid':
+        return <BanknotesIcon className="w-5 h-5" />;
+      case 'cancelled':
+        return <XCircleIcon className="w-5 h-5" />;
+      default:
+        return <ClockIcon className="w-5 h-5" />;
     }
   };
 
@@ -848,8 +962,8 @@ Could you kindly confirm if you'll be available to receive it during that time? 
     
     // If order is order-ready, show WhatsApp confirmation dialog
     if (currentStatus === 'order-ready') {
-      if (!order.customer?.phone || isOrderConfirmed) return;
-      setShowReadyConfirmDialog(true);
+    if (!order.customer?.phone || isOrderConfirmed) return;
+    setShowReadyConfirmDialog(true);
     }
   };
 
@@ -1012,107 +1126,57 @@ Could you kindly confirm if you'll be available to receive it during that time? 
   return (
     <>
     <div 
-      className={`bg-white rounded-lg border ${isOrderCancelled ? 'border-red-200' : 'border-gray-200'} hover:border-gray-300 transition-all duration-200`}
+      className={`bg-white rounded-lg border ${isOrderCancelled ? 'border-red-200' : 'border-gray-200'} hover:border-gray-300 transition-all duration-200 ${
+        isRushOrder ? 'border-l-4 border-l-red-500' : 
+        isHandmadeOrder ? 'border-l-4 border-l-blue-500' : 
+        ''
+      }`}
+      title={isRushOrder ? 'Rush Order (3 days)' : isHandmadeOrder ? 'Handmade Timeline (7 days)' : undefined}
     >
       <div className="p-4">
-        {/* Header: Checkbox, Note Icon, and Status */}
-        <div className="flex justify-between items-start mb-4">
-          <div className="flex items-center gap-2">
-          <div 
-            onClick={handleCheckboxClick}
-            className="relative w-5 h-5 cursor-pointer"
-          >
-            <div className={`absolute w-5 h-5 rounded-full border-2 ${isSelected ? 'border-blue-600' : 'border-gray-300'} bg-white`} />
-            {isSelected && (
-              <div className="absolute w-3 h-3 rounded-full bg-blue-600" style={{ top: '4px', left: '4px' }} />
-            )}
-          </div>
-            {!isOrderCancelled && (
-              <>
-            <button
-              onClick={handleNoteIconClick}
-              className="p-0 text-gray-400 hover:text-gray-600 transition-colors duration-200 bg-white rounded-md"
-              title="Add note"
-            >
-              <PencilIcon className="w-4 h-4" />
-            </button>
-            {(currentStatus === 'pending' || currentStatus === 'order-ready') && (
-              <button
-                      onClick={handleOrderReadyClick}
-                      disabled={currentStatus === 'order-ready' && (isOrderConfirmed || !order.customer?.phone)}
-                      className="p-0 bg-white rounded-md"
-                      title={
-                        currentStatus === 'pending' 
-                          ? "Mark order as ready" 
-                          : isOrderConfirmed 
-                            ? "Order already confirmed" 
-                            : "Confirm order is ready"
-                      }
+        {/* Two-Column Header Layout */}
+        <div className="flex justify-between items-start mb-3">
+          {/* Left Column: Checkbox, Customer Name, Order Number */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <div 
+                onClick={handleCheckboxClick}
+                className="relative w-5 h-5 cursor-pointer flex-shrink-0"
               >
-                      <CheckIcon className={`w-4 h-4 ${
-                        currentStatus === 'order-ready' && isOrderConfirmed 
-                          ? 'text-gray-300' 
-                          : hasAutomatedWhatsAppConfirmation 
-                            ? 'text-gray-700' 
-                            : 'text-blue-500'
-                      }`} />
-              </button>
-            )}
-              </>
-            )}
+                <div className={`absolute w-5 h-5 rounded-full border-2 ${isSelected ? 'border-blue-600' : 'border-gray-300'} bg-white`} />
+                {isSelected && (
+                  <div className="absolute w-3 h-3 rounded-full bg-blue-600" style={{ top: '4px', left: '4px' }} />
+                )}
+              </div>
+              <span className="text-base font-semibold text-gray-900 truncate">
+                {order.customer?.first_name} {order.customer?.last_name}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            {isOrderCancelled && (
-              <button
-                onClick={handleDeleteClick}
-                className="p-1 transition-all duration-200 bg-white rounded-md"
-                title="Delete order"
-              >
-                <TrashIcon className="w-4 h-4 text-red-500 hover:text-red-600" />
-              </button>
-            )}
-            <button
-              onClick={handlePriorityClick}
-              className="p-0 transition-all duration-200 bg-white rounded-md"
-              title={isPriority ? "Remove priority" : "Add priority"}
-            >
-              {isPriority ? (
-                <StarIconSolid className="w-4 h-4 text-yellow-500" />
-              ) : (
-                <StarIconOutline className="w-4 h-4 text-gray-300" />
-              )}
-            </button>
 
-            {isOrderReady && (
+          {/* Right Column: Status, Priority, and Actions Menu */}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {/* Priority Star - Only visible when active */}
+            {isPriority && (
               <button
-                onClick={handleManualWhatsAppConfirmation}
-                className="p-0 transition-all duration-200 bg-white rounded-md"
-                title={hasManualWhatsAppConfirmation ? "WhatsApp confirmation already sent" : "Send WhatsApp shipping confirmation"}
+                onClick={handlePriorityClick}
+                className="p-1 transition-colors duration-200 rounded hover:bg-gray-100"
+                title="Remove priority"
               >
-                <img
-                  src={whatsappLogo}
-                  alt="WhatsApp"
-                  className={`h-[25px] w-auto ${hasManualWhatsAppConfirmation ? 'opacity-100' : 'opacity-30'}`}
-                />
+                <StarIconSolid className="w-5 h-5 text-yellow-500" />
               </button>
             )}
-            <button
-              onClick={handleTagClick}
-              className="p-0 transition-all duration-200 bg-white rounded-md"
-              title="Manage tags"
-            >
-              <TagIcon className="w-4 h-4 text-gray-400 hover:text-gray-600" />
-            </button>
+            {/* Status Chip - Icon Only */}
             <Menu as="div" className="relative inline-block text-left">
               {({ open }) => (
                 <>
                   <div>
                     <Menu.Button 
-                      className={`inline-flex items-center justify-center px-3 py-1.5 rounded-full text-sm font-medium leading-4 whitespace-nowrap ${getStatusColor(currentStatus)}`}
+                      className={`inline-flex items-center justify-center p-1.5 rounded-full ${getStatusColor(currentStatus)} hover:opacity-80 transition-opacity`}
                       onClick={(e) => e.stopPropagation()}
+                      title={currentStatus.charAt(0).toUpperCase() + currentStatus.slice(1).replace(/-/g, ' ')}
                     >
-                      <span className="truncate">{currentStatus}</span>
-                      <ChevronDownIcon className="w-3 h-3 ml-1 flex-shrink-0" />
+                      {getStatusIcon(currentStatus)}
                     </Menu.Button>
                   </div>
                   {open && (
@@ -1208,180 +1272,299 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                 </>
               )}
             </Menu>
+
+
+            {/* Actions Dropdown Menu */}
+            <Menu as="div" className="relative inline-block text-left">
+              {({ open }) => (
+                <>
+                  <Menu.Button
+                    className="p-1 text-gray-400 hover:text-gray-600 transition-colors duration-200 rounded hover:bg-gray-100"
+                    onClick={(e) => e.stopPropagation()}
+                    title="More actions"
+                  >
+                    <EllipsisHorizontalIcon className="w-5 h-5" />
+                  </Menu.Button>
+                  {open && (
+                    <Menu.Items
+                      static
+                      className="absolute right-0 mt-1 w-48 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="py-1">
+                        {!isOrderCancelled && (
+                          <>
+                            <Menu.Item>
+                              {({ active }) => (
+                                <button
+                                  onClick={handleNoteIconClick}
+                                  className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                                >
+                                  <PencilIcon className="w-4 h-4" />
+                                  Add note
+                                </button>
+                              )}
+                            </Menu.Item>
+                            {(currentStatus === 'pending' || currentStatus === 'order-ready') && (
+                              <Menu.Item>
+                                {({ active }) => (
+                                  <button
+                                    onClick={handleOrderReadyClick}
+                                    disabled={currentStatus === 'order-ready' && (isOrderConfirmed || !order.customer?.phone)}
+                                    className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed`}
+                                    title={
+                                      currentStatus === 'pending' 
+                                        ? "Mark order as ready" 
+                                        : isOrderConfirmed 
+                                          ? "Order already confirmed" 
+                                          : "Confirm order is ready"
+                                    }
+                                  >
+                                    <CheckIcon className={`w-4 h-4 ${
+                                      currentStatus === 'order-ready' && isOrderConfirmed 
+                                        ? 'text-gray-300' 
+                                        : hasAutomatedWhatsAppConfirmation 
+                                          ? 'text-gray-700' 
+                                          : 'text-blue-500'
+                                    }`} />
+                                    {currentStatus === 'pending' ? 'Mark as ready' : 'Confirm ready'}
+                                  </button>
+                                )}
+                              </Menu.Item>
+                            )}
+                            {isOrderReady && (
+                              <Menu.Item>
+                                {({ active }) => (
+                                  <button
+                                    onClick={handleManualWhatsAppConfirmation}
+                                    className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                                    title={hasManualWhatsAppConfirmation ? "WhatsApp confirmation already sent" : "Send WhatsApp shipping confirmation"}
+                                  >
+                                    <img
+                                      src={whatsappLogo}
+                                      alt="WhatsApp"
+                                      className={`w-4 h-4 ${hasManualWhatsAppConfirmation ? 'opacity-100' : 'opacity-30'}`}
+                                    />
+                                    WhatsApp confirmation
+                                  </button>
+                                )}
+                              </Menu.Item>
+                            )}
+                            <Menu.Item>
+                              {({ active }) => (
+                                <button
+                                  onClick={handleTagClick}
+                                  className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                                >
+                                  <TagIcon className="w-4 h-4" />
+                                  Manage tags
+                                </button>
+                              )}
+                            </Menu.Item>
+                            <Menu.Item>
+                              {({ active }) => (
+                                <button
+                                  onClick={handlePriorityClick}
+                                  className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                                  title={isPriority ? "Remove priority" : "Add priority"}
+                                >
+                                  {isPriority ? (
+                                    <StarIconSolid className="w-4 h-4 text-yellow-500" />
+                                  ) : (
+                                    <StarIconOutline className="w-4 h-4 text-gray-400" />
+                                  )}
+                                  {isPriority ? 'Remove priority' : 'Add priority'}
+                                </button>
+                              )}
+                            </Menu.Item>
+                          </>
+                        )}
+                        {isOrderCancelled && (
+                          <Menu.Item>
+                            {({ active }) => (
+                              <button
+                                onClick={handleDeleteClick}
+                                className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-red-600`}
+                              >
+                                <TrashIcon className="w-4 h-4" />
+                                Delete order
+                              </button>
+                            )}
+                          </Menu.Item>
+                        )}
+                      </div>
+                    </Menu.Items>
+                  )}
+                </>
+              )}
+            </Menu>
+            
+            
           </div>
         </div>
 
-        {/* Customer Info and Price */}
-        <div className="space-y-3 mb-4">
-          <div className="flex items-center gap-2">
-            <UserIcon className="w-5 h-5 text-gray-400" />
-            <span className="text-sm font-medium text-gray-900">
-              {order.customer?.first_name} {order.customer?.last_name}
-            </span>
-          </div>
-          {order.customer?.phone && (
-            <div className="flex items-center gap-2">
-              <PhoneIcon className="w-4 h-4 text-green-500" />
-              <span className="text-xs text-gray-700">{order.customer.phone}</span>
-              <div className="flex items-center gap-1 ml-auto">
-                <button
-                  onClick={handleWhatsAppChat}
-                  className="p-1 text-green-600 hover:text-green-700 bg-white hover:bg-green-50 rounded transition-colors"
-                  title="Open WhatsApp chat"
-                >
-                  <ChatBubbleLeftIcon className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={handleCopyPhone}
-                  className="p-1 text-gray-500 hover:text-gray-700 bg-white hover:bg-gray-50 rounded transition-colors"
-                  title="Copy phone number"
-                >
-                  <ClipboardDocumentIcon className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={handleDialPhone}
-                  className="p-1 text-blue-600 hover:text-blue-700 bg-white hover:bg-blue-50 rounded transition-colors"
-                  title="Call customer"
-                >
-                  <PhoneArrowUpRightIcon className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={handleWhatsAppBusiness}
-                  className="p-1 bg-white hover:bg-green-50 rounded transition-colors"
-                  title="Open WhatsApp Business"
-                >
-                  <img
-                    src={whatsappLogo}
-                    alt="WhatsApp"
-                    className="w-4 h-4"
-                  />
-                </button>
+        {/* Compact Customer Info Section */}
+        <div className="mb-4 pb-3 border-b border-gray-100">
+          <div className="flex items-start justify-between gap-4">
+            {/* Left Side: Phone and Address */}
+            <div className="flex-1 space-y-2">
+              {order.customer?.phone && (
+                <div className="flex items-center gap-2 text-xs text-gray-600">
+                  <Menu as="div" className="relative inline-block text-left">
+                    {({ open }) => (
+                      <>
+                        <Menu.Button
+                          className="p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors"
+                          onClick={(e) => e.stopPropagation()}
+                          title="Phone actions"
+                        >
+                          <PhoneIcon className="w-5 h-5 text-green-500 flex-shrink-0 hover:text-green-600 transition-colors" />
+                        </Menu.Button>
+                    {open && (
+                      <Menu.Items
+                        static
+                        className="absolute left-0 mt-1 w-48 origin-top-left rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="py-1">
+                          <Menu.Item>
+                            {({ active }) => (
+                              <button
+                                onClick={handleWhatsAppChat}
+                                className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                              >
+                                <ChatBubbleLeftIcon className="w-4 h-4 text-green-600" />
+                                WhatsApp Web
+                              </button>
+                            )}
+                          </Menu.Item>
+                          <Menu.Item>
+                            {({ active }) => (
+                              <button
+                                onClick={handleDialPhone}
+                                className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                              >
+                                <PhoneArrowUpRightIcon className="w-4 h-4 text-blue-600" />
+                                Call Customer
+                              </button>
+                            )}
+                          </Menu.Item>
+                          <Menu.Item>
+                            {({ active }) => (
+                              <button
+                                onClick={handleWhatsAppBusiness}
+                                className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                              >
+                                <img src={whatsappLogo} alt="WhatsApp" className="w-4 h-4" />
+                                WhatsApp Business
+                              </button>
+                            )}
+                          </Menu.Item>
+                          <Menu.Item>
+                            {({ active }) => (
+                              <button
+                                onClick={handleCopyPhone}
+                                className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                              >
+                                <ClipboardDocumentIcon className="w-4 h-4 text-gray-500" />
+                                Copy Number
+                              </button>
+                            )}
+                          </Menu.Item>
+                        </div>
+                      </Menu.Items>
+                    )}
+                    </>
+                  )}
+                </Menu>
+                <span className="truncate">{order.customer.phone}</span>
               </div>
-            </div>
-          )}
-          {order.shipping_address && (
-            <div className="flex items-center gap-2">
-              <MapPinIcon className={`w-4 h-4 ${
-                locationIds.cityId && locationIds.neighborhoodId && locationIds.subZoneId &&
-                locationIds.cityId !== "null" && locationIds.neighborhoodId !== "null" && locationIds.subZoneId !== "null"
-                  ? 'text-green-500' 
-                  : 'text-red-500'
-              }`} />
+            )}
+            {order.shipping_address && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    startLocationEdit();
+                  }}
+                  className="p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors"
+                  title={canEditLocation ? 'Edit Location' : 'View Address'}
+                >
+                  <MapPinIcon className={`w-5 h-5 ${
+                    locationIds.cityId && locationIds.neighborhoodId && locationIds.subZoneId &&
+                    locationIds.cityId !== "null" && locationIds.neighborhoodId !== "null" && locationIds.subZoneId !== "null"
+                      ? 'text-green-500 hover:text-green-600' 
+                      : 'text-red-500 hover:text-red-600'
+                  } transition-colors`} />
+                </button>
               {locationIds.cityId && locationIds.cityId !== "null" ? (
                 <div className="flex items-center gap-2 w-full">
                   <span className="text-xs text-gray-700">
                     {cityData?.ArName || cityData?.EnName}
-                    {locationIds.neighborhoodId && locationIds.neighborhoodId !== "null" ? (
+                    {locationIds.neighborhoodId && locationIds.neighborhoodId !== "null" && (
                       <>
                         , {cityData?.Zones.find(z => z.Id.toString() === locationIds.neighborhoodId)?.ArName}
-                        {locationIds.subZoneId && locationIds.subZoneId !== "null" ? (
+                        {locationIds.subZoneId && locationIds.subZoneId !== "null" && (
                           <>
                             , {cityData?.Zones
                                 .find(z => z.Id.toString() === locationIds.neighborhoodId)
                                 ?.SubZones.find(sz => sz.Id.toString() === locationIds.subZoneId)?.ArName}
                           </>
-                        ) : (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              startLocationEdit();
-                            }}
-                            className={`ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors ${
-                              canEditLocation ? 'text-gray-600' : 'text-blue-600'
-                            }`}
-                          >
-                            {canEditLocation ? 'Edit Location' : 'View Address'}
-                          </button>
                         )}
                       </>
-                    ) : (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          startLocationEdit();
-                        }}
-                        className={`ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors ${
-                          canEditLocation ? 'text-gray-600' : 'text-blue-600'
-                        }`}
-                      >
-                        {canEditLocation ? 'Edit Location' : 'View Address'}
-                      </button>
                     )}
                   </span>
-                  {locationIds.cityId && locationIds.neighborhoodId && locationIds.subZoneId &&
-                   locationIds.cityId !== "null" && locationIds.neighborhoodId !== "null" && locationIds.subZoneId !== "null" && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startLocationEdit();
-                      }}
-                      className={`ml-2 px-2 py-0.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors ${
-                        canEditLocation ? 'text-gray-600' : 'text-blue-600'
-                      }`}
-                    >
-                      {canEditLocation ? 'Edit Location' : 'View Address'}
-                    </button>
-                  )}
                 </div>
               ) : (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-red-500">Missing address</span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      startLocationEdit();
-                    }}
-                    className={`px-2 py-0.5 text-xs bg-white border rounded transition-colors ${
-                      canEditLocation 
-                        ? 'border-red-300 text-red-600 hover:bg-red-50' 
-                        : 'border-blue-300 text-blue-600 hover:bg-blue-50'
-                    }`}
-                  >
-                    {canEditLocation ? 'Choose Location' : 'View Address'}
-                  </button>
+                <div className="flex items-center gap-2 w-full">
+                  <span className="text-xs text-gray-700">
+                    {order.shipping_address?.province && order.shipping_address?.city 
+                      ? `${order.shipping_address.province}, ${order.shipping_address.city}`
+                      : order.shipping_address?.province 
+                        ? order.shipping_address.province
+                        : order.shipping_address?.city
+                          ? order.shipping_address.city
+                          : 'Missing address'
+                    }
+                  </span>
                 </div>
               )}
             </div>
           )}
-          {/* WhatsApp Messages Status */}
-          <div className="flex items-center gap-2">
-            <ChatBubbleLeftIcon className="w-4 h-4 text-gray-400" />
-            <div className="flex items-center gap-1.5">
-              {trimmedTags.includes('confirmation_sent') && (
-                <span className="px-2 py-0.5 text-xs bg-gray-50 border border-gray-200 text-gray-600 rounded">
-                  confirmation
-                </span>
-              )}
-              {trimmedTags.includes('order_ready_confirmed') && (
-                <span className="px-2 py-0.5 text-xs bg-gray-50 border border-gray-200 text-gray-600 rounded">
-                  ready
-                </span>
-              )}
-              {trimmedTags.includes('shipping_notification_sent') && (
-                <span className="px-2 py-0.5 text-xs bg-gray-50 border border-gray-200 text-gray-600 rounded">
-                  shipped
-                </span>
-              )}
-              {!trimmedTags.includes('confirmation_sent') && 
-               !trimmedTags.includes('order_ready_confirmed') && 
-               !trimmedTags.includes('shipping_notification_sent') && (
-                <span className="text-xs text-gray-400">No messages sent</span>
-              )}
             </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <CurrencyDollarIcon className="w-5 h-5 text-gray-400" />
-            <span className="text-sm font-medium text-gray-900">
-              ${order.total_price}
-            </span>
+
+            {/* Right Side: Order ID and Price */}
+            <div className="flex flex-col gap-2 flex-shrink-0">
+              <div className="flex items-center gap-2 text-xs text-gray-600">
+                <button
+                  className="p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors"
+                  title="Order ID"
+                >
+                  <HashtagIcon className="w-5 h-5 text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors" />
+                </button>
+                <span className="truncate font-medium">{order.name}</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-gray-600">
+                <button
+                  className="p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors"
+                  title="Total Price"
+                >
+                  <CurrencyDollarIcon className="w-5 h-5 text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors" />
+                </button>
+                <span className="truncate font-medium">${order.total_price}</span>
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Order Notes - only show if not cancelled */}
         {!isOrderCancelled && order.note && (
-          <div className="mb-4 p-3 bg-amber-50 rounded-md">
+          <div 
+            className="mb-4 p-3 bg-amber-50 rounded-md cursor-pointer hover:bg-amber-100 transition-colors"
+            onClick={handleNoteIconClick}
+          >
             <div className="flex gap-2">
-              <ExclamationTriangleIcon className="w-5 h-5 text-amber-600 flex-shrink-0" />
+              <DocumentTextIcon className="w-5 h-5 text-amber-600 flex-shrink-0" />
               <p className="text-sm text-amber-700 font-medium">
                 {order.note}
               </p>
@@ -1415,33 +1598,62 @@ Could you kindly confirm if you'll be available to receive it during that time? 
           </>
         )}
 
-        {/* Items List */}
-        <div className="space-y-2 mb-4">
-          <div className="text-xs text-gray-500">{order.line_items?.length} items:</div>
-          <div className="space-y-1">
-            {order.line_items?.map((item: any, index: number) => (
-              <div key={index} className="flex justify-between text-sm">
-                <div className="flex gap-2">
-                  <span className={`${isOrderCancelled ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
-                    {item.title}
-                    {item.variant_title && ` (${item.variant_title})`}
-                  </span>
-                  <span className="text-gray-500">×{item.quantity}</span>
-                </div>
+        {/* Condensed Items List */}
+        <div className="mb-3">
+          <div className="text-xs text-gray-500 mb-1">{regularLineItems.length} items</div>
+          <div className="space-y-0.5">
+            {(itemsExpanded ? regularLineItems : regularLineItems.slice(0, 2)).map((item: any, index: number) => (
+              <div key={index} className="flex justify-between text-xs">
+                <span className={`truncate ${isOrderCancelled ? 'text-gray-500 line-through' : 'text-gray-700'}`}>
+                  {item.title}
+                  {item.variant_title && ` (${item.variant_title})`}
+                </span>
+                <span className="text-gray-500 ml-2 flex-shrink-0">×{item.quantity}</span>
               </div>
             ))}
+            {regularLineItems.length > 2 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setItemsExpanded(!itemsExpanded);
+                }}
+                className="text-xs text-blue-600 hover:text-blue-700 mt-1"
+              >
+                {itemsExpanded ? 'Show less' : `+${regularLineItems.length - 2} more items`}
+              </button>
+            )}
           </div>
-        </div>
-
-        {/* Order Number */}
-        <div className="pt-3 border-t">
-          <div className="flex justify-between items-center">
-            <span className="text-xs text-gray-500">Order {order.name}</span>
-            <span className="text-xs text-gray-500">{order.line_items?.length} items</span>
+          
+          {/* Addon Line Items (Making Time Options) */}
+          {addonLineItems.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-200">
+              <div className="text-xs text-gray-500 mb-1">Making Time:</div>
+              <div className="space-y-1">
+                {addonLineItems.map((item: any, index: number) => (
+                  <div key={index} className="flex justify-between text-sm">
+                    <div className="flex gap-2 items-center">
+                      <span className={`${isOrderCancelled ? 'text-gray-500 line-through' : 'text-blue-700 font-medium'}`}>
+                        {item.title}
+                        {item.properties && item.properties.length > 0 && (
+                          <span className="text-gray-600 ml-2">
+                            {item.properties.map((prop: any, propIndex: number) => (
+                              <span key={propIndex}>
+                                {prop.name}: {prop.value}
+                                {propIndex < item.properties.length - 1 && ', '}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-          </div>
+          )}
         </div>
+      </div>
+    </div>
 
       {/* Confirmation Dialog */}
       {showReadyConfirmDialog && (

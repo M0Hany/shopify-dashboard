@@ -34,6 +34,10 @@ export interface ShopifyOrder {
     quantity: number;
     price: string;
     variant_title: string | null;
+    properties?: Array<{
+      name: string;
+      value: string;
+    }>;
   }[];
   customer: {
     id: number;
@@ -152,7 +156,7 @@ export class ShopifyService {
         const query: Record<string, string | number> = {
           limit: params.limit ? Math.min(250, params.limit - allOrders.length) : 250,
           status: 'any',
-          fields: 'id,name,email,phone,total_price,financial_status,fulfillment_status,tags,created_at,updated_at,line_items,customer,shipping_address,shipping_address.address1,shipping_address.address2,shipping_address.city,shipping_address.province,shipping_address.zip,shipping_address.country,line_items.variant_title,note,payment_gateway_names,fulfillments'
+          fields: 'id,name,email,phone,total_price,financial_status,fulfillment_status,tags,created_at,updated_at,line_items,customer,shipping_address,shipping_address.address1,shipping_address.address2,shipping_address.city,shipping_address.province,shipping_address.zip,shipping_address.country,line_items.variant_title,line_items.properties,note,payment_gateway_names,fulfillments'
         };
 
         // Map status to tag for filtering

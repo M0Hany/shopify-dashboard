@@ -728,7 +728,7 @@ router.post('/webhook', express.json(), async (req, res) => {
                     const hasOrderReady = currentTags.includes('order_ready');
                     
                     if (hasOrderReady) {
-                      await updateOrderWithCustomerConfirmation(targetOrder, customerPhone);
+                    await updateOrderWithCustomerConfirmation(targetOrder, customerPhone);
                     } else {
                       logger.warn('Order does not have order_ready tag, skipping update', {
                         orderId: targetOrder.id,
