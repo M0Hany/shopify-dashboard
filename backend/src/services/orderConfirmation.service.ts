@@ -123,7 +123,15 @@ export class OrderConfirmationService {
   }): Promise<void> {
     try {
       // Check if order still exists and doesn't have confirmation_sent tag
-      const order = await this.shopifyService.getOrder(data.orderId);
+      const orderId = parseInt(data.orderId, 10);
+      if (isNaN(orderId)) {
+        logger.error('Invalid order ID when trying to send delayed confirmation', {
+          orderId: data.orderId,
+          orderNumber: data.orderNumber
+        });
+        return;
+      }
+      const order = await this.shopifyService.getOrder(orderId);
       
       if (!order) {
         logger.warn('Order not found when trying to send delayed confirmation', {

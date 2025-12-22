@@ -60,7 +60,8 @@ shippingQueue.process(async (job) => {
 orderConfirmationQueue.process('send-order-confirmation', async (job) => {
   try {
     logger.info('Processing order confirmation job', { jobId: job.id, data: job.data });
-    const { orderConfirmationService } = await import('../services/orderConfirmation.service');
+    const { OrderConfirmationService } = await import('../services/orderConfirmation.service');
+    const orderConfirmationService = OrderConfirmationService.getInstance();
     await orderConfirmationService.sendDelayedConfirmation(job.data);
     logger.info('Order confirmation job completed', { jobId: job.id });
   } catch (error) {
