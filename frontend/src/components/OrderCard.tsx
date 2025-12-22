@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import whatsappLogo from '../assets/whatsapp.png';
-import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon, EllipsisHorizontalIcon, DocumentTextIcon, HashtagIcon, ClockIcon, SparklesIcon, CheckBadgeIcon, PaperAirplaneIcon, XCircleIcon, BanknotesIcon } from '@heroicons/react/24/outline';
+import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon, EllipsisHorizontalIcon, DocumentTextIcon, ClockIcon, SparklesIcon, CheckBadgeIcon, PaperAirplaneIcon, XCircleIcon, BanknotesIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid, PhoneArrowUpRightIcon } from '@heroicons/react/24/solid';
 import OrderTimeline from './OrderTimeline';
 import { convertToCairoTime } from '../utils/dateUtils';
@@ -1123,6 +1123,58 @@ Could you kindly confirm if you'll be available to receive it during that time? 
     setNewTag('');
   };
 
+  // Get shipping method from tags
+  const getShippingMethod = (): string => {
+    const shippingMethodTag = tags.find((tag: string) => 
+      tag.trim().toLowerCase().startsWith('shipping_method:')
+    );
+    if (shippingMethodTag) {
+      const method = shippingMethodTag.split(':')[1]?.trim().toLowerCase();
+      if (method === 'scooter') return 'Scooter';
+      if (method === 'pickup') return 'Pickup';
+      if (method === 'other-company' || method === 'other_company') return 'Other Company';
+    }
+    return 'Shipblu'; // Default
+  };
+
+  // Handle shipping method change
+  const handleShippingMethodChange = (method: string) => {
+    const currentTags = Array.isArray(order.tags) 
+      ? order.tags 
+      : typeof order.tags === 'string'
+        ? order.tags.split(',').map((t: string) => t.trim())
+        : [];
+
+    // Remove existing shipping_method tags (case-insensitive)
+    const updatedTags = currentTags.filter((tag: string) => 
+      !tag.trim().toLowerCase().startsWith('shipping_method:')
+    );
+
+    // Add new shipping method tag
+    let tagValue = '';
+    if (method === 'Scooter') tagValue = 'shipping_method:scooter';
+    else if (method === 'Pickup') tagValue = 'shipping_method:pickup';
+    else if (method === 'Other Company') tagValue = 'shipping_method:other-company';
+
+    if (tagValue) {
+      updatedTags.push(tagValue);
+      if (onUpdateTags) {
+        onUpdateTags(order.id, updatedTags);
+      }
+    }
+  };
+
+  // Handle copy order number to clipboard
+  const handleCopyOrderNumber = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(order.name);
+      toast.success('Order number copied to clipboard');
+    } catch (error) {
+      toast.error('Failed to copy order number');
+    }
+  };
+
   return (
     <>
     <div 
@@ -1148,9 +1200,18 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                   <div className="absolute w-3 h-3 rounded-full bg-blue-600" style={{ top: '4px', left: '4px' }} />
                 )}
               </div>
-              <span className="text-base font-semibold text-gray-900 truncate">
-                {order.customer?.first_name} {order.customer?.last_name}
-              </span>
+              <div className="flex flex-col flex-1 min-w-0 justify-start">
+                <span className="text-base font-semibold text-gray-900 truncate leading-tight">
+                  {order.customer?.first_name} {order.customer?.last_name}
+                </span>
+                <span
+                  onClick={handleCopyOrderNumber}
+                  className="text-[10px] text-gray-500 hover:text-gray-700 transition-colors cursor-pointer truncate leading-tight mt-0.5"
+                  title="Click to copy order number"
+                >
+                  {order.name}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -1533,16 +1594,63 @@ Could you kindly confirm if you'll be available to receive it during that time? 
           )}
             </div>
 
-            {/* Right Side: Order ID and Price */}
+            {/* Right Side: Shipping Method and Price */}
             <div className="flex flex-col gap-2 flex-shrink-0">
               <div className="flex items-center gap-2 text-xs text-gray-600">
-                <button
-                  className="p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors"
-                  title="Order ID"
-                >
-                  <HashtagIcon className="w-5 h-5 text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors" />
-                </button>
-                <span className="truncate font-medium">{order.name}</span>
+                <Menu as="div" className="relative inline-block text-left">
+                  {({ open }) => (
+                    <>
+                      <Menu.Button
+                        onClick={(e) => e.stopPropagation()}
+                        className="p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors"
+                        title="Shipping Method"
+                      >
+                        <TruckIcon className="w-5 h-5 text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors" />
+                      </Menu.Button>
+                      {open && (
+                        <Menu.Items
+                          static
+                          className="absolute right-0 mt-1 w-40 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="py-1">
+                            <Menu.Item>
+                              {({ active }) => (
+                                <button
+                                  onClick={() => handleShippingMethodChange('Other Company')}
+                                  className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                                >
+                                  Other Company
+                                </button>
+                              )}
+                            </Menu.Item>
+                            <Menu.Item>
+                              {({ active }) => (
+                                <button
+                                  onClick={() => handleShippingMethodChange('Scooter')}
+                                  className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                                >
+                                  Scooter
+                                </button>
+                              )}
+                            </Menu.Item>
+                            <Menu.Item>
+                              {({ active }) => (
+                                <button
+                                  onClick={() => handleShippingMethodChange('Pickup')}
+                                  className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                                >
+                                  Pickup
+                                </button>
+                              )}
+                            </Menu.Item>
+                          </div>
+                        </Menu.Items>
+                      )}
+                    </>
+                  )}
+                </Menu>
+                <span className="truncate font-medium">{getShippingMethod()}</span>
               </div>
               <div className="flex items-center gap-2 text-xs text-gray-600">
                 <button

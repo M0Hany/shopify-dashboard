@@ -23,6 +23,15 @@ export const statusQueue = new Queue('status-updates', {
   }
 });
 
+export const orderConfirmationQueue = new Queue('order-confirmations', {
+  redis: {
+    host: config.redis.host,
+    port: config.redis.port,
+    maxRetriesPerRequest: config.redis.maxRetriesPerRequest,
+    retryStrategy: config.redis.retryStrategy
+  }
+});
+
 // Process status changes
 statusQueue.process(async (job) => {
   try {
@@ -47,9 +56,23 @@ shippingQueue.process(async (job) => {
   }
 });
 
+// Process order confirmation jobs
+orderConfirmationQueue.process('send-order-confirmation', async (job) => {
+  try {
+    logger.info('Processing order confirmation job', { jobId: job.id, data: job.data });
+    const { orderConfirmationService } = await import('../services/orderConfirmation.service');
+    await orderConfirmationService.sendDelayedConfirmation(job.data);
+    logger.info('Order confirmation job completed', { jobId: job.id });
+  } catch (error) {
+    logger.error('Error processing order confirmation job', { jobId: job.id, error });
+    throw error;
+  }
+});
+
 // Error handling for queues
 let hasLoggedShippingError = false;
 let hasLoggedStatusError = false;
+let hasLoggedOrderConfirmationError = false;
 
 shippingQueue.on('error', (error) => {
   if (!hasLoggedShippingError) {
@@ -76,6 +99,18 @@ statusQueue.on('ready', () => {
   logger.info('Status queue connected successfully');
 });
 
+orderConfirmationQueue.on('error', (error) => {
+  if (!hasLoggedOrderConfirmationError) {
+    logger.error('Order confirmation queue error:', error);
+    hasLoggedOrderConfirmationError = true;
+  }
+});
+
+orderConfirmationQueue.on('ready', () => {
+  hasLoggedOrderConfirmationError = false;
+  logger.info('Order confirmation queue connected successfully');
+});
+
 // Log successful job completion
 shippingQueue.on('completed', (job) => {
   logger.info('Job completed', { jobId: job.id, queue: 'shipping-operations' });
@@ -85,11 +120,16 @@ statusQueue.on('completed', (job) => {
   logger.info('Job completed', { jobId: job.id, queue: 'status-updates' });
 });
 
+orderConfirmationQueue.on('completed', (job) => {
+  logger.info('Job completed', { jobId: job.id, queue: 'order-confirmations' });
+});
+
 // Clean up completed jobs
 async function cleanupJobs() {
   await Promise.all([
     statusQueue.clean(7 * 24 * 3600 * 1000), // 7 days
-    shippingQueue.clean(7 * 24 * 3600 * 1000)
+    shippingQueue.clean(7 * 24 * 3600 * 1000),
+    orderConfirmationQueue.clean(7 * 24 * 3600 * 1000) // 7 days
   ]);
 }
 

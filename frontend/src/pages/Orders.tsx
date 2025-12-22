@@ -11,6 +11,7 @@ import FileUpload from '../components/FileUpload';
 import MoneyTransferUpload from '../components/MoneyTransferUpload';
 import { format } from 'date-fns';
 import { toast } from 'react-hot-toast';
+import { calculateDaysRemaining } from '../utils/dateUtils';
 
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
@@ -1152,7 +1153,7 @@ const Orders = () => {
     return null;
   };
 
-  // Helper function to calculate days left for an order
+  // Helper function to calculate days left for an order (matches OrderTimeline calculation)
   const calculateDaysLeft = (order: Order): number => {
     try {
       const now = convertToCairoTime(new Date());
@@ -1166,74 +1167,82 @@ const Orders = () => {
       
       // Check for custom due date
       const dueDateTag = tags.find((tag: string) => tag.startsWith('custom_due_date:'));
+      let dueDate: Date;
+      
       if (dueDateTag) {
         const dateStr = dueDateTag.split(':')[1];
         if (dateStr) {
-          const dueDate = convertToCairoTime(new Date(dateStr));
-          if (!isNaN(dueDate.getTime())) {
-            const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-            return daysLeft;
+          const parsedDueDate = convertToCairoTime(new Date(dateStr));
+          if (!isNaN(parsedDueDate.getTime())) {
+            dueDate = parsedDueDate;
+          } else {
+            // Fallback: calculate from start date
+            dueDate = null as any;
           }
+        } else {
+          dueDate = null as any;
         }
+      } else {
+        dueDate = null as any;
       }
       
-      // Check for custom start date
-      const startDateTag = tags.find((tag: string) => tag.startsWith('custom_start_date:'));
-      let startDate: Date;
-      
-      if (startDateTag) {
-        const dateStr = startDateTag.split(':')[1];
-        if (dateStr) {
-          const parsedDate = convertToCairoTime(new Date(dateStr));
-          if (!isNaN(parsedDate.getTime())) {
-            startDate = parsedDate;
+      // If no custom due date, calculate from start date
+      if (!dueDate || isNaN(dueDate.getTime())) {
+        // Check for custom start date
+        const startDateTag = tags.find((tag: string) => tag.startsWith('custom_start_date:'));
+        let startDate: Date;
+        
+        if (startDateTag) {
+          const dateStr = startDateTag.split(':')[1];
+          if (dateStr) {
+            const parsedDate = convertToCairoTime(new Date(dateStr));
+            if (!isNaN(parsedDate.getTime())) {
+              startDate = parsedDate;
+            } else {
+              // Fallback to created_at or effective_created_at
+              const fallbackDate = order.created_at || order.effective_created_at || new Date().toISOString();
+              startDate = convertToCairoTime(new Date(fallbackDate));
+              if (isNaN(startDate.getTime())) {
+                startDate = now;
+              }
+            }
           } else {
-            // Fallback to created_at or effective_created_at
             const fallbackDate = order.created_at || order.effective_created_at || new Date().toISOString();
             startDate = convertToCairoTime(new Date(fallbackDate));
             if (isNaN(startDate.getTime())) {
-              // Last resort: use current date
               startDate = now;
             }
           }
         } else {
-          const fallbackDate = order.created_at || order.effective_created_at || new Date().toISOString();
-          startDate = convertToCairoTime(new Date(fallbackDate));
-          if (isNaN(startDate.getTime())) {
+          // Use created_at or effective_created_at, with fallbacks
+          const fallbackDate = order.created_at || order.effective_created_at;
+          if (fallbackDate) {
+            startDate = convertToCairoTime(new Date(fallbackDate));
+            if (isNaN(startDate.getTime())) {
+              startDate = now;
+            }
+          } else {
             startDate = now;
           }
         }
-      } else {
-        // Use created_at or effective_created_at, with fallbacks
-        const fallbackDate = order.created_at || order.effective_created_at;
-        if (fallbackDate) {
-          startDate = convertToCairoTime(new Date(fallbackDate));
-          if (isNaN(startDate.getTime())) {
-            startDate = now;
-          }
-        } else {
-          startDate = now;
+        
+        // Detect making time from line items
+        const makingTimeDays = detectMakingTime(order.line_items || []);
+        const daysToAdd = makingTimeDays || 7; // Default to 7 days if not detected
+        
+        // Calculate due date
+        const calculatedDueDate = new Date(startDate);
+        calculatedDueDate.setDate(calculatedDueDate.getDate() + daysToAdd);
+        dueDate = convertToCairoTime(calculatedDueDate);
+        
+        // Validate final due date
+        if (isNaN(dueDate.getTime())) {
+          return 7; // Return default days left
         }
       }
       
-      // Detect making time from line items
-      const makingTimeDays = detectMakingTime(order.line_items || []);
-      const daysToAdd = makingTimeDays || 7; // Default to 7 days if not detected
-      
-      // Calculate due date
-      const dueDate = new Date(startDate);
-      dueDate.setDate(dueDate.getDate() + daysToAdd);
-      const finalDueDate = convertToCairoTime(dueDate);
-      
-      // Validate final due date
-      if (isNaN(finalDueDate.getTime())) {
-        return 7; // Return default days left
-      }
-      
-      // Calculate days left
-      const daysLeft = Math.ceil((finalDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-      
-      return daysLeft;
+      // Use calculateDaysRemaining to match OrderTimeline calculation
+      return calculateDaysRemaining(dueDate, now);
     } catch (error) {
       // Return a default value to prevent sorting errors
       return 7;
@@ -1271,7 +1280,26 @@ const Orders = () => {
     const aStatusPriority = getStatusPriority(a);
     const bStatusPriority = getStatusPriority(b);
 
-    // First sort by status priority
+    // For pending orders, sort SOLELY by days left (ascending - fewest days first)
+    const isPendingA = aStatusPriority === 10; // pending orders have priority 10
+    const isPendingB = bStatusPriority === 10;
+    
+    if (isPendingA && isPendingB) {
+      const aDaysLeft = calculateDaysLeft(a);
+      const bDaysLeft = calculateDaysLeft(b);
+      // Sort solely by days left for pending orders
+      if (aDaysLeft !== bDaysLeft) {
+        return aDaysLeft - bDaysLeft; // Ascending: fewest days first
+      }
+      // If days left are equal, use order ID as tiebreaker
+      if (a.id !== b.id) {
+        return a.id - b.id;
+      }
+      // Final tiebreaker: original index
+      return a.originalIndex - b.originalIndex;
+    }
+
+    // For non-pending orders, first sort by status priority
     if (aStatusPriority !== bStatusPriority) {
       return aStatusPriority - bStatusPriority;
     }
@@ -1293,16 +1321,11 @@ const Orders = () => {
       if (bShippingDate) return 1;
     }
 
-    // For pending orders, sort by days left first (ascending - fewest days first)
-    const isPendingA = aStatusPriority === 10; // pending orders have priority 10
-    const isPendingB = bStatusPriority === 10;
-    
-    if (isPendingA && isPendingB) {
-      const aDaysLeft = calculateDaysLeft(a);
-      const bDaysLeft = calculateDaysLeft(b);
-      if (aDaysLeft !== bDaysLeft) {
-        return aDaysLeft - bDaysLeft; // Ascending: fewest days first
-      }
+    // For non-pending orders with same status, sort by days left
+    const aDaysLeft = calculateDaysLeft(a);
+    const bDaysLeft = calculateDaysLeft(b);
+    if (aDaysLeft !== bDaysLeft) {
+      return aDaysLeft - bDaysLeft;
     }
 
     // Then sort by priority tag
@@ -1310,15 +1333,6 @@ const Orders = () => {
     const bPriority = bTags.includes('priority');
     if (aPriority && !bPriority) return -1;
     if (!aPriority && bPriority) return 1;
-
-    // For non-pending orders, sort by days left
-    if (!isPendingA || !isPendingB) {
-      const aDaysLeft = calculateDaysLeft(a);
-      const bDaysLeft = calculateDaysLeft(b);
-      if (aDaysLeft !== bDaysLeft) {
-        return aDaysLeft - bDaysLeft;
-      }
-    }
 
     // Sort by order ID in ascending order
     if (a.id !== b.id) {

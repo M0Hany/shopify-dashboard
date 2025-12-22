@@ -2,6 +2,7 @@ import { WhatsAppService } from './whatsapp';
 import { ShopifyService } from './shopify';
 import { logger } from '../utils/logger';
 import { ShopifyOrder } from './shopify';
+import { orderConfirmationQueue } from '../jobs/queue';
 
 export class OrderConfirmationService {
   private static instance: OrderConfirmationService;
@@ -53,21 +54,32 @@ export class OrderConfirmationService {
         return;
       }
 
-      // Send WhatsApp confirmation message using customer's first name
-      await this.whatsappService.sendOrderConfirmation(
-        phone,
-        order.name,
-        order.customer.first_name
+      // Schedule WhatsApp confirmation message to be sent after 1 hour
+      const delay = 60 * 60 * 1000; // 1 hour in milliseconds
+      
+      await orderConfirmationQueue.add(
+        'send-order-confirmation',
+        {
+          phone,
+          orderNumber: order.name,
+          customerName: order.customer.first_name,
+          orderId: order.id.toString()
+        },
+        {
+          delay,
+          attempts: 3,
+          backoff: {
+            type: 'exponential',
+            delay: 60000 // 1 minute
+          }
+        }
       );
 
-      // Add confirmation_sent tag
-      const newTags = [...tags, 'confirmation_sent'];
-      await this.shopifyService.updateOrderTags(order.id.toString(), newTags);
-
-      logger.info('Order confirmation message sent successfully', {
+      logger.info('Order confirmation message scheduled to be sent in 1 hour', {
         orderId: order.id,
         orderName: order.name,
-        phone: phone
+        phone: phone,
+        scheduledAt: new Date(Date.now() + delay).toISOString()
       });
     } catch (error) {
       logger.error('Error sending order confirmation message', {
@@ -98,6 +110,75 @@ export class OrderConfirmationService {
       logger.info('Completed pending orders check');
     } catch (error) {
       logger.error('Error checking pending orders:', error);
+      throw error;
+    }
+  }
+
+  // Send delayed confirmation message (called by queue processor)
+  public async sendDelayedConfirmation(data: {
+    phone: string;
+    orderNumber: string;
+    customerName: string;
+    orderId: string;
+  }): Promise<void> {
+    try {
+      // Check if order still exists and doesn't have confirmation_sent tag
+      const order = await this.shopifyService.getOrder(data.orderId);
+      
+      if (!order) {
+        logger.warn('Order not found when trying to send delayed confirmation', {
+          orderId: data.orderId,
+          orderNumber: data.orderNumber
+        });
+        return;
+      }
+
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string'
+          ? order.tags.split(',').map((t: string) => t.trim())
+          : [];
+
+      // Skip if order already has confirmation_sent tag or is in a final state
+      if (tags.some((tag: string) => [
+        'confirmed',
+        'ready_to_ship',
+        'shipped',
+        'fulfilled',
+        'paid',
+        'cancelled',
+        'confirmation_sent'
+      ].includes(tag.trim()))) {
+        logger.info('Order confirmation skipped - order already processed', {
+          orderId: data.orderId,
+          orderNumber: data.orderNumber,
+          tags
+        });
+        return;
+      }
+
+      // Send WhatsApp confirmation message
+      await this.whatsappService.sendOrderConfirmation(
+        data.phone,
+        data.orderNumber,
+        data.customerName
+      );
+
+      // Add confirmation_sent tag
+      const newTags = [...tags, 'confirmation_sent'];
+      await this.shopifyService.updateOrderTags(data.orderId, newTags);
+
+      logger.info('Delayed order confirmation message sent successfully', {
+        orderId: data.orderId,
+        orderName: data.orderNumber,
+        phone: data.phone
+      });
+    } catch (error) {
+      logger.error('Error sending delayed order confirmation message', {
+        error,
+        orderId: data.orderId,
+        orderNumber: data.orderNumber
+      });
       throw error;
     }
   }
