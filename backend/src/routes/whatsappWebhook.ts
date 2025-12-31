@@ -154,13 +154,13 @@ async function updateOrderWithCustomerConfirmation(targetOrder: any, customerPho
   });
   
   // Remove on_hold_reason tag if it exists (order is now confirmed)
-  filtered = filtered.filter(t => !t.trim().toLowerCase().startsWith('on_hold_reason:'));
+  filtered = filtered.filter((t: string) => !t.trim().toLowerCase().startsWith('on_hold_reason:'));
   
   // Add customer_confirmed tag
   filtered = [...filtered, 'customer_confirmed'];
   
   // If order was in on_hold, add tag to highlight it was confirmed from on_hold
-  const wasOnHold = currentTags.some(t => t.trim().toLowerCase() === 'on_hold');
+  const wasOnHold = currentTags.some((t: string) => t.trim().toLowerCase() === 'on_hold');
   if (wasOnHold) {
     filtered = [...filtered, 'confirmed_from_on_hold'];
   }
@@ -414,7 +414,7 @@ router.get('/conversation/:phone', async (req, res) => {
 router.get('/conversations', async (req, res) => {
   try {
     const { limit = 20, unread } = req.query;
-    const unreadOnly = unread === 'true' || unread === true;
+    const unreadOnly = unread === 'true' || unread === '1';
 
     const conversations = await whatsappService.getAllConversations(Number(limit), unreadOnly);
 
