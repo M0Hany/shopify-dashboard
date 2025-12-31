@@ -29,12 +29,21 @@ const shopifyService = new ShopifyService();
 // Discord public key for signature verification
 const DISCORD_PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY || '';
 
+// Log Discord configuration on startup
+if (DISCORD_PUBLIC_KEY) {
+  logger.info('Discord interactions enabled', {
+    publicKeyLength: DISCORD_PUBLIC_KEY.length,
+    publicKeyPreview: DISCORD_PUBLIC_KEY.substring(0, 10) + '...' + DISCORD_PUBLIC_KEY.substring(DISCORD_PUBLIC_KEY.length - 10)
+  });
+} else {
+  logger.warn('Discord interactions DISABLED - DISCORD_PUBLIC_KEY not set in environment variables');
+}
+
 // Verify Discord interaction signature using Ed25519
 function verifySignature(body: string, signature: string, timestamp: string): boolean {
   if (!DISCORD_PUBLIC_KEY) {
-    logger.warn('Discord public key not configured, skipping signature verification');
-    // In development, allow without verification. In production, this should be false.
-    return process.env.NODE_ENV !== 'production';
+    logger.error('Discord public key not configured - signature verification required for Discord interactions');
+    return false;
   }
 
   try {
@@ -53,7 +62,9 @@ function verifySignature(body: string, signature: string, timestamp: string): bo
     if (!isValid) {
       logger.warn('Discord signature verification failed', {
         signatureLength: signature.length,
-        publicKeyLength: DISCORD_PUBLIC_KEY.length
+        publicKeyLength: DISCORD_PUBLIC_KEY.length,
+        signature: signature.substring(0, 20) + '...',
+        publicKey: DISCORD_PUBLIC_KEY.substring(0, 20) + '...'
       });
     }
 
@@ -61,8 +72,9 @@ function verifySignature(body: string, signature: string, timestamp: string): bo
   } catch (error) {
     logger.error('Error verifying Discord signature', {
       error: error instanceof Error ? error.message : error,
-      signatureLength: signature.length,
-      publicKeyLength: DISCORD_PUBLIC_KEY.length
+      signatureLength: signature?.length || 0,
+      publicKeyLength: DISCORD_PUBLIC_KEY.length,
+      errorType: error instanceof Error ? error.constructor.name : typeof error
     });
     return false;
   }
@@ -79,11 +91,22 @@ router.post('/interactions', express.raw({ type: 'application/json' }), async (r
     logger.info('Discord interaction received', {
       hasSignature: !!signature,
       hasTimestamp: !!timestamp,
-      bodyLength: req.body?.length || 0
+      bodyLength: req.body?.length || 0,
+      method: req.method,
+      url: req.url,
+      headers: {
+        'content-type': req.headers['content-type'],
+        'user-agent': req.headers['user-agent']
+      }
     });
 
     if (!signature || !timestamp) {
-      logger.warn('Missing Discord signature headers');
+      logger.warn('Missing Discord signature headers', {
+        headers: Object.keys(req.headers),
+        hasXSignatureEd25519: !!req.headers['x-signature-ed25519'],
+        hasXSignatureTimestamp: !!req.headers['x-signature-timestamp'],
+        allHeaders: Object.keys(req.headers).filter(h => h.toLowerCase().includes('signature') || h.toLowerCase().includes('discord'))
+      });
       return res.status(401).json({ error: 'Missing signature headers' });
     }
 
@@ -92,7 +115,11 @@ router.post('/interactions', express.raw({ type: 'application/json' }), async (r
 
     // Verify signature BEFORE parsing JSON
     if (!verifySignature(body, signature, timestamp)) {
-      logger.warn('Discord signature verification failed');
+      logger.warn('Discord signature verification failed', {
+        bodyPreview: body.substring(0, 100),
+        signature: signature.substring(0, 20) + '...',
+        timestamp
+      });
       return res.status(401).json({ error: 'Invalid signature' });
     }
 
@@ -101,16 +128,24 @@ router.post('/interactions', express.raw({ type: 'application/json' }), async (r
     try {
       interaction = JSON.parse(body);
     } catch (parseError) {
-      logger.error('Failed to parse Discord interaction body', parseError);
+      logger.error('Failed to parse Discord interaction body', {
+        error: parseError instanceof Error ? parseError.message : parseError,
+        bodyPreview: body.substring(0, 200)
+      });
       return res.status(400).json({ error: 'Invalid JSON' });
     }
 
-    logger.info('Discord interaction type', { type: interaction.type });
+    logger.info('Discord interaction parsed', { 
+      type: interaction.type,
+      hasData: !!interaction.data,
+      customId: interaction.data?.custom_id
+    });
 
     // Handle PING (Discord verification) - MUST respond with type 1
+    // This is what Discord uses to verify the endpoint
     if (interaction.type === 1) {
       logger.info('Discord PING received, responding with PONG');
-      return res.status(200).json({ type: 1 }); // PONG
+      return res.status(200).json({ type: 1 }); // PONG - this is critical for verification
     }
 
     // Handle button clicks
