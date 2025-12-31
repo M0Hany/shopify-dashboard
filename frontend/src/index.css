@@ -56,6 +56,35 @@ body {
   min-height: 100vh;
 }
 
+html {
+  /* Allow scrolling for most pages */
+}
+
+/* Custom scrollbar styling - dark scrollbar thumb on white background */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #6b7280; /* dark gray scrollbar thumb */
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4b5563; /* darker on hover */
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #6b7280 transparent;
+}
+
 h1 {
   font-size: 3.2em;
   line-height: 1.1;

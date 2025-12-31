@@ -304,7 +304,7 @@ export class ShopifyService {
       
       // Determine previous status if not provided
       if (!previousStatus) {
-        const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'ready-to-ship', 'shipped', 'fulfilled', 'cancelled'];
+        const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'ready-to-ship', 'shipped', 'fulfilled', 'cancelled', 'on_hold'];
         const existingStatusTag = existingTags.find((tag: string) => 
           statusTags.some(st => tag.trim().toLowerCase() === st.trim().toLowerCase())
         );
@@ -322,7 +322,7 @@ export class ShopifyService {
       }
       
       // Filter out existing status tags and shipping date tag (case-insensitive)
-      const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'ready-to-ship', 'shipped', 'fulfilled', 'cancelled'].map(tag => tag.trim().toLowerCase());
+      const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'ready-to-ship', 'shipped', 'fulfilled', 'cancelled', 'on_hold'].map(tag => tag.trim().toLowerCase());
       const filteredTags = existingTags.filter((tag: string) => {
         const trimmed = tag.trim().toLowerCase();
         return !statusTags.includes(trimmed) && !tag.trim().startsWith('shipping_date:');

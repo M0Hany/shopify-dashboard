@@ -30,17 +30,21 @@ interface WhatsAppNotification {
 export class DiscordNotificationService {
   private webhookUrl: string | null;
   private whatsappWebhookUrl: string | null;
+  private botToken: string | null;
+  private whatsappChannelId: string | null;
 
   constructor() {
     this.webhookUrl = process.env.DISCORD_WEBHOOK_URL || null;
     this.whatsappWebhookUrl = process.env.DISCORD_WHATSAPP_WEBHOOK_URL || null;
+    this.botToken = process.env.DISCORD_BOT_TOKEN || null;
+    this.whatsappChannelId = process.env.DISCORD_WHATSAPP_CHANNEL_ID || null;
     
     if (!this.webhookUrl) {
       logger.warn('Discord webhook URL not configured. Order status notifications will be disabled.');
     }
     
-    if (!this.whatsappWebhookUrl) {
-      logger.warn('Discord WhatsApp webhook URL not configured. WhatsApp notifications will be disabled.');
+    if (!this.whatsappWebhookUrl && !this.botToken) {
+      logger.warn('Discord WhatsApp webhook URL or bot token not configured. WhatsApp notifications will be disabled.');
     }
   }
 
@@ -108,9 +112,14 @@ export class DiscordNotificationService {
         return 0x808080; // Gray
       };
 
+      // Customize description based on update source
+      const description = updatedBy && updatedBy.toLowerCase().includes('automated')
+        ? `Order status updated via automated WhatsApp confirmation`
+        : `Order status has been changed`;
+
       const embed = {
         title: '📦 Order Status Updated',
-        description: `Order status has been changed`,
+        description,
         color: getStatusColor(newStatus),
         fields: [
           {
@@ -272,6 +281,13 @@ export class DiscordNotificationService {
     const { phone, customerName, messageText, messageType, orderNumber, timestamp } = notification;
 
     try {
+      // Truncate message if too long (Discord field limit is 1024 characters per field)
+      const truncateMessage = (text: string, maxLength: number = 1000): string => {
+        if (!text) return 'No text content';
+        if (text.length <= maxLength) return text;
+        return text.substring(0, maxLength - 3) + '...';
+      };
+
       // Format phone number for display
       const formatPhoneForDisplay = (phone: string): string => {
         // Remove country code if present and format
@@ -282,58 +298,31 @@ export class DiscordNotificationService {
         return formatted || phone;
       };
 
-      // Truncate message if too long (Discord field limit is 1024 characters)
-      const truncateMessage = (text: string, maxLength: number = 500): string => {
-        if (!text) return 'No text content';
-        if (text.length <= maxLength) return text;
-        return text.substring(0, maxLength - 3) + '...';
-      };
-
-      // Get message type display name
-      const getMessageTypeDisplay = (type: string): string => {
-        const typeMap: Record<string, string> = {
-          'text': '📝 Text',
-          'image': '🖼️ Image',
-          'video': '🎥 Video',
-          'audio': '🎵 Audio',
-          'document': '📄 Document',
-          'location': '📍 Location',
-          'contacts': '👤 Contacts',
-          'button': '🔘 Button',
-          'interactive': '💬 Interactive'
-        };
-        return typeMap[type.toLowerCase()] || `📨 ${type}`;
-      };
-
       // Format order number with # symbol
       const formatOrderNumber = (orderNum: string | undefined): string => {
-        if (!orderNum) return '';
+        if (!orderNum) return 'Not found';
         // Remove any existing # and add it
         const cleaned = orderNum.replace(/^#/, '').trim();
         return `#${cleaned}`;
       };
 
-      // Build title with customer name and order number
-      let title = '💬 New WhatsApp Message';
-      if (customerName && orderNumber) {
-        title = `💬 Message from ${customerName} - ${formatOrderNumber(orderNumber)}`;
-      } else if (customerName) {
-        title = `💬 Message from ${customerName}`;
-      } else if (orderNumber) {
-        title = `💬 New Message - ${formatOrderNumber(orderNumber)}`;
-      }
-
+      // Format message text for notification (this appears in push notifications)
+      // The content field is what appears in notification center/phone - this is the most important
+      const notificationContent = truncateMessage(messageText, 2000);
+      
+      // Get frontend URL for deep links
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const chatUrl = `${frontendUrl}/#/whatsapp?phone=${encodeURIComponent(phone)}`;
+      
+      // Build embed with message, customer, and order number
       const embed = {
-        title,
-        description: customerName && orderNumber 
-          ? `Customer: **${customerName}** | Order: **${formatOrderNumber(orderNumber)}**`
-          : customerName 
-            ? `Customer: **${customerName}**`
-            : orderNumber
-              ? `Order: **${formatOrderNumber(orderNumber)}**`
-              : 'Received a new message from a customer',
         color: 0x25D366, // WhatsApp green color
         fields: [
+          {
+            name: 'Message',
+            value: truncateMessage(messageText, 1000),
+            inline: false
+          },
           {
             name: 'Customer',
             value: customerName 
@@ -343,38 +332,143 @@ export class DiscordNotificationService {
           },
           {
             name: 'Order Number',
-            value: orderNumber ? `**${formatOrderNumber(orderNumber)}**` : 'Not found',
+            value: formatOrderNumber(orderNumber),
             inline: true
-          },
-          {
-            name: 'Message Type',
-            value: getMessageTypeDisplay(messageType),
-            inline: true
-          },
-          {
-            name: 'Message',
-            value: truncateMessage(messageText),
-            inline: false
           }
         ],
-        timestamp: timestamp.toISOString(),
-        footer: {
-          text: `Phone: ${formatPhoneForDisplay(phone)}`
-        }
+        timestamp: timestamp.toISOString()
       };
 
-      await axios.post(this.whatsappWebhookUrl, {
-        embeds: [embed]
-      }, {
-        headers: {
-          'Content-Type': 'application/json'
+      // Add action buttons
+      // Note: Discord webhooks don't support interactive components (only URL buttons)
+      // If bot token is available, use bot API. Otherwise, only use URL button
+      const openChatButton: any = {
+        type: 2, // BUTTON
+        style: 5, // LINK (URL button - works with webhooks)
+        label: '💬 Open Chat',
+        url: chatUrl
+      };
+
+      const quickReplyButton: any = {
+        type: 2, // BUTTON
+        style: 1, // PRIMARY (blue button)
+        label: '⚡ Quick Reply',
+        custom_id: `quick_reply:${phone}`
+      };
+
+      const viewOrderButton: any = {
+        type: 2, // BUTTON
+        style: 2, // SECONDARY (gray button)
+        label: '📋 View Order',
+        custom_id: orderNumber ? `view_order:${orderNumber}` : `view_order_by_phone:${phone}`,
+        disabled: !orderNumber && !phone // Disable if we don't have order number or phone
+      };
+
+      // Build components array based on available method
+      // Discord allows max 5 buttons per row, so we can fit all 3 in one row
+      const components: any[] = [
+        {
+          type: 1, // ACTION_ROW
+          components: this.botToken && this.whatsappChannelId
+            ? [openChatButton, quickReplyButton, viewOrderButton] // All three buttons if using bot
+            : [openChatButton] // Only URL button if using webhook
         }
-      });
+      ];
+
+      // If bot token is available, use bot API to send message with buttons
+      if (this.botToken && this.whatsappChannelId) {
+        try {
+          const response = await axios.post(
+            `https://discord.com/api/v10/channels/${this.whatsappChannelId}/messages`,
+            {
+              content: notificationContent, // This shows in notification center/phone
+              embeds: [embed],
+              components: components
+            },
+            {
+              headers: {
+                'Authorization': `Bot ${this.botToken}`,
+                'Content-Type': 'application/json'
+              }
+            }
+          );
+          logger.info('Discord WhatsApp notification sent via bot', {
+            phone,
+            messageType,
+            messageId: response.data?.id
+          });
+          return;
+        } catch (botError: any) {
+          logger.error('Failed to send via bot, falling back to webhook', {
+            error: botError?.response?.data || botError?.message || botError,
+            status: botError?.response?.status,
+            phone,
+            hasBotToken: !!this.botToken,
+            hasChannelId: !!this.whatsappChannelId
+          });
+          // Fall through to webhook method
+        }
+      }
+
+      // Fallback to webhook
+      // Note: Webhooks support URL buttons (style 5) but NOT interactive buttons
+      if (this.whatsappWebhookUrl) {
+        // Try with URL button first
+        const webhookComponents = [
+          {
+            type: 1, // ACTION_ROW
+            components: [
+              {
+                type: 2, // BUTTON
+                style: 5, // LINK (URL button - should work with webhooks)
+                label: '💬 Open Chat',
+                url: chatUrl
+              }
+            ]
+          }
+        ];
+
+        try {
+          await axios.post(this.whatsappWebhookUrl, {
+            content: notificationContent, // This shows in notification center/phone
+            embeds: [embed],
+            components: webhookComponents
+          }, {
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+          logger.info('Discord WhatsApp notification sent via webhook', {
+            phone,
+            messageType,
+            hasComponents: true
+          });
+        } catch (webhookError: any) {
+          // If components fail, try without them
+          logger.warn('Webhook with components failed, trying without buttons', {
+            error: webhookError?.response?.data || webhookError?.message,
+            phone
+          });
+          
+          await axios.post(this.whatsappWebhookUrl, {
+            content: notificationContent,
+            embeds: [embed]
+            // No components - some webhooks don't support them
+          }, {
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+          logger.info('Discord WhatsApp notification sent via webhook (without buttons)', {
+            phone,
+            messageType
+          });
+        }
+      }
 
       logger.info('Discord WhatsApp notification sent', {
         phone,
-        messageType,
-        hasOrderNumber: !!orderNumber
+        messageType
       });
     } catch (error) {
       logger.error('Failed to send Discord WhatsApp notification', {

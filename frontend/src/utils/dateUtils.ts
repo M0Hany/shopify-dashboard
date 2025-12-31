@@ -43,9 +43,9 @@ export const calculateDaysRemaining = (endDate: Date, now: Date): number => {
   const current = new Date(now);
   current.setHours(0, 0, 0, 0);
   
-  // Calculate the difference in days (inclusive)
+  // Calculate the difference in days
   const diffTime = end.getTime() - current.getTime();
-  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
 
   return diffDays;
 };

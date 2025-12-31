@@ -7,6 +7,7 @@ import orders from './routes/orders';
 import financeRoutes from './routes/financeRoutes';
 import shippingRoutes from './routes/shipping';
 import whatsappWebhook from './routes/whatsappWebhook';
+import discordInteractions from './routes/discordInteractions';
 import { errorHandler } from './middleware/errorHandler';
 import { getConfig } from './config';
 import express from 'express';
@@ -26,6 +27,12 @@ app.set('trust proxy', 1);
 // Middleware
 app.use(helmet());
 app.use(morgan('dev'));
+
+// IMPORTANT: Register Discord interactions route BEFORE json() middleware
+// Discord needs raw body for signature verification
+app.use('/api/discord', discordInteractions);
+
+// JSON parsing for all other routes
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -85,6 +92,7 @@ app.use('/api/orders', orders);
 app.use('/api/finance', financeRoutes);
 app.use('/api/shipping', shippingRoutes);
 app.use('/api/whatsapp', whatsappWebhook);
+// Note: Discord interactions route is registered above, before json() middleware
 
 // Test endpoint
 app.get('/api/test', (req, res) => {

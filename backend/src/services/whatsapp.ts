@@ -445,14 +445,15 @@ export class WhatsAppService {
   }
 
   // Get all conversations (list of phone numbers with recent messages)
-  async getAllConversations(limit: number = 20): Promise<any[]> {
+  async getAllConversations(limit: number = 20, unreadOnly: boolean = false): Promise<any[]> {
     try {
       logger.info('Fetching all WhatsApp conversations', {
-        limit
+        limit,
+        unreadOnly
       });
 
       // Get conversations from database instead of API
-      const conversations = await MessageService.getAllConversations(limit);
+      const conversations = await MessageService.getAllConversations(limit, unreadOnly);
 
       logger.info('WhatsApp conversations fetched successfully', {
         conversationCount: conversations.length

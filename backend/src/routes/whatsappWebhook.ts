@@ -146,15 +146,24 @@ async function updateOrderWithCustomerConfirmation(targetOrder: any, customerPho
       ? targetOrder.tags.split(',').map((t: string) => t.trim())
       : [];
 
-  // Remove order_ready tag and add customer_confirmed tag
-  const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+  // Remove order_ready and on_hold tags, add customer_confirmed tag
+  const statusTags = ['order_ready', 'on_hold', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
   let filtered = currentTags.filter((t: string) => {
     const trimmed = t.trim().toLowerCase();
     return !statusTags.some(st => st.trim().toLowerCase() === trimmed);
   });
   
+  // Remove on_hold_reason tag if it exists (order is now confirmed)
+  filtered = filtered.filter(t => !t.trim().toLowerCase().startsWith('on_hold_reason:'));
+  
   // Add customer_confirmed tag
   filtered = [...filtered, 'customer_confirmed'];
+  
+  // If order was in on_hold, add tag to highlight it was confirmed from on_hold
+  const wasOnHold = currentTags.some(t => t.trim().toLowerCase() === 'on_hold');
+  if (wasOnHold) {
+    filtered = [...filtered, 'confirmed_from_on_hold'];
+  }
   
   logger.info('=== UPDATING ORDER TAGS ===', {
     orderId: targetOrder.id,
@@ -404,9 +413,10 @@ router.get('/conversation/:phone', async (req, res) => {
 // Get all conversations
 router.get('/conversations', async (req, res) => {
   try {
-    const { limit = 20 } = req.query;
+    const { limit = 20, unread } = req.query;
+    const unreadOnly = unread === 'true' || unread === true;
 
-    const conversations = await whatsappService.getAllConversations(Number(limit));
+    const conversations = await whatsappService.getAllConversations(Number(limit), unreadOnly);
 
     res.json({ 
       success: true, 
@@ -514,6 +524,9 @@ router.post('/webhook', express.json(), async (req, res) => {
                 timestamp: message.timestamp
               });
 
+              // Button messages are automatically marked as read since they're not important to review
+              const shouldMarkAsRead = message.type === 'button';
+              
               await MessageService.storeMessage({
                 message_id: message.id,
                 phone: message.from,
@@ -522,7 +535,8 @@ router.post('/webhook', express.json(), async (req, res) => {
                 type: message.type,
                 text: message.text,
                 timestamp: new Date(parseInt(message.timestamp) * 1000),
-                direction: 'inbound'
+                direction: 'inbound',
+                status: shouldMarkAsRead ? 'read' : 'sent'
               });
 
               logger.info('=== MESSAGE STORED SUCCESSFULLY ===', {
@@ -535,15 +549,23 @@ router.post('/webhook', express.json(), async (req, res) => {
               let orderNumber: string | undefined;
               
               try {
-                // Try to get order number from message context or stored mapping
+                // Method 1: Try to get order number from stored message mapping
                 const storedOrderNumber = getOrderNumberForMessage(message.id);
                 if (storedOrderNumber) {
                   orderNumber = storedOrderNumber;
-                } else if (message.context?.referred_product?.id) {
-                  // Could extract order info from context if available
+                  logger.info('Order number from message mapping', { orderNumber });
                 }
 
-                // Try to find customer by phone number
+                // Method 2: Try to get order number from previous outbound messages in database
+                if (!orderNumber) {
+                  const previousOrderNumber = await findOrderNumberFromPreviousMessage(message.from);
+                  if (previousOrderNumber) {
+                    orderNumber = previousOrderNumber;
+                    logger.info('Order number from previous message', { orderNumber });
+                  }
+                }
+
+                // Method 3: Try to find customer by phone number in Shopify
                 try {
                   logger.info('Looking up orders by phone', { phone: message.from });
                   const orders = await shopifyService.getOrdersByPhone(message.from);
@@ -562,15 +584,11 @@ router.post('/webhook', express.json(), async (req, res) => {
                     });
                     
                     customerName = `${latestOrder.customer?.first_name || ''} ${latestOrder.customer?.last_name || ''}`.trim() || undefined;
+                    
+                    // Use order number from Shopify if we don't have one yet
                     if (!orderNumber && latestOrder.name) {
                       orderNumber = latestOrder.name;
-                      logger.info('Order number extracted', { orderNumber });
-                    } else {
-                      logger.warn('Order number not found in order', {
-                        orderId: latestOrder.id,
-                        orderName: latestOrder.name,
-                        hasName: !!latestOrder.name
-                      });
+                      logger.info('Order number extracted from Shopify', { orderNumber });
                     }
                   } else {
                     logger.info('No orders found for phone', { phone: message.from });
@@ -588,19 +606,22 @@ router.post('/webhook', express.json(), async (req, res) => {
                 // Non-critical, continue without customer info
               }
 
-              // Send Discord notification (non-blocking)
-              const messageTimestamp = new Date(parseInt(message.timestamp) * 1000);
-              discordNotificationService.notifyWhatsAppMessage({
-                phone: message.from,
-                customerName,
-                messageText: message.text?.body || message.text || 'No text content',
-                messageType: message.type || 'unknown',
-                orderNumber,
-                timestamp: messageTimestamp
-              }).catch(err => {
-                logger.error('Failed to send Discord WhatsApp notification', err);
-                // Don't fail the webhook if notification fails
-              });
+              // Send Discord notification (non-blocking) - Skip for button messages
+              // Button messages will trigger order status notification instead
+              if (message.type !== 'button') {
+                const messageTimestamp = new Date(parseInt(message.timestamp) * 1000);
+                discordNotificationService.notifyWhatsAppMessage({
+                  phone: message.from,
+                  customerName,
+                  messageText: message.text?.body || message.text || 'No text content',
+                  messageType: message.type || 'unknown',
+                  orderNumber,
+                  timestamp: messageTimestamp
+                }).catch(err => {
+                  logger.error('Failed to send Discord WhatsApp notification', err);
+                  // Don't fail the webhook if notification fails
+                });
+              }
             } catch (error) {
               logger.error('Error storing incoming message', {
                 error: error instanceof Error ? error.message : error,
@@ -728,7 +749,29 @@ router.post('/webhook', express.json(), async (req, res) => {
                     const hasOrderReady = currentTags.includes('order_ready');
                     
                     if (hasOrderReady) {
-                    await updateOrderWithCustomerConfirmation(targetOrder, customerPhone);
+                      // Get previous status for notification
+                      const previousStatus = 'order_ready';
+                      
+                      await updateOrderWithCustomerConfirmation(targetOrder, customerPhone);
+                      
+                      // Get updated order to ensure we have latest customer info
+                      const updatedOrder = await shopifyService.getOrder(targetOrder.id);
+                      const customerName = updatedOrder.customer 
+                        ? `${updatedOrder.customer.first_name || ''} ${updatedOrder.customer.last_name || ''}`.trim() || 'N/A'
+                        : 'N/A';
+                      
+                      // Send Discord notification for order status change (automated)
+                      discordNotificationService.notifyOrderStatusChange({
+                        orderId: updatedOrder.id,
+                        orderName: updatedOrder.name,
+                        customerName,
+                        previousStatus,
+                        newStatus: 'customer_confirmed',
+                        updatedBy: 'Automated WhatsApp Confirmation'
+                      }).catch(err => {
+                        logger.error('Failed to send Discord order status notification', err);
+                        // Don't fail the webhook if notification fails
+                      });
                     } else {
                       logger.warn('Order does not have order_ready tag, skipping update', {
                         orderId: targetOrder.id,

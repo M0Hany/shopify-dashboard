@@ -27,9 +27,9 @@ export const Layout: React.FC<LayoutProps> = ({ children, hideHeader }) => {
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50">
+    <div className="flex flex-col h-screen bg-gray-50 overflow-hidden">
       {!hideHeader && <Header />}
-      <main className="flex-grow bg-gray-50">
+      <main className="flex-1 bg-gray-50 overflow-y-auto min-h-0">
         {children}
       </main>
     </div>

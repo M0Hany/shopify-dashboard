@@ -66,6 +66,7 @@ function getCurrentStatusFromTags(tags: string[] | string | null | undefined): s
   // Check for both ready_to_ship and ready-to-ship variations
   if (tagArray.includes('ready_to_ship') || tagArray.includes('ready-to-ship')) return 'ready_to_ship';
   if (tagArray.includes('customer_confirmed')) return 'customer_confirmed';
+  if (tagArray.includes('on_hold')) return 'on_hold';
   if (tagArray.includes('order_ready')) return 'order_ready';
   return 'pending';
 }

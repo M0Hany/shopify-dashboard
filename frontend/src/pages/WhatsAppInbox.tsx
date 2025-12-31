@@ -7,10 +7,12 @@ import {
   UserIcon,
   ClockIcon,
   CheckIcon,
-  CheckCircleIcon
+  CheckCircleIcon,
+  MagnifyingGlassIcon,
+  XMarkIcon
 } from '@heroicons/react/24/outline';
 import { toast } from 'react-hot-toast';
-import { format } from 'date-fns';
+import { format, isToday, isYesterday, isSameDay } from 'date-fns';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 
 interface Message {
@@ -42,6 +44,7 @@ const WhatsAppInbox: React.FC = () => {
   const [newMessage, setNewMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [showConversations, setShowConversations] = useState(true); // For mobile toggle
+  const [conversationFilter, setConversationFilter] = useState<'all' | 'unread'>('all');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
@@ -56,11 +59,25 @@ const WhatsAppInbox: React.FC = () => {
     }
   }, [searchParams, selectedPhone]);
 
-  // Fetch all conversations
-  const { data: conversations = [], isLoading: conversationsLoading } = useQuery({
-    queryKey: ['whatsapp-conversations'],
+  // Always fetch unread conversations separately for accurate badge count
+  const { data: unreadConversations = [] } = useQuery({
+    queryKey: ['whatsapp-conversations', 'unread'],
     queryFn: async () => {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/conversations`);
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/conversations?limit=10000&unread=true`);
+      if (!response.ok) throw new Error('Failed to fetch unread conversations');
+      const data = await response.json();
+      return data.conversations || [];
+    },
+    refetchInterval: 30000, // Refetch every 30 seconds
+  });
+
+  // Fetch conversations based on active filter
+  const { data: conversations = [], isLoading: conversationsLoading } = useQuery({
+    queryKey: ['whatsapp-conversations', conversationFilter],
+    queryFn: async () => {
+      const unreadParam = conversationFilter === 'unread' ? '&unread=true' : '';
+      const limit = conversationFilter === 'unread' ? '10000' : '20';
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/conversations?limit=${limit}${unreadParam}`);
       if (!response.ok) throw new Error('Failed to fetch conversations');
       const data = await response.json();
       return data.conversations || [];
@@ -91,8 +108,115 @@ const WhatsAppInbox: React.FC = () => {
       if (!response.ok) throw new Error('Failed to mark messages as read');
       return response.json();
     },
+    onMutate: async (phone: string) => {
+      // Cancel outgoing refetches for all conversation queries
+      await queryClient.cancelQueries({ queryKey: ['whatsapp-conversations'] });
+      
+      // Snapshot previous values for both 'all' and 'unread' filters
+      const previousConversationsAll = queryClient.getQueryData<Conversation[]>(['whatsapp-conversations', 'all']);
+      const previousConversationsUnread = queryClient.getQueryData<Conversation[]>(['whatsapp-conversations', 'unread']);
+      
+      // Optimistically update: remove unread badge for both filters
+      // Keep conversation in unread tab, just remove the badge (better UX)
+      const updateUnreadCount = (old: Conversation[] = []) =>
+        old.map((conv: Conversation) =>
+          conv.phone === phone ? { ...conv, unreadCount: 0 } : conv
+        );
+      
+      queryClient.setQueryData<Conversation[]>(['whatsapp-conversations', 'all'], updateUnreadCount);
+      queryClient.setQueryData<Conversation[]>(['whatsapp-conversations', 'unread'], updateUnreadCount);
+      
+      return { previousConversationsAll, previousConversationsUnread };
+    },
+    onError: (_err, _phone, context) => {
+      // Rollback on error
+      if (context?.previousConversationsAll) {
+        queryClient.setQueryData(['whatsapp-conversations', 'all'], context.previousConversationsAll);
+      }
+      if (context?.previousConversationsUnread) {
+        queryClient.setQueryData(['whatsapp-conversations', 'unread'], context.previousConversationsUnread);
+      }
+    },
+    // Remove onSuccess - let refetchInterval handle updates naturally
+  });
+
+  // Mark all conversations as read
+  const markAllAsReadMutation = useMutation({
+    mutationFn: async () => {
+      // Use unreadConversations to mark ALL unread conversations, not just the current view
+      const phones = unreadConversations.map((conv: Conversation) => conv.phone);
+      
+      // Batch requests to avoid overwhelming the server
+      // Process in chunks of 10 with a small delay between chunks
+      const chunkSize = 10;
+      const chunks: string[][] = [];
+      for (let i = 0; i < phones.length; i += chunkSize) {
+        chunks.push(phones.slice(i, i + chunkSize));
+      }
+      
+      const failed: string[] = [];
+      
+      // Process each chunk sequentially with a delay
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const promises = chunk.map(phone =>
+          fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/mark-read/${phone}`, {
+            method: 'POST',
+          })
+        );
+        
+        const results = await Promise.allSettled(promises);
+        results.forEach((result, index) => {
+          if (result.status === 'rejected' || (result.status === 'fulfilled' && !result.value.ok)) {
+            failed.push(chunk[index]);
+          }
+        });
+        
+        // Add a small delay between chunks (except for the last one)
+        if (i < chunks.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 100)); // 100ms delay between chunks
+        }
+      }
+      
+      if (failed.length > 0) {
+        throw new Error(`Failed to mark ${failed.length} conversation(s) as read`);
+      }
+      return { success: true };
+    },
+    onMutate: async () => {
+      // Cancel outgoing refetches for all conversation queries
+      await queryClient.cancelQueries({ queryKey: ['whatsapp-conversations'] });
+      
+      // Snapshot previous values for both 'all' and 'unread' filters
+      const previousConversationsAll = queryClient.getQueryData<Conversation[]>(['whatsapp-conversations', 'all']);
+      const previousConversationsUnread = queryClient.getQueryData<Conversation[]>(['whatsapp-conversations', 'unread']);
+      
+      // Optimistically update: remove all unread badges for 'all' filter
+      queryClient.setQueryData<Conversation[]>(['whatsapp-conversations', 'all'], (old = []) =>
+        old.map((conv: Conversation) => ({
+          ...conv,
+          unreadCount: 0,
+        }))
+      );
+      
+      // For 'unread' filter, clear all conversations (since all are now read)
+      queryClient.setQueryData<Conversation[]>(['whatsapp-conversations', 'unread'], () => []);
+      
+      return { previousConversationsAll, previousConversationsUnread };
+    },
+    onError: (_err, _vars, context) => {
+      // Rollback on error
+      if (context?.previousConversationsAll) {
+        queryClient.setQueryData(['whatsapp-conversations', 'all'], context.previousConversationsAll);
+      }
+      if (context?.previousConversationsUnread) {
+        queryClient.setQueryData(['whatsapp-conversations', 'unread'], context.previousConversationsUnread);
+      }
+      toast.error('Failed to mark all conversations as read');
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-conversations'] });
+      toast.success('All conversations marked as read');
+      // Remove invalidation - let refetchInterval handle updates naturally
     },
   });
 
@@ -107,14 +231,74 @@ const WhatsAppInbox: React.FC = () => {
       if (!response.ok) throw new Error('Failed to send message');
       return response.json();
     },
-    onSuccess: () => {
+    onMutate: async ({ phone, message }) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['whatsapp-messages', phone] });
+      await queryClient.cancelQueries({ queryKey: ['whatsapp-conversations'] });
+      
+      // Snapshot previous values
+      const previousMessages = queryClient.getQueryData<Message[]>(['whatsapp-messages', phone]);
+      const previousConversationsAll = queryClient.getQueryData<Conversation[]>(['whatsapp-conversations', 'all']);
+      const previousConversationsUnread = queryClient.getQueryData<Conversation[]>(['whatsapp-conversations', 'unread']);
+      
+      // Create optimistic message
+      const optimisticMessage: Message = {
+        id: `temp-${Date.now()}`,
+        message_id: `temp-${Date.now()}`,
+        phone,
+        from: phone,
+        to: phone,
+        type: 'text',
+        text: { body: message },
+        timestamp: new Date().toISOString(),
+        status: 'sent',
+        direction: 'outbound',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      
+      // Optimistically add message to chat
+      queryClient.setQueryData<Message[]>(['whatsapp-messages', phone], (old = []) => [
+        ...old,
+        optimisticMessage,
+      ]);
+      
+      // Optimistically update conversation last message for both filters
+      const updateConversation = (old: Conversation[] = []) =>
+        old.map((conv: Conversation) =>
+          conv.phone === phone
+            ? {
+                ...conv,
+                lastMessage: optimisticMessage,
+                unreadCount: 0, // Outbound messages are always read
+              }
+            : conv
+        );
+      
+      queryClient.setQueryData<Conversation[]>(['whatsapp-conversations', 'all'], updateConversation);
+      queryClient.setQueryData<Conversation[]>(['whatsapp-conversations', 'unread'], updateConversation);
+      
+      // Clear input immediately
       setNewMessage('');
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', selectedPhone] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-conversations'] });
-      toast.success('Message sent successfully');
+      
+      return { previousMessages, previousConversationsAll, previousConversationsUnread };
     },
-    onError: () => {
+    onError: (_err, { phone }, context) => {
+      // Rollback on error
+      if (context?.previousMessages) {
+        queryClient.setQueryData(['whatsapp-messages', phone], context.previousMessages);
+      }
+      if (context?.previousConversationsAll) {
+        queryClient.setQueryData(['whatsapp-conversations', 'all'], context.previousConversationsAll);
+      }
+      if (context?.previousConversationsUnread) {
+        queryClient.setQueryData(['whatsapp-conversations', 'unread'], context.previousConversationsUnread);
+      }
       toast.error('Failed to send message');
+    },
+    onSuccess: () => {
+      toast.success('Message sent successfully');
+      // Remove invalidation - let refetchInterval handle updates naturally
     },
   });
 
@@ -130,10 +314,11 @@ const WhatsAppInbox: React.FC = () => {
     }
   }, [selectedPhone]);
 
-  // Filter conversations based on search
-  const filteredConversations = conversations.filter((conv: Conversation) =>
-    conv.phone.includes(searchQuery)
-  );
+  // Filter conversations based on search (unread filter is handled by backend)
+  const filteredConversations = conversations.filter((conv: Conversation) => {
+    // Search filter
+    return conv.phone.includes(searchQuery);
+  });
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -179,6 +364,22 @@ const WhatsAppInbox: React.FC = () => {
     }
   };
 
+  const formatDateDivider = (timestamp: string | Date) => {
+    try {
+      const date = typeof timestamp === 'string' ? new Date(timestamp) : timestamp;
+      
+      if (isToday(date)) {
+        return 'Today';
+      } else if (isYesterday(date)) {
+        return 'Yesterday';
+      } else {
+        return format(date, 'MMMM d, yyyy');
+      }
+    } catch {
+      return 'Unknown';
+    }
+  };
+
   const getMessageStatusIcon = (status?: string) => {
     switch (status) {
       case 'sent':
@@ -195,83 +396,179 @@ const WhatsAppInbox: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex h-full bg-gray-50 overflow-hidden">
       {/* Conversations Sidebar */}
-      <div className={`${showConversations ? 'flex' : 'hidden'} md:flex w-full md:w-80 bg-white border-r border-gray-200 flex-col absolute md:relative z-10 h-full`}>
-        {/* Header */}
-        <div className="p-4 border-b border-gray-200">
-          <div className="flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-gray-900">WhatsApp Inbox</h1>
-            {/* Mobile close button */}
-            <button
-              onClick={() => setShowConversations(false)}
-              className="md:hidden p-2 text-gray-500 hover:text-gray-700"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+      <div className={`${showConversations ? 'flex' : 'hidden'} md:flex w-full md:w-80 bg-white border-r border-gray-200 flex-col absolute md:relative z-10 h-full shadow-lg`}>
+        {/* Header with WhatsApp green accent */}
+        <div className="bg-gradient-to-r from-[#25D366] to-[#20BA5A] p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <ChatBubbleLeftIcon className="w-6 h-6 text-white" />
+              <h1 className="text-xl font-semibold text-white">Chats</h1>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Read All button */}
+              {unreadConversations.length > 0 && (
+                <button
+                  onClick={() => markAllAsReadMutation.mutate()}
+                  disabled={markAllAsReadMutation.isPending}
+                  className="px-3 py-1.5 text-xs font-medium text-white bg-white/20 hover:bg-white/30 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed backdrop-blur-sm"
+                  title="Mark all conversations as read"
+                >
+                  {markAllAsReadMutation.isPending ? 'Marking...' : 'Read All'}
+                </button>
+              )}
+              {/* Mobile close button */}
+              <button
+                onClick={() => setShowConversations(false)}
+                className="md:hidden p-2 text-white/80 hover:text-white transition-colors"
+              >
+                <XMarkIcon className="w-5 h-5" />
+              </button>
+            </div>
           </div>
-          <div className="mt-3">
+          
+          {/* Enhanced Search */}
+          <div className="relative mb-3">
+            <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-white/70" />
             <input
               type="text"
               placeholder="Search conversations..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+              className="w-full pl-10 pr-10 py-2.5 bg-white/20 backdrop-blur-sm border-0 rounded-full text-white placeholder-white/70 focus:outline-none focus:ring-2 focus:ring-white/50 focus:bg-white/30 transition-all"
             />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-white/70 hover:text-white transition-colors"
+              >
+                <XMarkIcon className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+
+          {/* Filter Chips */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setConversationFilter('all')}
+              className={`flex-1 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                conversationFilter === 'all'
+                  ? 'bg-white text-[#25D366] shadow-md'
+                  : 'bg-white/20 text-white hover:bg-white/30'
+              }`}
+            >
+              All
+            </button>
+            <button
+              onClick={() => setConversationFilter('unread')}
+              className={`flex-1 px-4 py-2 rounded-full text-sm font-medium transition-all relative ${
+                conversationFilter === 'unread'
+                  ? 'bg-white text-[#25D366] shadow-md'
+                  : 'bg-white/20 text-white hover:bg-white/30'
+              }`}
+            >
+              Unread
+              {unreadConversations.length > 0 && (
+                <span className="ml-1.5 px-1.5 py-0.5 bg-red-500 text-white text-xs rounded-full">
+                  {unreadConversations.length}
+                </span>
+              )}
+            </button>
           </div>
         </div>
 
         {/* Conversations List */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto bg-white">
           {conversationsLoading ? (
-            <div className="p-4 text-center text-gray-500">Loading conversations...</div>
+            // Loading Skeletons
+            <div className="p-2">
+              {[1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="animate-pulse p-3 mx-2 mb-1">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-12 h-12 bg-gray-200 rounded-full flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="h-4 bg-gray-200 rounded w-3/4 mb-2" />
+                      <div className="h-3 bg-gray-200 rounded w-full" />
+                    </div>
+                    <div className="w-12 h-3 bg-gray-200 rounded" />
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : filteredConversations.length === 0 ? (
-            <div className="p-4 text-center text-gray-500">
-              {searchQuery ? 'No conversations found' : 'No conversations yet'}
+            // Enhanced Empty State
+            <div className="flex flex-col items-center justify-center h-full p-8">
+              <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                <ChatBubbleLeftIcon className="w-10 h-10 text-gray-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                {searchQuery ? 'No conversations found' : 'No conversations yet'}
+              </h3>
+              <p className="text-sm text-gray-500 text-center max-w-xs">
+                {searchQuery 
+                  ? 'Try adjusting your search terms'
+                  : 'Start a conversation to see messages here'}
+              </p>
             </div>
           ) : (
             filteredConversations.map((conversation: Conversation) => (
               <div
-                key={conversation.id}
+                key={conversation.id || conversation.phone}
                 onClick={() => {
                   setSelectedPhone(conversation.phone);
                   setShowConversations(false); // Hide sidebar on mobile when conversation is selected
                 }}
-                className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${
-                  selectedPhone === conversation.phone ? 'bg-blue-50 border-blue-200' : ''
+                className={`group p-3 mx-2 my-1 rounded-lg cursor-pointer transition-all duration-200 ${
+                  selectedPhone === conversation.phone 
+                    ? 'bg-[#E5E7EB] shadow-sm' 
+                    : 'hover:bg-gray-50'
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-3 min-w-0 flex-1">
-                    <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
-                      <PhoneIcon className="w-5 h-5 text-green-600" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-gray-900 truncate">
-                        {formatPhoneNumber(conversation.phone)}
-                      </p>
-                      {conversation.lastMessage && (
-                        <p className="text-sm text-gray-500 truncate">
-                          {conversation.lastMessage.text?.body || 'Media message'}
-                        </p>
+                    {/* Enhanced Avatar */}
+                    <div className="relative flex-shrink-0">
+                      <div className="w-12 h-12 bg-gradient-to-br from-[#25D366] to-[#20BA5A] rounded-full flex items-center justify-center shadow-sm">
+                        <PhoneIcon className="w-6 h-6 text-white" />
+                      </div>
+                      {/* Unread indicator on avatar */}
+                      {(conversation.unreadCount ?? 0) > 0 && (
+                        <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 border-2 border-white rounded-full animate-pulse" />
                       )}
                     </div>
-                  </div>
-                  <div className="text-right flex-shrink-0 ml-2">
-                    {conversation.lastMessage && (
-                      <p className="text-xs text-gray-400">
-                        {formatTimestamp(conversation.lastMessage.timestamp)}
-                      </p>
-                    )}
-                    {conversation.unreadCount && conversation.unreadCount > 0 && (
-                      <div className="mt-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center">
-                        <span className="text-xs text-white font-medium">
-                          {conversation.unreadCount}
-                        </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className={`font-semibold truncate ${
+                          (conversation.unreadCount ?? 0) > 0 ? 'text-gray-900' : 'text-gray-700'
+                        }`}>
+                          {formatPhoneNumber(conversation.phone)}
+                        </p>
+                        {conversation.lastMessage && (
+                          <p className="text-xs text-gray-400 ml-2 flex-shrink-0">
+                            {formatTimestamp(conversation.lastMessage.timestamp)}
+                          </p>
+                        )}
                       </div>
-                    )}
+                      {conversation.lastMessage && (
+                        <div className="flex items-center justify-between">
+                          <p className={`text-sm truncate ${
+                            (conversation.unreadCount ?? 0) > 0 
+                              ? 'text-gray-900 font-medium' 
+                              : 'text-gray-500'
+                          }`}>
+                            {conversation.lastMessage.text?.body || 'Media message'}
+                          </p>
+                          {(conversation.unreadCount ?? 0) > 0 && (
+                            <div className="ml-2 min-w-[20px] h-5 bg-[#25D366] rounded-full flex items-center justify-center px-2 flex-shrink-0">
+                              <span className="text-xs text-white font-semibold">
+                                {conversation.unreadCount}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -284,93 +581,137 @@ const WhatsAppInbox: React.FC = () => {
       <div className="flex-1 flex flex-col">
         {selectedPhone ? (
           <>
-            {/* Chat Header */}
-            <div className="p-4 bg-white border-b border-gray-200">
+            {/* Enhanced Chat Header */}
+            <div className="bg-gradient-to-r from-[#25D366] to-[#20BA5A] p-4 shadow-md">
               <div className="flex items-center space-x-3">
                 {/* Mobile back button */}
                 <button
                   onClick={() => setShowConversations(true)}
-                  className="md:hidden p-2 text-gray-500 hover:text-gray-700"
+                  className="md:hidden p-2 text-white/80 hover:text-white transition-colors"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                   </svg>
                 </button>
-                <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
-                  <PhoneIcon className="w-5 h-5 text-green-600" />
+                <div className="w-10 h-10 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center border-2 border-white/30">
+                  <PhoneIcon className="w-5 h-5 text-white" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <button
-                    onClick={() => handlePhoneNumberClick(selectedPhone)}
-                    className="font-semibold text-gray-900 truncate hover:text-blue-600 hover:underline transition-colors cursor-pointer text-left w-full bg-white"
-                    title="Click to find order for this phone number"
-                  >
-                    {formatPhoneNumber(selectedPhone)}
-                  </button>
-                  <p className="text-sm text-gray-500">WhatsApp conversation</p>
-                </div>
+                <span
+                  onClick={() => handlePhoneNumberClick(selectedPhone)}
+                  className="font-semibold text-white truncate hover:text-white/90 transition-colors cursor-pointer"
+                  title="Click to find order for this phone number"
+                >
+                  {formatPhoneNumber(selectedPhone)}
+                </span>
               </div>
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-2 md:p-4 space-y-3 md:space-y-4">
+            <div className="flex-1 overflow-y-auto p-4 bg-[#EFEAE2] space-y-1" style={{
+              backgroundImage: `url("data:image/svg+xml,%3Csvg width='40' height='40' viewBox='0 0 40 40' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23d4d0c7' fill-opacity='0.4'%3E%3Cpath d='M0 0h40v40H0z'/%3E%3C/g%3E%3C/svg%3E")`,
+            }}>
               {messagesLoading ? (
-                <div className="text-center text-gray-500">Loading messages...</div>
+                // Loading Skeletons for Messages
+                <div className="space-y-4">
+                  <div className="flex justify-start">
+                    <div className="animate-pulse max-w-[75%] bg-gray-200 rounded-2xl rounded-tl-sm px-4 py-3">
+                      <div className="h-4 bg-gray-300 rounded w-3/4 mb-2" />
+                      <div className="h-3 bg-gray-300 rounded w-1/2" />
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <div className="animate-pulse max-w-[75%] bg-gray-300 rounded-2xl rounded-tr-sm px-4 py-3">
+                      <div className="h-4 bg-gray-400 rounded w-2/3 mb-2" />
+                      <div className="h-3 bg-gray-400 rounded w-1/3" />
+                    </div>
+                  </div>
+                </div>
               ) : messages.length === 0 ? (
-                <div className="text-center text-gray-500">No messages yet</div>
+                // Enhanced Empty State for Messages
+                <div className="flex flex-col items-center justify-center h-full">
+                  <div className="w-16 h-16 bg-white/50 rounded-full flex items-center justify-center mb-3">
+                    <ChatBubbleLeftIcon className="w-8 h-8 text-gray-400" />
+                  </div>
+                  <p className="text-sm text-gray-500">No messages yet</p>
+                  <p className="text-xs text-gray-400 mt-1">Start the conversation</p>
+                </div>
               ) : (
-                messages.map((message: Message) => {
+                messages.map((message: Message, index: number) => {
                   const isOutgoing = message.direction === 'outbound';
+                  const prevMessage = index > 0 ? messages[index - 1] : null;
+                  const isGrouped = prevMessage && 
+                    prevMessage.direction === message.direction &&
+                    (new Date(message.timestamp).getTime() - new Date(prevMessage.timestamp).getTime()) < 300000; // 5 minutes
+                  
+                  // Check if we need a date divider
+                  const messageDate = new Date(message.timestamp);
+                  const prevMessageDate = prevMessage ? new Date(prevMessage.timestamp) : null;
+                  const needsDateDivider = !prevMessageDate || !isSameDay(messageDate, prevMessageDate);
+                  
                   return (
-                    <div
-                      key={message.id}
-                      className={`flex ${isOutgoing ? 'justify-end' : 'justify-start'}`}
-                    >
+                    <React.Fragment key={message.id}>
+                      {needsDateDivider && (
+                        <div className="flex justify-center my-4">
+                          <div className="px-3 py-1.5 bg-white/80 backdrop-blur-sm rounded-full shadow-sm border border-gray-200/50">
+                            <span className="text-xs text-gray-600 font-medium">
+                              {formatDateDivider(message.timestamp)}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                       <div
-                        className={`max-w-[75%] md:max-w-xs lg:max-w-md px-3 py-2 md:px-4 md:py-2 rounded-lg ${
-                          isOutgoing
-                            ? 'bg-blue-500 text-white'
-                            : 'bg-gray-200 text-gray-900'
-                        }`}
+                        className={`flex ${isOutgoing ? 'justify-end' : 'justify-start'} ${isGrouped ? 'mt-0.5' : 'mt-2'}`}
                       >
-                        <p className="text-sm break-words">{message.text?.body || 'Media message'}</p>
-                        <div className={`flex items-center justify-between mt-1 ${
-                          isOutgoing ? 'text-blue-100' : 'text-gray-500'
-                        }`}>
-                          <span className="text-xs">
-                            {formatTimestamp(message.timestamp)}
-                          </span>
-                          {isOutgoing && (
-                            <div className="ml-2 flex-shrink-0">
-                              {getMessageStatusIcon(message.status)}
+                        <div className="relative max-w-[75%] md:max-w-xs lg:max-w-md">
+                          <div
+                            className={`px-3 py-2 rounded-2xl shadow-sm ${
+                              isOutgoing
+                                ? 'bg-[#DCF8C6] text-gray-900 rounded-tr-sm'
+                                : 'bg-white text-gray-900 rounded-tl-sm'
+                            }`}
+                          >
+                            <p className="text-sm break-words leading-relaxed">{message.text?.body || 'Media message'}</p>
+                            <div className={`flex items-center justify-end gap-1 mt-1 ${
+                              isOutgoing ? 'text-gray-600' : 'text-gray-500'
+                            }`}>
+                              <span className="text-xs">
+                                {formatTimestamp(message.timestamp)}
+                              </span>
+                              {isOutgoing && (
+                                <div className="ml-1 flex-shrink-0">
+                                  {getMessageStatusIcon(message.status)}
+                                </div>
+                              )}
                             </div>
-                          )}
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    </React.Fragment>
                   );
                 })
               )}
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Message Input */}
-            <div className="p-2 md:p-4 bg-white border-t border-gray-200">
-              <form onSubmit={handleSendMessage} className="flex space-x-2">
-                <input
-                  type="text"
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  placeholder="Type a message..."
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-sm md:text-base"
-                  disabled={sendMessageMutation.isPending}
-                />
+            {/* Enhanced Message Input */}
+            <div className="p-4 bg-white border-t border-gray-200">
+              <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
+                <div className="flex-1 relative">
+                  <input
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    placeholder="Type a message..."
+                    className="w-full px-4 py-3 bg-gray-100 border-0 rounded-full focus:outline-none focus:ring-2 focus:ring-[#25D366] focus:bg-white transition-all text-sm md:text-base"
+                    disabled={sendMessageMutation.isPending}
+                  />
+                </div>
                 <button
                   type="submit"
                   disabled={!newMessage.trim() || sendMessageMutation.isPending}
-                  className="px-3 py-2 md:px-4 md:py-2 bg-green-500 text-white rounded-md hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                  className="p-3 bg-[#25D366] text-white rounded-full hover:bg-[#20BA5A] disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg disabled:shadow-none flex-shrink-0"
                 >
-                  <PaperAirplaneIcon className="w-4 h-4" />
+                  <PaperAirplaneIcon className="w-5 h-5" />
                 </button>
               </form>
             </div>

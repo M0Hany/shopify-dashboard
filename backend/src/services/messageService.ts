@@ -29,6 +29,7 @@ export class MessageService {
     timestamp: Date;
     direction: 'inbound' | 'outbound';
     order_number?: string;
+    status?: 'sent' | 'delivered' | 'read' | 'failed';
   }): Promise<IMessage> {
     try {
       const { data, error } = await supabase
@@ -41,7 +42,7 @@ export class MessageService {
           type: messageData.type,
           text: messageData.text,
           timestamp: messageData.timestamp.toISOString(),
-          status: 'sent',
+          status: messageData.status || 'sent',
           direction: messageData.direction,
           order_number: messageData.order_number
         })
@@ -125,7 +126,7 @@ export class MessageService {
   }
 
   // Get all conversations (unique phone numbers with recent messages)
-  static async getAllConversations(limit: number = 20): Promise<Array<{
+  static async getAllConversations(limit: number = 20, unreadOnly: boolean = false): Promise<Array<{
     phone: string;
     lastMessage: IMessage;
     unreadCount: number;
@@ -161,17 +162,30 @@ export class MessageService {
         }
       });
 
-      const conversations = Array.from(conversationsMap.entries())
+      let conversations = Array.from(conversationsMap.entries())
         .map(([phone, data]) => ({
           phone,
           lastMessage: data.lastMessage,
           unreadCount: data.unreadCount
         }))
-        .sort((a, b) => new Date(b.lastMessage.timestamp).getTime() - new Date(a.lastMessage.timestamp).getTime())
-        .slice(0, limit);
+        .sort((a, b) => new Date(b.lastMessage.timestamp).getTime() - new Date(a.lastMessage.timestamp).getTime());
+
+      // Filter to only unread conversations if requested
+      if (unreadOnly) {
+        conversations = conversations.filter(conv => conv.unreadCount > 0);
+      }
+
+      // Apply limit only if not fetching all unread (or use a very high limit for unread)
+      if (unreadOnly) {
+        // For unread, don't limit or use a very high limit to get all unread
+        conversations = conversations.slice(0, 10000);
+      } else {
+        conversations = conversations.slice(0, limit);
+      }
 
       logger.info('Conversations retrieved', {
-        conversationCount: conversations.length
+        conversationCount: conversations.length,
+        unreadOnly
       });
 
       return conversations;

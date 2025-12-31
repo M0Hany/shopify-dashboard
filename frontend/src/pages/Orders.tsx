@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
-import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, FunnelIcon, CheckIcon, DocumentArrowUpIcon, ArrowPathIcon, ArrowUpCircleIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, FunnelIcon, CheckIcon, DocumentArrowUpIcon, ArrowPathIcon, ArrowUpCircleIcon, Squares2X2Icon, MapPinIcon, CalendarDaysIcon, TruckIcon, BoltIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Menu, Popover, Transition } from '@headlessui/react';
@@ -198,6 +198,7 @@ const convertToCairoTime = (date: Date): Date => {
 const statusOptions = [
   { value: 'pending', label: 'Pending Orders' },
   { value: 'order-ready', label: 'Order Ready' },
+  { value: 'on_hold', label: 'On Hold' },
   { value: 'confirmed', label: 'Confirmed Orders' },
   { value: 'ready-to-ship', label: 'Ready to Ship' },
   { value: 'shipped', label: 'Shipped' },
@@ -273,6 +274,15 @@ const Orders = () => {
   const [selectedSummaryItems, setSelectedSummaryItems] = useState<Set<string>>(new Set());
   const [showScrollToTop, setShowScrollToTop] = useState(false);
   const ordersRefreshTimerRef = useRef<number | null>(null);
+  
+  // Quick Filter state
+  const [activeQuickFilterTab, setActiveQuickFilterTab] = useState<'production' | 'city' | 'days' | 'shipping' | 'rushed'>('production');
+  const [selectedProductionItems, setSelectedProductionItems] = useState<Set<string>>(new Set());
+  const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
+  const [selectedDayRanges, setSelectedDayRanges] = useState<Set<string>>(new Set());
+  const [selectedShippingMethods, setSelectedShippingMethods] = useState<Set<string>>(new Set());
+  const [selectedRushTypes, setSelectedRushTypes] = useState<Set<string>>(new Set());
+  const [isQuickFilterExpanded, setIsQuickFilterExpanded] = useState(false);
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
@@ -307,7 +317,7 @@ const Orders = () => {
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearchQuery(searchQuery);
-    }, 300); // 300ms delay
+    }, 500); // 500ms delay to improve typing performance
 
     return () => clearTimeout(timer);
   }, [searchQuery]);
@@ -556,7 +566,7 @@ const Orders = () => {
             ? o.tags.split(',').map((t: string) => t.trim())
             : [];
         // Remove existing status tags (case-insensitive)
-        const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+        const statusTags = ['order_ready', 'on_hold', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
         let filtered = currentTags.filter((t: string) => {
           const trimmed = t.trim().toLowerCase();
           return !statusTags.some(st => st.trim().toLowerCase() === trimmed);
@@ -565,6 +575,7 @@ const Orders = () => {
         let tagValue = status.trim();
         if (status.trim().toLowerCase() === 'confirmed') tagValue = 'customer_confirmed';
         else if (status.trim().toLowerCase() === 'order-ready') tagValue = 'order_ready';
+        else if (status.trim().toLowerCase() === 'on_hold') tagValue = 'on_hold';
         if (status.trim().toLowerCase() !== 'pending') filtered = [...filtered, tagValue.trim()];
         if (status.trim().toLowerCase() === 'fulfilled') filtered = filtered.filter((t: string) => t.trim().toLowerCase() !== 'priority');
         return { ...o, tags: filtered } as Order;
@@ -612,7 +623,7 @@ const Orders = () => {
               ? o.tags.split(',').map((t: string) => t.trim())
               : [];
           // Remove existing status tags (case-insensitive)
-          const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+          const statusTags = ['order_ready', 'on_hold', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
           let filtered = currentTags.filter((t: string) => {
             const trimmed = t.trim().toLowerCase();
             return !statusTags.some(st => st.trim().toLowerCase() === trimmed);
@@ -892,7 +903,7 @@ const Orders = () => {
           : [];
         
       // Remove existing status tags (trimmed and case-insensitive)
-        const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+        const statusTags = ['order_ready', 'on_hold', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
       const filteredTags = tags.filter((t: string) => {
         const trimmed = t.trim().toLowerCase();
         return !statusTags.some(st => st.trim().toLowerCase() === trimmed);
@@ -971,6 +982,7 @@ const Orders = () => {
     // Define status tags with proper trimming (case-insensitive comparison)
     const statusTags = {
       orderReady: 'order_ready',
+      onHold: 'on_hold',
       shipped: 'shipped',
       readyToShip: 'ready_to_ship',
       fulfilled: 'fulfilled',
@@ -987,6 +999,7 @@ const Orders = () => {
           const trimmed = tag.trim().toLowerCase();
           return [
             statusTags.orderReady.toLowerCase(),
+            statusTags.onHold.toLowerCase(),
             statusTags.shipped.toLowerCase(),
             statusTags.readyToShip.toLowerCase(),
             statusTags.fulfilled.toLowerCase(),
@@ -998,6 +1011,9 @@ const Orders = () => {
       case 'order-ready':
         // Show only orders with order_ready tag (case-insensitive)
         return trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.orderReady.toLowerCase());
+      case 'on_hold':
+        // Show only orders with on_hold tag (case-insensitive)
+        return trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.onHold.toLowerCase());
       case 'confirmed':
         // Show only orders with customer_confirmed tag (case-insensitive)
         return trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.customerConfirmed.toLowerCase());
@@ -1034,6 +1050,7 @@ const Orders = () => {
       shipped: 'shipped',
       readyToShip: 'ready_to_ship',
       customerConfirmed: 'customer_confirmed',
+      onHold: 'on_hold',
       orderReady: 'order_ready'
     };
     
@@ -1044,6 +1061,7 @@ const Orders = () => {
     if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.shipped.toLowerCase())) return 40;
     if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.readyToShip.toLowerCase())) return 30;
     if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.customerConfirmed.toLowerCase())) return 20;
+    if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.onHold.toLowerCase())) return 17;
     if (trimmedTags.some(tag => tag.trim().toLowerCase() === statusTags.orderReady.toLowerCase())) return 15;
     return 10; // pending orders should be first
   };
@@ -1249,6 +1267,45 @@ const Orders = () => {
     }
   };
 
+  // Helper function to get day range label
+  const getDayRange = (daysLeft: number): string => {
+    if (daysLeft < 0) return 'overdue';
+    if (daysLeft === 0) return 'today';
+    if (daysLeft === 1) return '1 day';
+    if (daysLeft === 2) return '2 days';
+    if (daysLeft === 3) return '3 days';
+    if (daysLeft === 4) return '4 days';
+    if (daysLeft === 5) return '5 days';
+    if (daysLeft === 6) return '6 days';
+    if (daysLeft === 7) return '7 days';
+    return '+7 days';
+  };
+
+  // Helper function to get shipping method from order
+  const getShippingMethodFromOrder = (order: Order): string => {
+    const tags = Array.isArray(order.tags) ? order.tags : 
+                typeof order.tags === 'string' ? order.tags.split(',').map(t => t.trim()) :
+                [];
+    const shippingMethodTag = tags.find((tag: string) => 
+      tag.trim().toLowerCase().startsWith('shipping_method:')
+    );
+    if (shippingMethodTag) {
+      const method = shippingMethodTag.split(':')[1]?.trim().toLowerCase();
+      if (method === 'scooter') return 'Scooter';
+      if (method === 'pickup') return 'Pickup';
+      if (method === 'other-company' || method === 'other_company') return 'Other Company';
+    }
+    return 'Shipblu'; // Default
+  };
+
+  // Helper function to get rush type from order
+  const getRushTypeFromOrder = (order: Order): string => {
+    const makingTimeDays = detectMakingTime(order.line_items || []);
+    if (makingTimeDays === 3) return 'Rushed';
+    // Default to Standard (including Unknown cases)
+    return 'Standard';
+  };
+
   // First, decorate orders with their original index
   const sortedOrders = (orders || [])?.map((order: Order, idx: number) => ({
     ...order,
@@ -1268,73 +1325,66 @@ const Orders = () => {
     
     const matchesStatus = filterOrdersByStatus(order);
     
-    // Filter by selected summary items if any are selected
+    // Quick filter: Production items
+    if (selectedProductionItems.size > 0) {
+      const matches = Array.from(selectedProductionItems).some(itemTitle => orderContainsItem(order, itemTitle));
+      if (!matches) return false;
+    }
+    
+    // Quick filter: Cities
+    if (selectedCities.size > 0) {
+      const province = order.shipping_address?.province || 'Unknown';
+      if (!selectedCities.has(province)) return false;
+    }
+    
+    // Quick filter: Days left
+    if (selectedDayRanges.size > 0) {
+      const daysLeft = calculateDaysLeft(order);
+      const range = getDayRange(daysLeft);
+      if (!selectedDayRanges.has(range)) return false;
+    }
+    
+    // Quick filter: Shipping methods
+    if (selectedShippingMethods.size > 0) {
+      const method = getShippingMethodFromOrder(order);
+      if (!selectedShippingMethods.has(method)) return false;
+    }
+    
+    // Quick filter: Rushed/Standard
+    if (selectedRushTypes.size > 0) {
+      const rushType = getRushTypeFromOrder(order);
+      if (!selectedRushTypes.has(rushType)) return false;
+    }
+    
+    // Legacy filter: selected summary items (for backward compatibility)
     const matchesSummaryItems = selectedSummaryItems.size === 0 || 
       Array.from(selectedSummaryItems).some(itemTitle => orderContainsItem(order, itemTitle));
     
     return matchesSearch && matchesStatus && matchesSummaryItems;
   })
-  // Finally sort with stable tiebreaker
+  // Sort with new rules: 1. Priority first, 2. Days left ascending, 3. Order ID
   .sort((a: Order & { originalIndex: number }, b: Order & { originalIndex: number }) => {
-    // Get status priority for sorting
-    const aStatusPriority = getStatusPriority(a);
-    const bStatusPriority = getStatusPriority(b);
+    // Helper to check if order has priority tag
+    const hasPriority = (order: Order): boolean => {
+      const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',').map(t => t.trim()) : [];
+      return tags.includes('priority');
+    };
 
-    // For pending orders, sort SOLELY by days left (ascending - fewest days first)
-    const isPendingA = aStatusPriority === 10; // pending orders have priority 10
-    const isPendingB = bStatusPriority === 10;
-    
-    if (isPendingA && isPendingB) {
-      const aDaysLeft = calculateDaysLeft(a);
-      const bDaysLeft = calculateDaysLeft(b);
-      // Sort solely by days left for pending orders
-      if (aDaysLeft !== bDaysLeft) {
-        return aDaysLeft - bDaysLeft; // Ascending: fewest days first
-      }
-      // If days left are equal, use order ID as tiebreaker
-      if (a.id !== b.id) {
-        return a.id - b.id;
-      }
-      // Final tiebreaker: original index
-      return a.originalIndex - b.originalIndex;
-    }
+    const aPriority = hasPriority(a);
+    const bPriority = hasPriority(b);
 
-    // For non-pending orders, first sort by status priority
-    if (aStatusPriority !== bStatusPriority) {
-      return aStatusPriority - bStatusPriority;
-    }
+    // Rule 1: Priority orders are pinned to the top
+    if (aPriority && !bPriority) return -1;
+    if (!aPriority && bPriority) return 1;
 
-    // If both orders are shipped, sort by shipping date
-    const aTags = Array.isArray(a.tags) ? a.tags : typeof a.tags === 'string' ? a.tags.split(',').map(t => t.trim()) : [];
-    const bTags = Array.isArray(b.tags) ? b.tags : typeof b.tags === 'string' ? b.tags.split(',').map(t => t.trim()) : [];
-    
-    if (aTags.includes('shipped') && bTags.includes('shipped')) {
-      const aShippingDate = getShippingDate(a);
-      const bShippingDate = getShippingDate(b);
-      
-      // If both have shipping dates, sort by date (oldest first)
-      if (aShippingDate && bShippingDate) {
-        return aShippingDate.getTime() - bShippingDate.getTime();
-      }
-      // If only one has shipping date, put it first
-      if (aShippingDate) return -1;
-      if (bShippingDate) return 1;
-    }
-
-    // For non-pending orders with same status, sort by days left
+    // Rule 2: Sort by days left (ascending - fewest days first)
     const aDaysLeft = calculateDaysLeft(a);
     const bDaysLeft = calculateDaysLeft(b);
     if (aDaysLeft !== bDaysLeft) {
       return aDaysLeft - bDaysLeft;
     }
 
-    // Then sort by priority tag
-    const aPriority = aTags.includes('priority');
-    const bPriority = bTags.includes('priority');
-    if (aPriority && !bPriority) return -1;
-    if (!aPriority && bPriority) return 1;
-
-    // Sort by order ID in ascending order
+    // Rule 3: Sort by order ID (ascending)
     if (a.id !== b.id) {
       return a.id - b.id;
     }
@@ -1581,6 +1631,155 @@ ___`;
     });
   };
 
+  // Get visible tabs based on current status filter
+  // Order: production -> days -> city -> shipping -> rushed
+  const getVisibleTabs = (): Array<'production' | 'city' | 'days' | 'shipping' | 'rushed'> => {
+    const tabs: Array<'production' | 'city' | 'days' | 'shipping' | 'rushed'> = [];
+    
+    // For on_hold view, show all tabs
+    if (statusFilter === 'on_hold') {
+      tabs.push('production');
+      tabs.push('days');
+      tabs.push('city');
+      tabs.push('shipping');
+      tabs.push('rushed');
+      return tabs;
+    }
+    
+    // Production tab
+    if (['pending', 'order-ready', 'confirmed', 'all'].includes(statusFilter)) {
+      tabs.push('production');
+    }
+    
+    // Days tab
+    if (['pending', 'order-ready', 'confirmed', 'ready-to-ship', 'all'].includes(statusFilter)) {
+      tabs.push('days');
+    }
+    
+    // City tab (always visible)
+    tabs.push('city');
+    
+    // Shipping tab
+    if (['pending', 'order-ready', 'confirmed', 'ready-to-ship', 'shipped', 'fulfilled', 'all'].includes(statusFilter)) {
+      tabs.push('shipping');
+    }
+    
+    // Rushed tab (always visible)
+    tabs.push('rushed');
+    
+    return tabs;
+  };
+
+  // Calculate data for production tab
+  const getProductionData = () => {
+    if (!orders) return [];
+    
+    const ordersToProcess = selectedOrders.length > 0
+      ? orders.filter(order => selectedOrders.includes(order.id))
+      : orders.filter(order => filterOrdersByStatus(order));
+    
+    const itemCounts: { [key: string]: number } = {};
+    
+    ordersToProcess.forEach(order => {
+      order.line_items?.forEach(item => {
+        const itemKey = item.variant_title ? `${item.title} - ${item.variant_title}` : item.title;
+        itemCounts[itemKey] = (itemCounts[itemKey] || 0) + item.quantity;
+      });
+    });
+    
+    return Object.entries(itemCounts)
+      .map(([title, quantity]) => ({ title, quantity }))
+      .sort((a, b) => b.quantity - a.quantity);
+  };
+
+  // Calculate data for city tab
+  const getCityData = () => {
+    if (!orders) return [];
+    
+    const ordersToProcess = selectedOrders.length > 0
+      ? orders.filter(order => selectedOrders.includes(order.id))
+      : orders.filter(order => filterOrdersByStatus(order));
+    
+    const cityCounts: { [key: string]: number } = {};
+    
+    ordersToProcess.forEach(order => {
+      const province = order.shipping_address?.province || 'Unknown';
+      cityCounts[province] = (cityCounts[province] || 0) + 1;
+    });
+    
+    return Object.entries(cityCounts)
+      .map(([city, count]) => ({ city, count }))
+      .sort((a, b) => b.count - a.count);
+  };
+
+  // Calculate data for days left tab
+  const getDaysLeftData = () => {
+    if (!orders) return [];
+    
+    const ordersToProcess = selectedOrders.length > 0
+      ? orders.filter(order => selectedOrders.includes(order.id))
+      : orders.filter(order => filterOrdersByStatus(order));
+    
+    const rangeCounts: { [key: string]: number } = {};
+    
+    ordersToProcess.forEach(order => {
+      const daysLeft = calculateDaysLeft(order);
+      const range = getDayRange(daysLeft);
+      rangeCounts[range] = (rangeCounts[range] || 0) + 1;
+    });
+    
+    const rangeOrder = ['overdue', 'today', '1 day', '2 days', '3 days', '4 days', '5 days', '6 days', '7 days', '+7 days'];
+    return rangeOrder
+      .filter(range => rangeCounts[range] > 0)
+      .map(range => ({ range, count: rangeCounts[range] }));
+  };
+
+  // Calculate data for shipping tab
+  const getShippingData = () => {
+    if (!orders) return [];
+    
+    const ordersToProcess = selectedOrders.length > 0
+      ? orders.filter(order => selectedOrders.includes(order.id))
+      : orders.filter(order => filterOrdersByStatus(order));
+    
+    const methodCounts: { [key: string]: number } = {};
+    
+    ordersToProcess.forEach(order => {
+      const method = getShippingMethodFromOrder(order);
+      methodCounts[method] = (methodCounts[method] || 0) + 1;
+    });
+    
+    const methodOrder = ['Shipblu', 'Other Company', 'Scooter', 'Pickup'];
+    return methodOrder
+      .filter(method => methodCounts[method] > 0)
+      .map(method => ({ method, count: methodCounts[method] }));
+  };
+
+  // Calculate data for rushed tab
+  const getRushedData = () => {
+    if (!orders) return [];
+    
+    const ordersToProcess = selectedOrders.length > 0
+      ? orders.filter(order => selectedOrders.includes(order.id))
+      : orders.filter(order => filterOrdersByStatus(order));
+    
+    const typeCounts: { [key: string]: number } = {
+      'Rushed': 0,
+      'Standard': 0
+    };
+    
+    ordersToProcess.forEach(order => {
+      const type = getRushTypeFromOrder(order);
+      typeCounts[type] = (typeCounts[type] || 0) + 1;
+    });
+    
+    // Only show types that have count > 0
+    const typeOrder = ['Rushed', 'Standard'];
+    return typeOrder
+      .filter(type => typeCounts[type] > 0)
+      .map(type => ({ type, count: typeCounts[type] }));
+  };
+
   // Calculate accumulated item quantities for pending orders
   const calculatePendingItemsSummary = (ordersToUse?: Order[]) => {
     if (!orders) return { items: [], totalOrders: 0, totalPieces: 0 };
@@ -1650,113 +1849,251 @@ ___`;
   useEffect(() => {
     if (selectedOrders.length > 0) {
       setSelectedSummaryItems(new Set());
+      // Don't clear quick filters - they should work with selected orders
     }
   }, [selectedOrders]);
 
-  // Production Summary Card Component
-  const ProductionSummaryCard = () => {
-    // If orders are selected, show summary for selected orders only
-    const ordersToSummarize = selectedOrders.length > 0 
-      ? orders?.filter(order => selectedOrders.includes(order.id)) || []
-      : undefined;
+  // Quick Filter Card Component
+  const QuickFilterCard = () => {
+    const visibleTabs = getVisibleTabs();
     
-    const summary = calculatePendingItemsSummary(ordersToSummarize);
-    
-    if (summary.totalOrders === 0) return null;
+    // Set default tab to production if available, otherwise first visible tab
+    // Only run when statusFilter changes, not when activeQuickFilterTab changes
+    useEffect(() => {
+      if (visibleTabs.length > 0) {
+        // Only reset if current tab is not in visible tabs
+        if (!visibleTabs.includes(activeQuickFilterTab)) {
+          // Prefer production if available, otherwise first visible tab
+          if (visibleTabs.includes('production')) {
+            setActiveQuickFilterTab('production');
+          } else {
+            setActiveQuickFilterTab(visibleTabs[0]);
+          }
+        }
+      }
+    }, [statusFilter]); // Only depend on statusFilter, not activeQuickFilterTab
 
-    const displayedItems = isSummaryExpanded ? summary.items : summary.items.slice(0, 5);
+    // Get current tab data
+    const getCurrentTabData = () => {
+      switch (activeQuickFilterTab) {
+        case 'production':
+          return getProductionData();
+        case 'city':
+          return getCityData();
+        case 'days':
+          return getDaysLeftData();
+        case 'shipping':
+          return getShippingData();
+        case 'rushed':
+          return getRushedData();
+        default:
+          return [];
+      }
+    };
+
+    // Get selected items for current tab
+    const getSelectedItems = () => {
+      switch (activeQuickFilterTab) {
+        case 'production':
+          return selectedProductionItems;
+        case 'city':
+          return selectedCities;
+        case 'days':
+          return selectedDayRanges;
+        case 'shipping':
+          return selectedShippingMethods;
+        case 'rushed':
+          return selectedRushTypes;
+        default:
+          return new Set<string>();
+      }
+    };
+
+    // Handle item click
+    const handleItemClick = (value: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      
+      switch (activeQuickFilterTab) {
+        case 'production':
+          setSelectedProductionItems(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(value)) newSet.delete(value);
+            else newSet.add(value);
+            return newSet;
+          });
+          break;
+        case 'city':
+          setSelectedCities(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(value)) newSet.delete(value);
+            else newSet.add(value);
+            return newSet;
+          });
+          break;
+        case 'days':
+          setSelectedDayRanges(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(value)) newSet.delete(value);
+            else newSet.add(value);
+            return newSet;
+          });
+          break;
+        case 'shipping':
+          setSelectedShippingMethods(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(value)) newSet.delete(value);
+            else newSet.add(value);
+            return newSet;
+          });
+          break;
+        case 'rushed':
+          setSelectedRushTypes(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(value)) newSet.delete(value);
+            else newSet.add(value);
+            return newSet;
+          });
+          break;
+      }
+    };
+
+    // Clear all filters from all tabs
+    const handleClearFilter = () => {
+      setSelectedProductionItems(new Set());
+      setSelectedCities(new Set());
+      setSelectedDayRanges(new Set());
+      setSelectedShippingMethods(new Set());
+      setSelectedRushTypes(new Set());
+    };
+
+    const currentData = getCurrentTabData();
+    const selectedItems = getSelectedItems();
+    const displayedItems = isQuickFilterExpanded ? currentData : currentData.slice(0, 5);
+    
+    // Check if any tab has selected items
+    const hasAnyFilters = 
+      selectedProductionItems.size > 0 ||
+      selectedCities.size > 0 ||
+      selectedDayRanges.size > 0 ||
+      selectedShippingMethods.size > 0 ||
+      selectedRushTypes.size > 0;
+
+    // Don't show card in "all orders" view
+    if (statusFilter === 'all') return null;
+
+    if (currentData.length === 0) return null;
+
+    const tabConfig = {
+      production: { icon: '🧶', label: 'Production', tooltip: 'Production' },
+      city: { icon: '📍', label: 'City', tooltip: 'City' },
+      days: { icon: '📅', label: 'Days', tooltip: 'Days Left' },
+      shipping: { icon: '🚚', label: 'Shipping', tooltip: 'Shipping Method' },
+      rushed: { icon: '⚡', label: 'Rushed', tooltip: 'Rushed/Standard' },
+    };
 
     return (
-      <div 
-        className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow duration-200"
-      >
+      <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow duration-200">
         {/* Header */}
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-              <span className="text-blue-600 text-sm font-semibold">📊</span>
-            </div>
-            <div>
-              <h3 className="font-semibold text-gray-900">Production Summary</h3>
-              <p className="text-sm text-gray-600">
-                {selectedOrders.length > 0 
-                  ? `${selectedOrders.length} selected order${selectedOrders.length > 1 ? 's' : ''}`
-                  : `${summary.totalOrders} pending orders`}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setIsSummaryExpanded(!isSummaryExpanded)}
-              className="text-xs text-blue-600 font-medium bg-white px-2 py-1 rounded hover:bg-gray-50"
-              title={isSummaryExpanded ? "Click to collapse" : "Click to see all items"}
-            >
-              {isSummaryExpanded ? 'Collapse' : 'Expand'}
-            </button>
-            {selectedSummaryItems.size > 0 && (
+        <div className="flex items-center justify-between mb-4 pb-3 border-b border-blue-200">
+          <h3 className="font-semibold text-gray-900">Quick Filters</h3>
+          <div className="flex items-center gap-3">
+            <p className="text-xs text-gray-600">
+              {selectedOrders.length > 0 
+                ? `${selectedOrders.length} selected order${selectedOrders.length > 1 ? 's' : ''}`
+                : `${orders?.filter(filterOrdersByStatus).length || 0} orders`}
+            </p>
+            {hasAnyFilters && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  setSelectedSummaryItems(new Set());
+                  handleClearFilter();
                 }}
-                className="text-xs text-gray-600 font-medium bg-white px-2 py-1 rounded hover:bg-gray-50"
-                title="Clear filter"
+                className="text-xs text-blue-600 font-medium bg-white px-2 py-1 rounded hover:bg-gray-50 border border-blue-200"
+                title="Clear all filters"
               >
-                Clear filter
+                Clear
               </button>
             )}
           </div>
         </div>
 
-        {/* Items List */}
+        {/* Icon Tabs - Centered */}
+        <div className="flex items-center justify-center gap-3 mb-4">
+          {visibleTabs.map(tab => {
+            const config = tabConfig[tab];
+            const isActive = activeQuickFilterTab === tab;
+            return (
+              <button
+                key={tab}
+                onClick={() => setActiveQuickFilterTab(tab)}
+                className={`
+                  w-10 h-10 rounded-full flex items-center justify-center
+                  transition-all duration-200
+                  ${isActive 
+                    ? 'bg-blue-600 text-white ring-2 ring-blue-300 ring-offset-2' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }
+                `}
+                title={config.tooltip}
+              >
+                <span className="text-lg">{config.icon}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Content Area */}
         <div className="space-y-2">
-          {displayedItems.map((item, index) => {
-            const isSelected = selectedSummaryItems.has(item.title);
+          {displayedItems.map((item: any, index: number) => {
+            const value = activeQuickFilterTab === 'production' ? item.title :
+                         activeQuickFilterTab === 'city' ? item.city :
+                         activeQuickFilterTab === 'days' ? item.range :
+                         activeQuickFilterTab === 'shipping' ? item.method :
+                         item.type;
+            const count = item.quantity || item.count;
+            const isSelected = selectedItems.has(value);
+            
             return (
               <div 
                 key={index} 
-                onClick={(e) => handleSummaryItemClick(item.title, e)}
-                className={`flex justify-between items-center py-1 px-2 rounded border cursor-pointer transition-colors ${
+                onClick={(e) => handleItemClick(value, e)}
+                className={`flex justify-between items-center py-2 px-3 rounded-md border cursor-pointer transition-colors ${
                   isSelected 
                     ? 'bg-blue-200 border-blue-400 shadow-sm' 
-                    : 'bg-white border-blue-100 hover:bg-blue-50'
+                    : 'bg-white border-gray-200 hover:border-blue-300 hover:bg-blue-50'
                 }`}
                 title={isSelected ? "Click to deselect" : "Click to filter by this item"}
               >
                 <span className={`text-sm truncate flex-1 ${isSelected ? 'font-semibold text-blue-900' : 'text-gray-700'}`}>
-                  {item.title}
+                  {value}
                 </span>
-                <span className={`text-sm font-semibold ml-2 ${isSelected ? 'text-blue-900' : 'text-blue-600'}`}>
-                  {item.quantity}
-                </span>
-            </div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-sm font-semibold ${isSelected ? 'text-blue-900' : 'text-blue-600'}`}>
+                    {count}
+                  </span>
+                  {isSelected && (
+                    <CheckIcon className="w-4 h-4 text-blue-600" />
+                  )}
+                </div>
+              </div>
             );
           })}
-          {!isSummaryExpanded && summary.items.length > 5 && (
+          {!isQuickFilterExpanded && currentData.length > 5 && (
             <div 
               className="text-xs text-blue-600 text-center py-1 font-medium cursor-pointer hover:text-blue-700"
-              onClick={() => setIsSummaryExpanded(true)}
+              onClick={() => setIsQuickFilterExpanded(true)}
             >
-              +{summary.items.length - 5} more items (click to expand)
+              +{currentData.length - 5} more items (click to expand)
             </div>
           )}
-          {isSummaryExpanded && summary.items.length > 5 && (
+          {isQuickFilterExpanded && currentData.length > 5 && (
             <div 
               className="text-xs text-blue-600 text-center py-1 font-medium cursor-pointer hover:text-blue-700"
-              onClick={() => setIsSummaryExpanded(false)}
+              onClick={() => setIsQuickFilterExpanded(false)}
             >
               Click to collapse
             </div>
           )}
-        </div>
-
-        {/* Footer */}
-        <div className="mt-3 pt-2 border-t border-blue-200">
-          <div className="text-xs text-gray-600 text-center">
-            {selectedOrders.length > 0 
-              ? 'Items in selected orders'
-              : 'Items to be produced from pending orders'}
-          </div>
         </div>
       </div>
     );
@@ -2024,8 +2361,8 @@ ___`;
       {/* Order Grid */}
       <div className="p-2 sm:p-8">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-          {/* Production Summary Card - Only show for pending orders */}
-          {statusFilter === 'pending' && <ProductionSummaryCard />}
+          {/* Quick Filter Card - Shows in all views */}
+          <QuickFilterCard />
           {sortedOrders?.map((order: any) => (
             <OrderCard
               key={order.id}

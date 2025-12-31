@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import whatsappLogo from '../assets/whatsapp.png';
-import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon, EllipsisHorizontalIcon, DocumentTextIcon, ClockIcon, SparklesIcon, CheckBadgeIcon, PaperAirplaneIcon, XCircleIcon, BanknotesIcon } from '@heroicons/react/24/outline';
+import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon, EllipsisHorizontalIcon, DocumentTextIcon, ClockIcon, SparklesIcon, CheckBadgeIcon, PaperAirplaneIcon, XCircleIcon, BanknotesIcon, BoltIcon, HandRaisedIcon, HandThumbUpIcon, PauseCircleIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid, PhoneArrowUpRightIcon } from '@heroicons/react/24/solid';
-import OrderTimeline from './OrderTimeline';
-import { convertToCairoTime } from '../utils/dateUtils';
+import { convertToCairoTime, calculateDaysRemaining } from '../utils/dateUtils';
 import { Menu } from '@headlessui/react';
 import { format } from 'date-fns';
 import LocationDialog, { Zone, SubZone } from './ui/LocationDialog';
@@ -179,6 +178,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const [selectedNeighborhood, setSelectedNeighborhood] = useState<Zone | null>(null);
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
   const [itemsExpanded, setItemsExpanded] = useState(false);
+  const [orderNumberCopied, setOrderNumberCopied] = useState(false);
+  const [phoneNumberCopied, setPhoneNumberCopied] = useState(false);
   const noteModalRef = useRef<HTMLDivElement>(null);
   const whatsAppModalRef = useRef<HTMLDivElement>(null);
   const shippedModalRef = useRef<HTMLDivElement>(null);
@@ -197,6 +198,12 @@ const OrderCard: React.FC<OrderCardProps> = ({
   
   // Check if order is order-ready
   const isOrderReady = trimmedTags.some((tag: string) => tag.trim().toLowerCase() === 'order_ready');
+  
+  // Check if order is cancelled with no_reply_cancelled tag
+  const isNoReplyCancelled = trimmedTags.some((tag: string) => tag.trim().toLowerCase() === 'no_reply_cancelled');
+  
+  // Check if order was confirmed from on_hold
+  const isConfirmedFromOnHold = trimmedTags.some((tag: string) => tag.trim().toLowerCase() === 'confirmed_from_on_hold');
   
   // Check if manual WhatsApp confirmation has been sent
   const hasManualWhatsAppConfirmation = trimmedTags.includes('manual_whatsapp_confirmation');
@@ -294,6 +301,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
 
   const dueDateTag = trimmedTags.find((tag: string) => tag.startsWith('custom_due_date:'));
   const startDateTag = trimmedTags.find((tag: string) => tag.startsWith('custom_start_date:'));
+  const orderReadyDateTag = trimmedTags.find((tag: string) => tag.toLowerCase().startsWith('order_ready_date:'));
+  const movedToOnHoldDateTag = trimmedTags.find((tag: string) => tag.toLowerCase().startsWith('moved_to_on_hold:'));
   
   // Calculate dates in Cairo timezone
   let startDate;
@@ -336,6 +345,92 @@ const OrderCard: React.FC<OrderCardProps> = ({
     dueDate = convertToCairoTime(dueDate);
   }
 
+  // Calculate days left
+  const calculateDaysLeft = (): number => {
+    try {
+      const now = convertToCairoTime(new Date());
+      return calculateDaysRemaining(dueDate, now);
+    } catch (error) {
+      return 7; // Default fallback
+    }
+  };
+
+  const daysLeft = calculateDaysLeft();
+
+  // Get days left badge styling
+  const getDaysLeftBadgeStyle = () => {
+    if (daysLeft < 0) {
+      return 'bg-red-100 text-red-700 border-red-200';
+    } else if (daysLeft === 0) {
+      return 'bg-orange-100 text-orange-700 border-orange-200';
+    } else if (daysLeft <= 2) {
+      return 'bg-yellow-100 text-yellow-700 border-yellow-200';
+    } else if (daysLeft <= 4) {
+      return 'bg-amber-100 text-amber-700 border-amber-200';
+    } else {
+      return 'bg-green-100 text-green-700 border-green-200';
+    }
+  };
+
+  const getDaysLeftText = () => {
+    // Return just the number, negative for overdue, "Today" for 0
+    if (daysLeft === 0) {
+      return 'Today';
+    }
+    return `${daysLeft}`;
+  };
+
+  // Calculate days since order_ready_date
+  const getDaysInOrderReady = (): number | null => {
+    if (!orderReadyDateTag) return null;
+    try {
+      const dateStr = orderReadyDateTag.split(':')[1];
+      const orderReadyDate = convertToCairoTime(new Date(dateStr));
+      if (isNaN(orderReadyDate.getTime())) return null;
+      
+      const now = convertToCairoTime(new Date());
+      // Reset hours to midnight for accurate day calculation
+      const orderReady = new Date(orderReadyDate);
+      orderReady.setHours(0, 0, 0, 0);
+      const current = new Date(now);
+      current.setHours(0, 0, 0, 0);
+      
+      // Calculate days from order_ready_date to now
+      const diffTime = current.getTime() - orderReady.getTime();
+      const days = Math.round(diffTime / (1000 * 60 * 60 * 24));
+      return Math.max(0, days); // Don't show negative days
+    } catch (error) {
+      return null;
+    }
+  };
+
+  // Calculate days since moved_to_on_hold
+  const getDaysInOnHold = (): number | null => {
+    if (!movedToOnHoldDateTag) return null;
+    try {
+      const dateStr = movedToOnHoldDateTag.split(':')[1];
+      const onHoldDate = convertToCairoTime(new Date(dateStr));
+      if (isNaN(onHoldDate.getTime())) return null;
+      
+      const now = convertToCairoTime(new Date());
+      // Reset hours to midnight for accurate day calculation
+      const onHold = new Date(onHoldDate);
+      onHold.setHours(0, 0, 0, 0);
+      const current = new Date(now);
+      current.setHours(0, 0, 0, 0);
+      
+      // Calculate days from moved_to_on_hold to now
+      const diffTime = current.getTime() - onHold.getTime();
+      const days = Math.round(diffTime / (1000 * 60 * 60 * 24));
+      return Math.max(0, days); // Don't show negative days
+    } catch (error) {
+      return null;
+    }
+  };
+
+  const daysInOrderReady = getDaysInOrderReady();
+  const daysInOnHold = getDaysInOnHold();
+
   // Determine the current status based on tags and fulfillment status
   const getCurrentStatus = () => {
     // Trim all tags for consistent matching
@@ -349,6 +444,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
       shipped: 'shipped',
               readyToShip: 'ready_to_ship',
       customerConfirmed: 'customer_confirmed',
+      onHold: 'on_hold',
       orderReady: 'order_ready'
     } as const;
     
@@ -364,6 +460,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
       return 'ready_to_ship';
     } else if (trimmedTags.some((tag: string) => tag.trim().toLowerCase() === statusTags.customerConfirmed.toLowerCase())) {
       return 'confirmed';
+    } else if (trimmedTags.some((tag: string) => tag.trim().toLowerCase() === statusTags.onHold.toLowerCase())) {
+      return 'on_hold';
     } else if (trimmedTags.some((tag: string) => tag.trim().toLowerCase() === statusTags.orderReady.toLowerCase())) {
       return 'order-ready';
     } else {
@@ -383,8 +481,10 @@ const OrderCard: React.FC<OrderCardProps> = ({
         return 'bg-yellow-100 text-yellow-800';
       case 'order-ready':
         return 'bg-orange-500 text-white';
+      case 'on_hold':
+        return 'bg-amber-500 text-white';
       case 'confirmed':
-        return 'bg-green-600 text-white';
+        return 'bg-green-500 text-white';
       case 'ready_to_ship':
         return 'bg-blue-600 text-white font-medium';
       case 'shipped':
@@ -406,8 +506,10 @@ const OrderCard: React.FC<OrderCardProps> = ({
         return <ClockIcon className="w-5 h-5" />;
       case 'order-ready':
         return <SparklesIcon className="w-5 h-5" />;
+      case 'on_hold':
+        return <PauseCircleIcon className="w-5 h-5" />;
       case 'confirmed':
-        return <CheckBadgeIcon className="w-5 h-5" />;
+        return <HandThumbUpIcon className="w-5 h-5" />;
       case 'ready_to_ship':
         return <PaperAirplaneIcon className="w-5 h-5" />;
       case 'shipped':
@@ -460,6 +562,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
         statusTag = 'customer_confirmed';
       } else if (newStatus.trim().toLowerCase() === 'order-ready') {
         statusTag = 'order_ready';
+      } else if (newStatus.trim().toLowerCase() === 'on_hold') {
+        statusTag = 'on_hold';
       }
       onUpdateStatus(order.id, statusTag);
     }
@@ -595,11 +699,19 @@ const OrderCard: React.FC<OrderCardProps> = ({
     try {
       const formattedPhone = formatPhoneNumber(order.customer.phone);
       await navigator.clipboard.writeText(formattedPhone);
+      setPhoneNumberCopied(true);
       toast.success('Phone number copied to clipboard');
+      setTimeout(() => setPhoneNumberCopied(false), 2000);
     } catch (error) {
       console.error('Failed to copy phone number:', error);
       toast.error('Failed to copy phone number');
     }
+  };
+
+  // Handle phone number click to copy
+  const handlePhoneNumberClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await handleCopyPhone(e);
   };
 
   // Function to dial customer phone number
@@ -912,6 +1024,14 @@ Could you kindly confirm if you'll be available to receive it during that time? 
       // Add order_ready tag
       filtered = [...filtered, 'order_ready'];
       
+      // Add order_ready_date tag with today's date (YYYY-MM-DD)
+      const today = new Date();
+      const dateStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
+      const orderReadyDateTag = `order_ready_date:${dateStr}`;
+      // Remove any existing order_ready_date tag
+      filtered = filtered.filter(tag => !tag.startsWith('order_ready_date:'));
+      filtered = [...filtered, orderReadyDateTag];
+      
       // Add automated_whatsapp_confirmation tag if it doesn't exist
       if (!filtered.includes('automated_whatsapp_confirmation')) {
         filtered = [...filtered, 'automated_whatsapp_confirmation'];
@@ -1024,8 +1144,13 @@ Could you kindly confirm if you'll be available to receive it during that time? 
     const formattedDate = format(newDueDate, 'yyyy-MM-dd');
     let updatedTags = [...tagsWithoutDueDate, `custom_due_date:${formattedDate}`];
     
-    // Automatically add priority tag if it doesn't exist (custom due date = priority order)
-    if (!updatedTags.includes('priority')) {
+    // Check if date is being extended (new date is later than current due date)
+    const currentDueDate = dueDate ? new Date(dueDate) : null;
+    const isDateExtended = currentDueDate && newDueDate > currentDueDate;
+    
+    // Automatically add priority tag if it doesn't exist AND date is not being extended
+    // (custom due date = priority order, but extending date shouldn't add priority)
+    if (!updatedTags.includes('priority') && !isDateExtended) {
       updatedTags = [...updatedTags, 'priority'];
       setLocalPriority(true); // Update local state for instant UI feedback
     }
@@ -1035,7 +1160,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
     }
     
     // Also update priority via the priority handler to ensure backend is updated
-    if (onTogglePriority && !currentTags.includes('priority')) {
+    if (onTogglePriority && !currentTags.includes('priority') && !isDateExtended) {
       onTogglePriority(order.id, true);
     }
   };
@@ -1137,6 +1262,39 @@ Could you kindly confirm if you'll be available to receive it during that time? 
     return 'Shipblu'; // Default
   };
 
+  // Get shipping icon and styling based on method
+  const getShippingIcon = () => {
+    const method = getShippingMethod();
+    
+    switch (method) {
+      case 'Other Company':
+        return {
+          icon: TruckIcon,
+          className: 'w-5 h-5 text-green-600 flex-shrink-0 hover:text-green-700 transition-colors',
+          containerClassName: 'bg-green-100 border border-green-300 rounded'
+        };
+      case 'Scooter':
+        return {
+          icon: BoltIcon,
+          className: 'w-5 h-5 text-orange-500 flex-shrink-0 hover:text-orange-600 transition-colors',
+          containerClassName: ''
+        };
+      case 'Pickup':
+        return {
+          icon: HandRaisedIcon,
+          className: 'w-5 h-5 text-purple-500 flex-shrink-0 hover:text-purple-600 transition-colors',
+          containerClassName: ''
+        };
+      case 'Shipblu':
+      default:
+        return {
+          icon: TruckIcon,
+          className: 'w-5 h-5 text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors',
+          containerClassName: ''
+        };
+    }
+  };
+
   // Handle shipping method change
   const handleShippingMethodChange = (method: string) => {
     const currentTags = Array.isArray(order.tags) 
@@ -1169,7 +1327,9 @@ Could you kindly confirm if you'll be available to receive it during that time? 
     e.stopPropagation();
     try {
       await navigator.clipboard.writeText(order.name);
+      setOrderNumberCopied(true);
       toast.success('Order number copied to clipboard');
+      setTimeout(() => setOrderNumberCopied(false), 2000);
     } catch (error) {
       toast.error('Failed to copy order number');
     }
@@ -1178,11 +1338,11 @@ Could you kindly confirm if you'll be available to receive it during that time? 
   return (
     <>
     <div 
-      className={`bg-white rounded-lg border ${isOrderCancelled ? 'border-red-200' : 'border-gray-200'} hover:border-gray-300 transition-all duration-200 ${
-        isRushOrder ? 'border-l-4 border-l-red-500' : 
-        isHandmadeOrder ? 'border-l-4 border-l-blue-500' : 
-        ''
-      }`}
+      className={`bg-white rounded-lg border ${isOrderCancelled ? 'border-red-200' : 'border-gray-200'} transition-all duration-200 ${
+        isRushOrder ? 'border-l-4 border-l-red-500 hover:border-l-red-500' : 
+        isHandmadeOrder ? 'border-l-4 border-l-blue-500 hover:border-l-blue-500' : 
+        'hover:border-gray-300'
+      } ${isNoReplyCancelled ? 'border-2 border-red-400 bg-red-50' : ''} ${isConfirmedFromOnHold ? 'ring-2 ring-amber-400 bg-amber-50' : ''}`}
       title={isRushOrder ? 'Rush Order (3 days)' : isHandmadeOrder ? 'Handmade Timeline (7 days)' : undefined}
     >
       <div className="p-4">
@@ -1206,10 +1366,14 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                 </span>
                 <span
                   onClick={handleCopyOrderNumber}
-                  className="text-[10px] text-gray-500 hover:text-gray-700 transition-colors cursor-pointer truncate leading-tight mt-0.5"
-                  title="Click to copy order number"
+                  className={`text-[10px] transition-all duration-200 cursor-pointer truncate leading-tight mt-0.5 ${
+                    orderNumberCopied 
+                      ? 'text-green-600 font-semibold bg-green-50 px-1 rounded' 
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                  title={orderNumberCopied ? "Copied!" : "Click to copy order number"}
                 >
-                  {order.name}
+                  {order.name} {orderNumberCopied && <ClipboardDocumentIcon className="w-3 h-3 text-green-600 inline-block ml-1" />}
                 </span>
               </div>
             </div>
@@ -1264,6 +1428,16 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                               onClick={() => handleStatusChange('order-ready')}
                             >
                               Order Ready
+                            </button>
+                          )}
+                        </Menu.Item>
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              className={`rounded-md w-full text-center py-1.5 text-sm font-medium ${getStatusColor('on_hold')}`}
+                              onClick={() => handleStatusChange('on_hold')}
+                            >
+                              On Hold
                             </button>
                           )}
                         </Menu.Item>
@@ -1479,7 +1653,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                           onClick={(e) => e.stopPropagation()}
                           title="Phone actions"
                         >
-                          <PhoneIcon className="w-5 h-5 text-green-500 flex-shrink-0 hover:text-green-600 transition-colors" />
+                          <PhoneIcon className="w-5 h-5 text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors" />
                         </Menu.Button>
                     {open && (
                       <Menu.Items
@@ -1538,7 +1712,17 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                     </>
                   )}
                 </Menu>
-                <span className="truncate">{order.customer.phone}</span>
+                <span 
+                  onClick={handlePhoneNumberClick}
+                  className={`truncate transition-all duration-200 cursor-pointer ${
+                    phoneNumberCopied 
+                      ? 'text-green-600 font-semibold bg-green-50 px-1 rounded' 
+                      : 'text-gray-600 hover:text-gray-800'
+                  }`}
+                  title={phoneNumberCopied ? "Copied!" : "Click to copy phone number"}
+                >
+                  {order.customer.phone} {phoneNumberCopied && <ClipboardDocumentIcon className="w-3 h-3 text-green-600 inline-block ml-1" />}
+                </span>
               </div>
             )}
             {order.shipping_address && (
@@ -1551,12 +1735,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                   className="p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors"
                   title={canEditLocation ? 'Edit Location' : 'View Address'}
                 >
-                  <MapPinIcon className={`w-5 h-5 ${
-                    locationIds.cityId && locationIds.neighborhoodId && locationIds.subZoneId &&
-                    locationIds.cityId !== "null" && locationIds.neighborhoodId !== "null" && locationIds.subZoneId !== "null"
-                      ? 'text-green-500 hover:text-green-600' 
-                      : 'text-red-500 hover:text-red-600'
-                  } transition-colors`} />
+                  <MapPinIcon className="w-5 h-5 text-gray-400 hover:text-gray-500 transition-colors" />
                 </button>
               {locationIds.cityId && locationIds.cityId !== "null" ? (
                 <div className="flex items-center gap-2 w-full">
@@ -1598,14 +1777,17 @@ Could you kindly confirm if you'll be available to receive it during that time? 
             <div className="flex flex-col gap-2 flex-shrink-0">
               <div className="flex items-center gap-2 text-xs text-gray-600">
                 <Menu as="div" className="relative inline-block text-left">
-                  {({ open }) => (
+                  {({ open }) => {
+                    const shippingIcon = getShippingIcon();
+                    const IconComponent = shippingIcon.icon;
+                    return (
                     <>
                       <Menu.Button
                         onClick={(e) => e.stopPropagation()}
-                        className="p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors"
+                        className={`p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors ${shippingIcon.containerClassName}`}
                         title="Shipping Method"
                       >
-                        <TruckIcon className="w-5 h-5 text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors" />
+                        <IconComponent className={shippingIcon.className} />
                       </Menu.Button>
                       {open && (
                         <Menu.Items
@@ -1648,9 +1830,20 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                         </Menu.Items>
                       )}
                     </>
-                  )}
+                    );
+                  }}
                 </Menu>
-                <span className="truncate font-medium">{getShippingMethod()}</span>
+                <span className={`truncate font-medium ${
+                  getShippingMethod() === 'Other Company' 
+                    ? 'text-green-700 font-semibold' 
+                    : getShippingMethod() === 'Scooter'
+                    ? 'text-orange-600'
+                    : getShippingMethod() === 'Pickup'
+                    ? 'text-purple-600'
+                    : 'text-gray-600'
+                }`}>
+                  {getShippingMethod()}
+                </span>
               </div>
               <div className="flex items-center gap-2 text-xs text-gray-600">
                 <button
@@ -1680,86 +1873,165 @@ Could you kindly confirm if you'll be available to receive it during that time? 
           </div>
         )}
 
-        {/* Timeline or Shipping Status - only show if not cancelled and not paid */}
-        {!isOrderCancelled && !trimmedTags.includes('paid') && (
-          <>
-            {trimmedTags.includes('shipped') ? (
-              <div className="mb-4">
-                <ShippingStatus 
-                  status={order.packageENStatus || 'Pending pickup'} 
-                  orderTags={trimmedTags}
-                  fulfillments={order.fulfillments}
-                />
-              </div>
-            ) : !trimmedTags.includes('fulfilled') && (
-              <div className="mb-4">
-                <OrderTimeline
-                  createdAt={startDate.toISOString()}
-                  dueDate={dueDate.toISOString()}
-                  isCustom={!!dueDateTag}
-                  orderName={order.name}
-                  onUpdateStartDate={handleStartDateSelect}
-                  onUpdateDueDate={handleDateSelect}
-                />
-              </div>
-            )}
-          </>
+        {/* Shipping Status - only show if shipped */}
+        {!isOrderCancelled && !trimmedTags.includes('paid') && trimmedTags.includes('shipped') && (
+          <div className="mb-4">
+            <ShippingStatus 
+              status={order.packageENStatus || 'Pending pickup'} 
+              orderTags={trimmedTags}
+              fulfillments={order.fulfillments}
+            />
+          </div>
         )}
 
-        {/* Condensed Items List */}
-        <div className="mb-3">
-          <div className="text-xs text-gray-500 mb-1">{regularLineItems.length} items</div>
-          <div className="space-y-0.5">
-            {(itemsExpanded ? regularLineItems : regularLineItems.slice(0, 2)).map((item: any, index: number) => (
-              <div key={index} className="flex justify-between text-xs">
-                <span className={`truncate ${isOrderCancelled ? 'text-gray-500 line-through' : 'text-gray-700'}`}>
+        {/* Priority 1: Items Section - Most Prominent */}
+        <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-gray-900">Items</h3>
+            <span className="text-xs text-gray-500">{regularLineItems.length} {regularLineItems.length === 1 ? 'item' : 'items'}</span>
+          </div>
+          <div className="space-y-2">
+            {(itemsExpanded ? regularLineItems : regularLineItems.slice(0, 3)).map((item: any, index: number) => (
+              <div key={index} className="flex items-start justify-between gap-2">
+                <span className={`text-sm flex-1 ${isOrderCancelled ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
                   {item.title}
-                  {item.variant_title && ` (${item.variant_title})`}
+                  {item.variant_title && (
+                    <span className="text-gray-600 ml-1">({item.variant_title})</span>
+                  )}
                 </span>
-                <span className="text-gray-500 ml-2 flex-shrink-0">×{item.quantity}</span>
+                <span className={`px-2 py-0.5 rounded-md text-xs font-semibold flex-shrink-0 ${
+                  isOrderCancelled 
+                    ? 'bg-gray-200 text-gray-500' 
+                    : 'bg-blue-100 text-blue-700'
+                }`}>
+                  ×{item.quantity}
+                </span>
               </div>
             ))}
-            {regularLineItems.length > 2 && (
+            {regularLineItems.length > 3 && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   setItemsExpanded(!itemsExpanded);
                 }}
-                className="text-xs text-blue-600 hover:text-blue-700 mt-1"
+                className="text-xs text-blue-600 hover:text-blue-700 font-medium w-full text-center py-1"
               >
-                {itemsExpanded ? 'Show less' : `+${regularLineItems.length - 2} more items`}
+                {itemsExpanded ? 'Show less' : `+${regularLineItems.length - 3} more items`}
               </button>
             )}
           </div>
           
           {/* Addon Line Items (Making Time Options) */}
           {addonLineItems.length > 0 && (
-            <div className="mt-3 pt-3 border-t border-gray-200">
-              <div className="text-xs text-gray-500 mb-1">Making Time:</div>
-              <div className="space-y-1">
+            <div className="mt-3 pt-3 border-t border-gray-300">
+              <div className="text-xs text-gray-600 font-medium mb-1.5">Making Time:</div>
+              <div className="space-y-1.5">
                 {addonLineItems.map((item: any, index: number) => (
-                  <div key={index} className="flex justify-between text-sm">
-                    <div className="flex gap-2 items-center">
-                      <span className={`${isOrderCancelled ? 'text-gray-500 line-through' : 'text-blue-700 font-medium'}`}>
-                        {item.title}
-                        {item.properties && item.properties.length > 0 && (
-                          <span className="text-gray-600 ml-2">
-                            {item.properties.map((prop: any, propIndex: number) => (
-                              <span key={propIndex}>
-                                {prop.name}: {prop.value}
-                                {propIndex < item.properties.length - 1 && ', '}
-                              </span>
-                            ))}
-                          </span>
-                        )}
-                      </span>
-                    </div>
+                  <div key={index} className="text-sm">
+                    <span className={`${isOrderCancelled ? 'text-gray-500 line-through' : 'text-blue-700 font-medium'}`}>
+                      {item.title}
+                      {item.properties && item.properties.length > 0 && (
+                        <span className="text-gray-600 ml-2 font-normal">
+                          {item.properties.map((prop: any, propIndex: number) => (
+                            <span key={propIndex}>
+                              {prop.name}: {prop.value}
+                              {propIndex < item.properties.length - 1 && ', '}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                    </span>
                   </div>
                 ))}
               </div>
             </div>
           )}
         </div>
+
+        {/* Priority 2: Compact Info Row - Days Left + Dates */}
+        {!isOrderCancelled && !trimmedTags.includes('paid') && !trimmedTags.includes('fulfilled') && (
+          <div className="mb-3 flex items-center justify-center gap-2 whitespace-nowrap overflow-hidden">
+            {/* Days Left Badge */}
+            <div className={`flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-md border min-w-[60px] ${getDaysLeftBadgeStyle()}`}>
+              <ClockIcon className="w-4 h-4" />
+              <span className="text-[10px] font-medium">{getDaysLeftText()}</span>
+            </div>
+            
+            {/* Order Ready Days - Only show if order_ready_date tag exists and order is NOT on_hold */}
+            {daysInOrderReady !== null && currentStatus !== 'on_hold' && (
+              <>
+                {/* Separator */}
+                <div className="h-3 w-px bg-gray-300" />
+                <div className="flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-md border min-w-[60px] bg-orange-50 border-orange-200">
+                  <SparklesIcon className="w-4 h-4 text-orange-600" />
+                  <span className="text-[10px] font-medium text-orange-700">{daysInOrderReady === 0 ? 'Today' : `${daysInOrderReady}d`}</span>
+                </div>
+              </>
+            )}
+            
+            {/* On Hold Days - Only show if moved_to_on_hold tag exists */}
+            {daysInOnHold !== null && (
+              <>
+                {/* Separator */}
+                <div className="h-3 w-px bg-gray-300" />
+                <div className="flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-md border min-w-[60px] bg-amber-50 border-amber-200">
+                  <PauseCircleIcon className="w-4 h-4 text-amber-600" />
+                  <span className="text-[10px] font-medium text-amber-700">{daysInOnHold}d</span>
+                </div>
+              </>
+            )}
+            
+            {/* Separator - Only show if we have date boxes displayed */}
+            {((daysInOrderReady !== null && currentStatus !== 'on_hold') || daysInOnHold !== null) && (
+              <div className="h-3 w-px bg-gray-300" />
+            )}
+            
+            {/* Start Date - Clickable */}
+            <DatePicker
+              selected={startDate}
+              onChange={(date: Date) => handleStartDateSelect(date)}
+              customInput={
+                <button 
+                  className="text-gray-600 hover:text-gray-900 hover:bg-gray-50 transition-colors flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-md border border-gray-200 min-w-[60px]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <CalendarIcon className="w-4 h-4 text-gray-400" />
+                  <span className="text-[10px] font-medium">{format(startDate, 'MMM d')}</span>
+                </button>
+              }
+              minDate={new Date(0)}
+              dateFormat="MMM d"
+              popperPlacement="bottom-start"
+              popperClassName="z-50"
+            />
+            
+            {/* Separator */}
+            <div className="h-3 w-px bg-gray-300" />
+            
+            {/* Due Date - Clickable */}
+            <DatePicker
+              selected={dueDate}
+              onChange={(date: Date) => handleDateSelect(date)}
+              customInput={
+                <button 
+                  className={`transition-colors flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-md border min-w-[60px] ${
+                    dueDateTag 
+                      ? 'text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200 font-medium' 
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50 border-gray-200'
+                  }`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <CalendarIcon className={`w-4 h-4 ${dueDateTag ? 'text-red-500' : 'text-gray-400'}`} />
+                  <span className="text-[10px] font-medium">{format(dueDate, 'MMM d')}</span>
+                </button>
+              }
+              minDate={new Date()}
+              dateFormat="MMM d"
+              popperPlacement="bottom-start"
+              popperClassName="z-50"
+            />
+          </div>
+        )}
       </div>
     </div>
 

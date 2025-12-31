@@ -2,6 +2,7 @@ import { CronJob } from 'cron';
 import { logger } from '../utils/logger';
 import { statusQueue, shippingQueue } from '../jobs/queue';
 import { OrderConfirmationService } from './orderConfirmation.service';
+import { runOrderStatusAutoMove } from '../jobs/orderStatusAutoMove';
 
 export class SchedulerService {
   private static instance: SchedulerService;
@@ -29,6 +30,9 @@ export class SchedulerService {
 
     // Check pending orders every 30 minutes
     this.addJob('*/30 * * * *', this.checkPendingOrders);
+
+    // Auto-move orders: order_ready → on_hold → cancelled (runs every 6 hours)
+    this.addJob('0 */6 * * *', this.runOrderStatusAutoMove);
 
     // Daily cleanup at midnight
     this.addJob('0 0 * * *', this.dailyCleanup);
@@ -71,6 +75,16 @@ export class SchedulerService {
       logger.info('Completed pending orders check');
     } catch (error) {
       logger.error('Error checking pending orders:', error);
+    }
+  }
+
+  private async runOrderStatusAutoMove(): Promise<void> {
+    logger.info('Starting order status auto-move job');
+    try {
+      await runOrderStatusAutoMove();
+      logger.info('Completed order status auto-move job');
+    } catch (error) {
+      logger.error('Error in order status auto-move job:', error);
     }
   }
 
