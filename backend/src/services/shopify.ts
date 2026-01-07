@@ -522,7 +522,7 @@ export class ShopifyService {
         hasNextPage = pageInfo.hasNextPage;
         if (hasNextPage && edges.length > 0) {
           cursor = edges[edges.length - 1].cursor;
-          logger.info(`[getOrders GraphQL] Page ${pageCount}: Continuing to next page. Cursor: ${cursor.substring(0, 30)}...`);
+          logger.info(`[getOrders GraphQL] Page ${pageCount}: Continuing to next page. Cursor: ${cursor ? cursor.substring(0, 30) : 'null'}...`);
         } else {
           logger.info(`[getOrders GraphQL] Page ${pageCount}: No more pages. hasNextPage: ${pageInfo.hasNextPage}`);
         }

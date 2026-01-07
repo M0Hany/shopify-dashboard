@@ -98,7 +98,7 @@ export class ProfitEngineService {
       const tags = Array.isArray(order.tags)
         ? order.tags
         : typeof order.tags === 'string'
-          ? order.tags.split(',').map(t => t.trim())
+          ? order.tags.split(',').map((t: string) => t.trim())
           : [];
 
       // Check if order is paid - ONLY use paid tag, no fallback
@@ -142,7 +142,7 @@ export class ProfitEngineService {
       const tags = Array.isArray(order.tags)
         ? order.tags
         : typeof order.tags === 'string'
-          ? order.tags.split(',').map(t => t.trim())
+          ? order.tags.split(',').map((t: string) => t.trim())
           : [];
 
       // Check if order is cancelled
@@ -254,7 +254,7 @@ export class ProfitEngineService {
       const tags = Array.isArray(order.tags)
         ? order.tags
         : typeof order.tags === 'string'
-          ? order.tags.split(',').map(t => t.trim())
+          ? order.tags.split(',').map((t: string) => t.trim())
           : [];
 
       // Check for scooter shipping method tag
@@ -324,7 +324,7 @@ export class ProfitEngineService {
       const tags = Array.isArray(order.tags)
         ? order.tags
         : typeof order.tags === 'string'
-          ? order.tags.split(',').map(t => t.trim())
+          ? order.tags.split(',').map((t: string) => t.trim())
           : [];
 
       // Check for shipping company cost tag
@@ -385,7 +385,7 @@ export class ProfitEngineService {
       const tags = Array.isArray(order.tags)
         ? order.tags
         : typeof order.tags === 'string'
-          ? order.tags.split(',').map(t => t.trim())
+          ? order.tags.split(',').map((t: string) => t.trim())
           : [];
 
       // Check for shipping company cost tag
@@ -427,7 +427,7 @@ export class ProfitEngineService {
       const tags = Array.isArray(order.tags)
         ? order.tags
         : typeof order.tags === 'string'
-          ? order.tags.split(',').map(t => t.trim())
+          ? order.tags.split(',').map((t: string) => t.trim())
           : [];
 
       // Get scooter shipping cost

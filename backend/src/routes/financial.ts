@@ -138,7 +138,7 @@ router.get('/shipping', async (req: Request, res: Response) => {
         const tags = Array.isArray(order.tags)
           ? order.tags
           : typeof order.tags === 'string'
-            ? order.tags.split(',').map(t => t.trim())
+            ? order.tags.split(',').map((t: string) => t.trim())
             : [];
 
         // Check for shipping_company_cost tag
@@ -247,7 +247,7 @@ router.get('/shipping', async (req: Request, res: Response) => {
         const tags = Array.isArray(order.tags)
           ? order.tags
           : typeof order.tags === 'string'
-            ? order.tags.split(',').map(t => t.trim())
+            ? order.tags.split(',').map((t: string) => t.trim())
             : [];
 
         // Check for shipping_company_cost tag
