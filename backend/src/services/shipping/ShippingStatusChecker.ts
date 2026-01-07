@@ -163,68 +163,6 @@ export class ShippingStatusChecker {
         }
       }));
 
-      // Process other shipped orders (non-ShipBlu) - check Mylerz shipping status
-      const nonShipBluShippedOrders = shippedOrders.filter(order => {
-        const tags = Array.isArray(order.tags) ? 
-          order.tags.map(t => t.trim().toLowerCase()) : 
-          typeof order.tags === 'string' ? 
-            order.tags.split(',').map(t => t.trim().toLowerCase()) : 
-            [];
-        return !tags.includes('sent to shipblu');
-      });
-
-      logger.info(`Found ${nonShipBluShippedOrders.length} non-ShipBlu shipped orders to check`);
-
-      // Process each non-ShipBlu shipped order
-      await Promise.all(nonShipBluShippedOrders.map(async (order) => {
-        try {
-          // Get barcode from order tags
-          const tags = Array.isArray(order.tags) ? 
-            order.tags : 
-            typeof order.tags === 'string' ? 
-              order.tags.split(',').map(t => t.trim()) : 
-              [];
-          const barcodeTag = tags.find(tag => tag.startsWith('shipping_barcode:'));
-          const barcode = barcodeTag ? barcodeTag.split(':')[1] : null;
-
-          if (!barcode) {
-            logger.warn('No barcode found for order', { orderId: order.id });
-            return;
-          }
-
-          // Find matching shipping status
-          const shippingStatus = shippingStatuses.find(
-            (status: { Barcode: string; PackageENStatus: string }) => status.Barcode === barcode
-          );
-
-          if (shippingStatus) {
-            if (shippingStatus.PackageENStatus === this.RETURN_STATUS) {
-              // Remove shipped tag and add cancelled tag
-              const newTags = tags.filter(tag => 
-                tag !== 'shipped' && !tag.startsWith('shipping_date:')
-              );
-              
-              // Add cancelled tag
-              newTags.push('cancelled');
-
-              // Update order tags
-              await this.shopifyService.updateOrderTags(order.id.toString(), newTags);
-              
-              logger.info('Updated order status to cancelled due to return', {
-                orderId: order.id,
-                barcode,
-                previousStatus: 'shipped',
-                newStatus: 'cancelled'
-              });
-            }
-          }
-        } catch (error) {
-          logger.error('Error processing shipped order', {
-            error,
-            orderId: order.id
-          });
-        }
-      }));
 
       // Continue with existing ready to ship orders check
       const readyToShipOrders = orders.filter(order => {

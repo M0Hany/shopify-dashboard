@@ -63,6 +63,8 @@ export class DiscordNotificationService {
       'shipped': 'Shipped',
       'fulfilled': 'Fulfilled',
       'cancelled': 'Cancelled',
+      'on_hold': 'On Hold',
+      'on-hold': 'On Hold',
       'paid': 'Paid'
     };
 
@@ -73,7 +75,7 @@ export class DiscordNotificationService {
    * Check if status change should trigger a notification
    */
   private shouldNotify(previousStatus: string, newStatus: string): boolean {
-    const trackedStatuses = ['pending', 'order_ready', 'order-ready', 'customer_confirmed', 'confirmed', 'ready_to_ship', 'ready-to-ship'];
+    const trackedStatuses = ['pending', 'order_ready', 'order-ready', 'customer_confirmed', 'confirmed', 'ready_to_ship', 'ready-to-ship', 'on_hold', 'on-hold', 'cancelled'];
     
     const prev = previousStatus.toLowerCase().trim();
     const next = newStatus.toLowerCase().trim();
@@ -109,12 +111,16 @@ export class DiscordNotificationService {
         if (statusLower === 'order_ready' || statusLower === 'order-ready') return 0xFFA500; // Orange
         if (statusLower === 'customer_confirmed' || statusLower === 'confirmed') return 0x00FF00; // Green
         if (statusLower === 'ready_to_ship' || statusLower === 'ready-to-ship') return 0x0099FF; // Blue
+        if (statusLower === 'on_hold' || statusLower === 'on-hold') return 0xFFFF00; // Yellow
+        if (statusLower === 'cancelled') return 0xFF0000; // Red
         return 0x808080; // Gray
       };
 
       // Customize description based on update source
       const description = updatedBy && updatedBy.toLowerCase().includes('automated')
-        ? `Order status updated via automated WhatsApp confirmation`
+        ? updatedBy.toLowerCase().includes('system')
+          ? `Order status automatically updated by system`
+          : `Order status updated via automated WhatsApp confirmation`
         : `Order status has been changed`;
 
       const embed = {
@@ -191,20 +197,22 @@ export class DiscordNotificationService {
       return;
     }
 
-    try {
-      const prevDisplay = this.getStatusDisplayName(previousStatus);
-      const newDisplay = this.getStatusDisplayName(newStatus);
+      try {
+        const prevDisplay = this.getStatusDisplayName(previousStatus);
+        const newDisplay = this.getStatusDisplayName(newStatus);
 
-      // Determine color based on status
-      const getStatusColor = (status: string): number => {
-        const statusLower = status.toLowerCase().trim();
-        if (statusLower === 'order_ready' || statusLower === 'order-ready') return 0xFFA500; // Orange
-        if (statusLower === 'customer_confirmed' || statusLower === 'confirmed') return 0x00FF00; // Green
-        if (statusLower === 'ready_to_ship' || statusLower === 'ready-to-ship') return 0x0099FF; // Blue
-        return 0x808080; // Gray
-      };
+        // Determine color based on status
+        const getStatusColor = (status: string): number => {
+          const statusLower = status.toLowerCase().trim();
+          if (statusLower === 'order_ready' || statusLower === 'order-ready') return 0xFFA500; // Orange
+          if (statusLower === 'customer_confirmed' || statusLower === 'confirmed') return 0x00FF00; // Green
+          if (statusLower === 'ready_to_ship' || statusLower === 'ready-to-ship') return 0x0099FF; // Blue
+          if (statusLower === 'on_hold' || statusLower === 'on-hold') return 0xFFFF00; // Yellow
+          if (statusLower === 'cancelled') return 0xFF0000; // Red
+          return 0x808080; // Gray
+        };
 
-      // Format order names list (show first 10, then "... and X more")
+        // Format order names list (show first 10, then "... and X more")
       const maxDisplay = 10;
       const displayNames = orderNames.slice(0, maxDisplay);
       const remaining = orderNames.length - maxDisplay;

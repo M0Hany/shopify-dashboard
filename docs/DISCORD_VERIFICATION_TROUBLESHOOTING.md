@@ -130,3 +130,10 @@ If verification still fails:
 4. Try temporarily disabling signature verification (development only) to test if endpoint works
 5. Contact Discord support if all else fails
 
+
+
+
+
+
+
+

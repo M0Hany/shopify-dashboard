@@ -3,7 +3,8 @@ import multer from 'multer';
 import xlsx from 'xlsx';
 import { ShopifyService } from '../services/shopify';
 import { logger } from '../utils/logger';
-import { addLocationTags } from '../services/shopify';
+// REMOVED: Mylerz-specific location tags import (no longer used)
+// import { addLocationTags } from '../services/shopify';
 import { shopifyService } from '../services/shopify';
 import { OrderConfirmationService } from '../services/orderConfirmation.service';
 import { WhatsAppService } from '../services/whatsapp';
@@ -25,12 +26,20 @@ router.get('/', async (req: Request, res: Response) => {
       'Cache-Control': 'no-store'
     });
 
+    // Fetch all orders (no limit) to ensure all orders are available in the frontend
+    // The frontend will handle filtering and pagination if needed
+    logger.info(`[GET /api/orders] Fetching orders with params:`, {
+      status: req.query.status,
+      created_at_min: req.query.created_at_min,
+      created_at_max: req.query.created_at_max,
+    });
     const orders = await shopifyServiceInstance.getOrders({
-      limit: 250,
       status: req.query.status as string,
       created_at_min: req.query.created_at_min as string,
       created_at_max: req.query.created_at_max as string,
     });
+    logger.info(`[GET /api/orders] Successfully fetched ${orders.length} orders from Shopify`);
+    console.log(`[GET /api/orders] Total orders returned: ${orders.length}`);
     res.json(orders);
   } catch (error) {
     logger.error('Error fetching orders:', error);
@@ -421,21 +430,8 @@ router.post('/bulk-add-address-tags', async (req, res) => {
           throw new Error('Missing required order data');
         }
 
-        // Extract location IDs from existing tags
-        const cityIdMatch = order.tags?.find((tag: string) => tag.startsWith('mylerz_city_id:'))?.split(':')[1];
-        const neighborhoodIdMatch = order.tags?.find((tag: string) => tag.startsWith('mylerz_neighborhood_id:'))?.split(':')[1];
-        const subZoneIdMatch = order.tags?.find((tag: string) => tag.startsWith('mylerz_subzone_id:'))?.split(':')[1];
-
-        if (!cityIdMatch || !neighborhoodIdMatch || !subZoneIdMatch) {
-          throw new Error('Missing location IDs in tags');
-        }
-
-        await addLocationTags(
-          Number(order.id),
-          cityIdMatch,
-          neighborhoodIdMatch,
-          subZoneIdMatch
-        );
+        // REMOVED: Mylerz-specific location tag extraction and validation
+        // Location tags are no longer used (Mylerz removed)
 
         results.successful.push(order.id);
       } catch (error) {
@@ -487,23 +483,246 @@ router.put('/:id/tags', async (req: Request, res: Response) => {
   }
 });
 
-// Add location tags
-router.post('/:orderId/location-tags', async (req, res) => {
+// Bulk import shipping company costs
+router.post('/bulk-import-shipping-costs', async (req: Request, res: Response) => {
   try {
-    const { orderId } = req.params;
-    const { cityId, neighborhoodId, subZoneId } = req.body;
+    const { entries, transactionDate, orderIdMappings } = req.body;
 
-    if (!cityId || !neighborhoodId || !subZoneId) {
-      res.status(400).json({ error: 'City ID, Neighborhood ID, and Sub-zone ID are required' });
-      return;
+    if (!entries || !Array.isArray(entries) || entries.length === 0) {
+      return res.status(400).json({ error: 'Entries array is required' });
     }
 
-    await addLocationTags(Number(orderId), cityId, neighborhoodId, subZoneId);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to add location tags' });
+    if (!transactionDate) {
+      return res.status(400).json({ error: 'Transaction date is required' });
+    }
+
+    // orderIdMappings is optional: { orderNumber: orderId }
+    const orderIdMap = orderIdMappings || {};
+
+    // Get all orders to match by order number (no limit to fetch all orders)
+    logger.info(`Bulk import: Fetching all orders from Shopify...`);
+    const allOrders = await shopifyServiceInstance.getOrders({});
+    logger.info(`Bulk import: Fetched ${allOrders.length} orders from Shopify`);
+    
+    const results = {
+      successful: [] as Array<{ orderId: number; orderName: string; cost: number }>,
+      failed: [] as Array<{ orderNumber: string; reason: string }>,
+    };
+
+    // Process each entry
+    for (const entry of entries) {
+      const { orderNumber, cost } = entry;
+      
+      if (!orderNumber || cost === undefined || cost === null) {
+        results.failed.push({
+          orderNumber: orderNumber || 'Unknown',
+          reason: 'Missing order number or cost',
+        });
+        continue;
+      }
+
+      // Check if we have a specific order ID mapping for this order number
+      let order;
+      if (orderIdMap[orderNumber]) {
+        // Use the specified order ID from the mapping
+        order = allOrders.find(o => o.id === orderIdMap[orderNumber]);
+        if (!order) {
+          results.failed.push({
+            orderNumber,
+            reason: `Order ID ${orderIdMap[orderNumber]} not found`,
+          });
+          continue;
+        }
+      } else {
+        // Extract numeric part from order number (e.g., "#1120" -> "1120")
+        const orderNum = orderNumber.replace(/[^0-9]/g, '');
+        
+        // Find order by name (e.g., "#1120")
+        order = allOrders.find(o => {
+          const orderNameNum = o.name.replace(/[^0-9]/g, '');
+          return orderNameNum === orderNum;
+        });
+
+        if (!order) {
+          results.failed.push({
+            orderNumber,
+            reason: 'Order not found',
+          });
+          continue;
+        }
+      }
+
+      try {
+        // Get existing tags
+        const existingTags = Array.isArray(order.tags)
+          ? order.tags.map((t: string) => t.trim())
+          : typeof order.tags === 'string'
+            ? order.tags.split(',').map((t: string) => t.trim())
+            : [];
+
+        // Remove existing shipping_company_cost, shipping_company_cost_date, paid, and paid_date tags
+        // This ensures we overwrite any existing values with the new ones from bulk import
+        const filteredTags = existingTags.filter(
+          (tag: string) => {
+            const trimmedTag = tag.trim().toLowerCase();
+            return (
+              !trimmedTag.startsWith('shipping_company_cost:') &&
+              !trimmedTag.startsWith('shipping_company_cost_date:') &&
+              trimmedTag !== 'paid' &&
+              !trimmedTag.startsWith('paid_date:')
+            );
+          }
+        );
+
+        // Calculate cost with 14% (multiply by 1.14)
+        const costWithTax = parseFloat(cost) * 1.14;
+        const formattedCost = costWithTax.toFixed(2);
+
+        // Add new tags (overwriting any previous values)
+        filteredTags.push(`shipping_company_cost:${formattedCost}`);
+        filteredTags.push(`shipping_company_cost_date:${transactionDate}`);
+        filteredTags.push('paid');
+        filteredTags.push(`paid_date:${transactionDate}`);
+
+        // Update order tags
+        await shopifyServiceInstance.updateOrderTags(order.id.toString(), filteredTags);
+
+        results.successful.push({
+          orderId: order.id,
+          orderName: order.name,
+          cost: parseFloat(formattedCost),
+        });
+
+        logger.info('Updated shipping company cost for order', {
+          orderId: order.id,
+          orderName: order.name,
+          originalCost: cost,
+          costWithTax: formattedCost,
+          transactionDate,
+        });
+      } catch (error: any) {
+        logger.error('Error updating order tags', {
+          orderId: order.id,
+          orderName: order.name,
+          error: error.message,
+        });
+        results.failed.push({
+          orderNumber,
+          reason: error.message || 'Failed to update order tags',
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      results,
+      summary: {
+        total: entries.length,
+        successful: results.successful.length,
+        failed: results.failed.length,
+      },
+    });
+  } catch (error: any) {
+    logger.error('Error bulk importing shipping costs:', error);
+    res.status(500).json({ error: error.message || 'Failed to bulk import shipping costs' });
   }
 });
+
+// Bulk revert shipping company costs (remove tags)
+router.post('/bulk-revert-shipping-costs', async (req: Request, res: Response) => {
+  try {
+    const { orderIds } = req.body;
+
+    if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
+      return res.status(400).json({ error: 'Order IDs array is required' });
+    }
+
+    // Get all orders to match by order ID
+    logger.info(`Bulk revert: Fetching orders from Shopify...`);
+    const allOrders = await shopifyServiceInstance.getOrders({});
+    logger.info(`Bulk revert: Fetched ${allOrders.length} orders from Shopify`);
+    
+    const results = {
+      successful: [] as Array<{ orderId: number; orderName: string }>,
+      failed: [] as Array<{ orderId: number; reason: string }>,
+    };
+
+    // Process each order ID
+    for (const orderId of orderIds) {
+      const order = allOrders.find(o => o.id === orderId);
+      
+      if (!order) {
+        results.failed.push({
+          orderId,
+          reason: 'Order not found',
+        });
+        continue;
+      }
+
+      try {
+        // Get existing tags
+        const existingTags = Array.isArray(order.tags)
+          ? order.tags.map((t: string) => t.trim())
+          : typeof order.tags === 'string'
+            ? order.tags.split(',').map((t: string) => t.trim())
+            : [];
+
+        // Remove shipping_company_cost, shipping_company_cost_date, paid, and paid_date tags
+        const filteredTags = existingTags.filter(
+          (tag: string) => {
+            const trimmedTag = tag.trim().toLowerCase();
+            return (
+              !trimmedTag.startsWith('shipping_company_cost:') &&
+              !trimmedTag.startsWith('shipping_company_cost_date:') &&
+              trimmedTag !== 'paid' &&
+              !trimmedTag.startsWith('paid_date:')
+            );
+          }
+        );
+
+        // Update order tags (removing the shipping cost tags)
+        await shopifyServiceInstance.updateOrderTags(order.id.toString(), filteredTags);
+
+        results.successful.push({
+          orderId: order.id,
+          orderName: order.name,
+        });
+
+        logger.info('Reverted shipping company cost tags for order', {
+          orderId: order.id,
+          orderName: order.name,
+        });
+      } catch (error: any) {
+        logger.error('Error reverting order tags', {
+          orderId: order.id,
+          orderName: order.name,
+          error: error.message,
+        });
+        results.failed.push({
+          orderId,
+          reason: error.message || 'Failed to revert order tags',
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      results,
+      summary: {
+        total: orderIds.length,
+        successful: results.successful.length,
+        failed: results.failed.length,
+      },
+    });
+  } catch (error: any) {
+    logger.error('Error bulk reverting shipping costs:', error);
+    res.status(500).json({ error: error.message || 'Failed to bulk revert shipping costs' });
+  }
+});
+
+// REMOVED: Mylerz-specific location tags endpoint (no longer used)
+// Add location tags (DEPRECATED - Mylerz removed)
+// router.post('/:orderId/location-tags', ...)
 
 // Webhook for new orders
 router.post('/webhook/order-created', async (req: Request, res: Response) => {

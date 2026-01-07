@@ -162,3 +162,10 @@ When switching between local testing and production:
 
 **Note**: You can have different Discord bot applications for development and production, or use the same one and just change the interaction endpoint URL.
 
+
+
+
+
+
+
+

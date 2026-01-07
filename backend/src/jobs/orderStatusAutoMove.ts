@@ -1,5 +1,6 @@
 import { shopifyService } from '../services/shopify';
 import { logger } from '../utils/logger';
+import { discordNotificationService } from '../services/discordNotifications';
 
 /**
  * Extracts date from a tag like "order_ready_date:2025-01-01"
@@ -116,6 +117,36 @@ async function moveOrderReadyToOnHold(): Promise<void> {
           filtered.push(orderReadyDateTag);
         }
 
+        // Check if Discord notification was already sent (check for tag)
+        const discordNotifiedTag = tags.find(tag => tag.toLowerCase().startsWith('discord_notified_on_hold:'));
+        if (!discordNotifiedTag) {
+          // Get customer name for notification
+          const customerName = order.customer 
+            ? `${order.customer.first_name || ''} ${order.customer.last_name || ''}`.trim() || 'N/A'
+            : 'N/A';
+          
+          // Send Discord notification (non-blocking)
+          discordNotificationService.notifyOrderStatusChange({
+            orderId: order.id,
+            orderName: order.name,
+            customerName,
+            previousStatus: 'order_ready',
+            newStatus: 'on_hold',
+            updatedBy: 'Automated System (2 days without confirmation)'
+          }).catch(err => {
+            logger.error('Failed to send Discord notification for on_hold status', {
+              error: err,
+              orderId: order.id,
+              orderName: order.name
+            });
+          });
+
+          // Add tag to mark notification as sent
+          const todayStr = today.toISOString().split('T')[0];
+          filtered = filtered.filter(tag => !tag.toLowerCase().startsWith('discord_notified_on_hold:'));
+          filtered.push(`discord_notified_on_hold:${todayStr}`);
+        }
+
         await shopifyService.updateOrderTags(order.id.toString(), filtered);
         
         logger.info('Moved order to on_hold', {
@@ -226,6 +257,36 @@ async function moveOnHoldToCancelled(): Promise<void> {
         const onHoldReasonTag = tags.find(tag => tag.toLowerCase().startsWith('on_hold_reason:'));
         if (onHoldReasonTag && !filtered.some(tag => tag === onHoldReasonTag)) {
           filtered.push(onHoldReasonTag);
+        }
+
+        // Check if Discord notification was already sent (check for tag)
+        const discordNotifiedTag = tags.find(tag => tag.toLowerCase().startsWith('discord_notified_cancelled:'));
+        if (!discordNotifiedTag) {
+          // Get customer name for notification
+          const customerName = order.customer 
+            ? `${order.customer.first_name || ''} ${order.customer.last_name || ''}`.trim() || 'N/A'
+            : 'N/A';
+          
+          // Send Discord notification (non-blocking)
+          discordNotificationService.notifyOrderStatusChange({
+            orderId: order.id,
+            orderName: order.name,
+            customerName,
+            previousStatus: 'on_hold',
+            newStatus: 'cancelled',
+            updatedBy: 'Automated System (4 days total without confirmation)'
+          }).catch(err => {
+            logger.error('Failed to send Discord notification for cancelled status', {
+              error: err,
+              orderId: order.id,
+              orderName: order.name
+            });
+          });
+
+          // Add tag to mark notification as sent
+          const todayStr = today.toISOString().split('T')[0];
+          filtered = filtered.filter(tag => !tag.toLowerCase().startsWith('discord_notified_cancelled:'));
+          filtered.push(`discord_notified_cancelled:${todayStr}`);
         }
 
         await shopifyService.updateOrderTags(order.id.toString(), filtered);

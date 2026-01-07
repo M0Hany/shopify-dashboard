@@ -175,8 +175,9 @@ function formatPhone(phone: string): string {
   return formatted;
 }
 
-// Helper to map order to Mylerz API format
-function mapOrderToMylerz(order: any): any {
+// REMOVED: Mylerz-specific mapping function (no longer used)
+// Helper to map order to Mylerz API format (DEPRECATED - Mylerz removed)
+function mapOrderToMylerz_DEPRECATED(order: any): any {
   const tags = Array.isArray(order.tags)
     ? order.tags.map((t: string) => t.trim())
     : typeof order.tags === 'string'
@@ -312,71 +313,8 @@ function mapOrderToMylerz(order: any): any {
   };
 }
 
-// Bulk create shipments (with mapping)
-router.post('/create-shipments', async (req, res) => {
-  try {
-    const { orderIds } = req.body;
-    logger.info('Received create-shipments request', { orderIds });
-    if (!Array.isArray(orderIds) || orderIds.length === 0) {
-      logger.error('No orderIds provided to create-shipments');
-      return res.status(400).json({ error: 'No orderIds provided' });
-    }
-    // Fetch orders from Shopify (or your DB)
-    const orders = await Promise.all(orderIds.map(async (id: string | number) => {
-      const order = await shopifyService.getOrder(Number(id));
-      return order;
-    }));
-    logger.info('Fetched orders for create-shipments', { orders });
-    // Map orders to Mylerz format
-    const mappedOrders = orders.map(mapOrderToMylerz);
-    logger.info('Mapped orders for Mylerz API', { mappedOrders });
-    const result = await shippingService.createShipments(mappedOrders);
-    logger.info('Result from shippingService.createShipments', { result });
-
-    // Add shipping barcode tags to orders and update status
-    if (result.Value?.PackageList) {
-      await Promise.all(result.Value.PackageList.map(async (shipment: any) => {
-        // Find matching order by customer name and phone
-        const matchingOrder = orders.find(order => {
-          const orderCustomerName = `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim();
-          const orderPhone = formatPhone(order.shipping_address?.phone || '');
-          return orderCustomerName === shipment.CustomerName && orderPhone === shipment.MobileNo;
-        });
-
-        if (matchingOrder) {
-          // Get existing tags
-          const existingTags = Array.isArray(matchingOrder.tags) 
-            ? matchingOrder.tags.map((t: string) => t.trim())
-            : typeof matchingOrder.tags === 'string'
-              ? matchingOrder.tags.split(',').map((t: string) => t.trim())
-              : [];
-
-          // Add ready_to_ship tag and shipping barcode (only if customer has confirmed)
-          const newTags = [
-            ...existingTags.filter(tag => 
-              !tag.startsWith('shipping_barcode:') && 
-              tag !== 'customer_confirmed'
-            ),
-            'ready_to_ship',
-            `shipping_barcode:${shipment.BarCode}`
-          ];
-
-          // Update order tags
-          await shopifyService.updateOrderTags(matchingOrder.id.toString(), newTags);
-          logger.info('Updated order tags with shipping barcode and status', {
-            orderId: matchingOrder.id,
-            barcode: shipment.BarCode,
-            newTags
-          });
-        }
-      }));
-    }
-
-    res.json(result);
-  } catch (error) {
-    logger.error('Error creating shipments', { error });
-    res.status(500).json({ error: 'Failed to create shipments' });
-  }
-});
+// REMOVED: Mylerz-specific bulk shipment creation endpoint (no longer used)
+// Bulk create shipments (DEPRECATED - Mylerz removed)
+// router.post('/create-shipments', ...)
 
 export default router; 

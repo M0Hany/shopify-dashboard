@@ -5,6 +5,7 @@ import rateLimit from 'express-rate-limit';
 import cors from 'cors';
 import orders from './routes/orders';
 import financeRoutes from './routes/financeRoutes';
+import financialRoutes from './routes/financial';
 import shippingRoutes from './routes/shipping';
 import whatsappWebhook from './routes/whatsappWebhook';
 import discordInteractions from './routes/discordInteractions';
@@ -90,6 +91,7 @@ app.use((req, res, next) => {
 // Routes
 app.use('/api/orders', orders);
 app.use('/api/finance', financeRoutes);
+app.use('/api/financial', financialRoutes);
 app.use('/api/shipping', shippingRoutes);
 app.use('/api/whatsapp', whatsappWebhook);
 // Note: Discord interactions route is registered above, before json() middleware

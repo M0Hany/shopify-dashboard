@@ -22,8 +22,70 @@
   }
 
   .input {
-    @apply w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700;
+    @apply w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-900;
   }
+}
+
+/* Force light backgrounds on all form inputs */
+input[type="text"],
+input[type="number"],
+input[type="date"],
+input[type="month"],
+input[type="email"],
+input[type="password"],
+input[type="search"],
+input[type="tel"],
+input[type="url"],
+select,
+textarea {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+  border-color: #d1d5db !important;
+}
+
+/* Fix calendar icon color for date/month inputs - ensure it's visible */
+input[type="date"],
+input[type="month"] {
+  color-scheme: light !important;
+  position: relative;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator {
+  filter: brightness(0) saturate(100%) !important;
+  opacity: 1 !important;
+  cursor: pointer;
+  width: 20px !important;
+  height: 20px !important;
+}
+
+input[type="date"]::-webkit-inner-spin-button,
+input[type="month"]::-webkit-inner-spin-button {
+  opacity: 1 !important;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="date"]:focus,
+input[type="month"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input[type="search"]:focus,
+input[type="tel"]:focus,
+input[type="url"]:focus,
+select:focus,
+textarea:focus {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+  border-color: #3b82f6 !important;
+}
+
+/* Ensure disabled inputs also have light background */
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background-color: #f3f4f6 !important;
+  color: #6b7280 !important;
 }
 
 :root {

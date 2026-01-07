@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
@@ -8,7 +8,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Menu, Popover, Transition } from '@headlessui/react';
 import FileUpload from '../components/FileUpload';
-import MoneyTransferUpload from '../components/MoneyTransferUpload';
 import { format } from 'date-fns';
 import { toast } from 'react-hot-toast';
 import { calculateDaysRemaining } from '../utils/dateUtils';
@@ -276,12 +275,14 @@ const Orders = () => {
   const ordersRefreshTimerRef = useRef<number | null>(null);
   
   // Quick Filter state
-  const [activeQuickFilterTab, setActiveQuickFilterTab] = useState<'production' | 'city' | 'days' | 'shipping' | 'rushed'>('production');
+  const [activeQuickFilterTab, setActiveQuickFilterTab] = useState<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month'>('production');
   const [selectedProductionItems, setSelectedProductionItems] = useState<Set<string>>(new Set());
   const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
   const [selectedDayRanges, setSelectedDayRanges] = useState<Set<string>>(new Set());
   const [selectedShippingMethods, setSelectedShippingMethods] = useState<Set<string>>(new Set());
   const [selectedRushTypes, setSelectedRushTypes] = useState<Set<string>>(new Set());
+  const [selectedFulfillmentMonths, setSelectedFulfillmentMonths] = useState<Set<string>>(new Set());
+  const [selectedPaidMonths, setSelectedPaidMonths] = useState<Set<string>>(new Set());
   const [isQuickFilterExpanded, setIsQuickFilterExpanded] = useState(false);
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
@@ -358,7 +359,6 @@ const Orders = () => {
         throw new Error('Failed to fetch orders');
       }
       const ordersData = await ordersResponse.json();
-
       return ordersData;
     },
     // Specific caching options for orders
@@ -733,10 +733,126 @@ const Orders = () => {
     );
   };
 
+  // Helper function to check if an order matches all current filters (status + quick filters + search)
+  const matchesAllFilters = (order: Order): boolean => {
+    const query = debouncedSearchQuery.toLowerCase();
+    const nameStr = (order.name || '').toLowerCase();
+    const customerNameStr = `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.toLowerCase();
+    const phoneStr = (order.customer?.phone || '').toLowerCase();
+
+    const matchesSearch = query === '' ||
+      nameStr.includes(query) ||
+      customerNameStr.includes(query) ||
+      phoneStr.includes(query);
+    
+    const matchesStatus = filterOrdersByStatus(order);
+    
+    // Quick filter: Production items
+    if (selectedProductionItems.size > 0) {
+      const matches = Array.from(selectedProductionItems).some(itemTitle => orderContainsItem(order, itemTitle));
+      if (!matches) return false;
+    }
+    
+    // Quick filter: Cities
+    if (selectedCities.size > 0) {
+      const province = order.shipping_address?.province || 'Unknown';
+      if (!selectedCities.has(province)) return false;
+    }
+    
+    // Quick filter: Days left
+    if (selectedDayRanges.size > 0) {
+      const daysLeft = calculateDaysLeft(order);
+      const range = getDayRange(daysLeft);
+      if (!selectedDayRanges.has(range)) return false;
+    }
+    
+    // Quick filter: Shipping methods
+    if (selectedShippingMethods.size > 0) {
+      const method = getShippingMethodFromOrder(order);
+      if (!selectedShippingMethods.has(method)) return false;
+    }
+    
+    // Quick filter: Rushed/Standard
+    if (selectedRushTypes.size > 0) {
+      const rushType = getRushTypeFromOrder(order);
+      if (!selectedRushTypes.has(rushType)) return false;
+    }
+    
+    // Quick filter: Fulfillment month (only for fulfilled orders)
+    if (selectedFulfillmentMonths.size > 0 && statusFilter === 'fulfilled') {
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(t => t.trim())
+          : [];
+      
+      // Check if order is fulfilled
+      const isFulfilled = tags.some((tag: string) => tag.trim().toLowerCase() === 'fulfilled');
+      if (!isFulfilled) return false;
+      
+      // Get fulfillment_date - ONLY use fulfillment_date, no fallback
+      const fulfillmentDateTag = tags.find((tag: string) => 
+        tag.trim().startsWith('fulfillment_date:')
+      );
+      
+      if (fulfillmentDateTag) {
+        const dateStr = fulfillmentDateTag.split(':')[1]?.trim();
+        if (dateStr) {
+          const month = dateStr.substring(0, 7); // YYYY-MM
+          const [year, monthNum] = month.split('-');
+          const monthName = format(new Date(parseInt(year), parseInt(monthNum) - 1, 1), 'MMMM yyyy');
+          if (!selectedFulfillmentMonths.has(monthName)) return false;
+        } else {
+          return false; // Has tag but no date, exclude
+        }
+      } else {
+        return false; // No fulfillment_date tag, exclude
+      }
+    }
+    
+    // Quick filter: Paid month (for paid filter view)
+    if (selectedPaidMonths.size > 0) {
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(t => t.trim())
+          : [];
+      
+      // Check if order is paid
+      const isPaid = tags.some((tag: string) => tag.trim().toLowerCase() === 'paid');
+      if (!isPaid) return false;
+      
+      // Get paid_date - ONLY use paid_date, no fallback
+      const paidDateTag = tags.find((tag: string) => 
+        tag.trim().startsWith('paid_date:')
+      );
+      
+      if (paidDateTag) {
+        const dateStr = paidDateTag.split(':')[1]?.trim();
+        if (dateStr) {
+          const month = dateStr.substring(0, 7); // YYYY-MM
+          const [year, monthNum] = month.split('-');
+          const monthName = format(new Date(parseInt(year), parseInt(monthNum) - 1, 1), 'MMMM yyyy');
+          if (!selectedPaidMonths.has(monthName)) return false;
+        } else {
+          return false; // Has tag but no date, exclude
+        }
+      } else {
+        return false; // No paid_date tag, exclude
+      }
+    }
+    
+    // Legacy filter: selected summary items (for backward compatibility)
+    const matchesSummaryItems = selectedSummaryItems.size === 0 || 
+      Array.from(selectedSummaryItems).some(itemTitle => orderContainsItem(order, itemTitle));
+    
+    return matchesSearch && matchesStatus && matchesSummaryItems;
+  };
+
   const handleSelectAll = () => {
     if (orders) {
-      // Get only the orders that are currently visible based on the filter
-      const visibleOrders = orders.filter(filterOrdersByStatus);
+      // Get only the orders that are currently visible based on all filters (status + quick filters + search)
+      const visibleOrders = orders.filter(matchesAllFilters);
       
       if (selectedOrders.length === visibleOrders.length) {
         setSelectedOrders([]);
@@ -1022,11 +1138,9 @@ const Orders = () => {
       case 'shipped':
         return trimmedTags.some(tag => tag.trim() === statusTags.shipped);
       case 'fulfilled':
-        // Show both fulfilled and paid orders
-        return trimmedTags.some(tag => 
-          tag.trim() === statusTags.fulfilled || 
-          tag.trim() === statusTags.paid
-        );
+        // Show only fulfilled orders (exclude paid orders)
+        return trimmedTags.some(tag => tag.trim() === statusTags.fulfilled) &&
+               !trimmedTags.some(tag => tag.trim() === statusTags.paid);
       case 'cancelled':
         return trimmedTags.some(tag => tag.trim() === statusTags.cancelled);
       case 'paid':
@@ -1080,15 +1194,6 @@ const Orders = () => {
     }
   };
 
-  const handleUploadComplete = (results: {
-    processed: number;
-    updated: number;
-    notFound: number;
-    errors: number;
-  }) => {
-    // Refresh orders after successful upload
-    queryClient.invalidateQueries({ queryKey: ['orders'] });
-  };
 
   // Get shipping date from tags
   const getShippingDate = (order: Order) => {
@@ -1311,63 +1416,51 @@ const Orders = () => {
     ...order,
     originalIndex: idx
   }))
-  // Then filter
-  .filter((order: Order & { originalIndex: number }) => {
-    const query = debouncedSearchQuery.toLowerCase();
-    const nameStr = (order.name || '').toLowerCase();
-    const customerNameStr = `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.toLowerCase();
-    const phoneStr = (order.customer?.phone || '').toLowerCase();
-
-    const matchesSearch = query === '' ||
-      nameStr.includes(query) ||
-      customerNameStr.includes(query) ||
-      phoneStr.includes(query);
-    
-    const matchesStatus = filterOrdersByStatus(order);
-    
-    // Quick filter: Production items
-    if (selectedProductionItems.size > 0) {
-      const matches = Array.from(selectedProductionItems).some(itemTitle => orderContainsItem(order, itemTitle));
-      if (!matches) return false;
-    }
-    
-    // Quick filter: Cities
-    if (selectedCities.size > 0) {
-      const province = order.shipping_address?.province || 'Unknown';
-      if (!selectedCities.has(province)) return false;
-    }
-    
-    // Quick filter: Days left
-    if (selectedDayRanges.size > 0) {
-      const daysLeft = calculateDaysLeft(order);
-      const range = getDayRange(daysLeft);
-      if (!selectedDayRanges.has(range)) return false;
-    }
-    
-    // Quick filter: Shipping methods
-    if (selectedShippingMethods.size > 0) {
-      const method = getShippingMethodFromOrder(order);
-      if (!selectedShippingMethods.has(method)) return false;
-    }
-    
-    // Quick filter: Rushed/Standard
-    if (selectedRushTypes.size > 0) {
-      const rushType = getRushTypeFromOrder(order);
-      if (!selectedRushTypes.has(rushType)) return false;
-    }
-    
-    // Legacy filter: selected summary items (for backward compatibility)
-    const matchesSummaryItems = selectedSummaryItems.size === 0 || 
-      Array.from(selectedSummaryItems).some(itemTitle => orderContainsItem(order, itemTitle));
-    
-    return matchesSearch && matchesStatus && matchesSummaryItems;
-  })
-  // Sort with new rules: 1. Priority first, 2. Days left ascending, 3. Order ID
+  // Then filter using the same logic as handleSelectAll
+  .filter((order: Order & { originalIndex: number }) => matchesAllFilters(order))
+  // Sort with different rules based on status filter
   .sort((a: Order & { originalIndex: number }, b: Order & { originalIndex: number }) => {
-    // Helper to check if order has priority tag
+    // For fulfilled orders, pin priority orders first, then sort by order ID
+    if (statusFilter === 'fulfilled') {
+      // Helper to check if order has priority tag (case-insensitive with trimming)
+      const hasPriority = (order: Order): boolean => {
+        const tags = Array.isArray(order.tags) 
+          ? order.tags.map((t: string) => t.trim())
+          : typeof order.tags === 'string' 
+            ? order.tags.split(',').map(t => t.trim())
+            : [];
+        return tags.some((tag: string) => tag.trim().toLowerCase() === 'priority');
+      };
+      
+      const aPriority = hasPriority(a);
+      const bPriority = hasPriority(b);
+      
+      // Rule 1: Priority orders are pinned to the top
+      if (aPriority && !bPriority) return -1;
+      if (!aPriority && bPriority) return 1;
+      
+      // Rule 2: Within each group (priority/non-priority), sort by order ID
+      // Extract numeric part from order name (e.g., "#1023" -> 1023)
+      const getOrderNumber = (orderName: string): number => {
+        const match = orderName?.match(/\d+/);
+        return match ? parseInt(match[0], 10) : 0;
+      };
+      
+      const aNum = getOrderNumber(a.name || '');
+      const bNum = getOrderNumber(b.name || '');
+      
+      return aNum - bNum; // Ascending order
+    }
+
+    // For all other statuses, use the existing sorting rules
+    // Helper to check if order has priority tag (case-insensitive with trimming)
     const hasPriority = (order: Order): boolean => {
-      const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',').map(t => t.trim()) : [];
-      return tags.includes('priority');
+      const tags = Array.isArray(order.tags) 
+        ? order.tags.map((t: string) => t.trim())
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(t => t.trim())
+          : [];
+      return tags.some((tag: string) => tag.trim().toLowerCase() === 'priority');
     };
 
     const aPriority = hasPriority(a);
@@ -1428,124 +1521,6 @@ const Orders = () => {
     }
   }, [orders, queryClient]);
 
-  // Helper function to check if an order has complete address tags
-  const hasCompleteAddressTags = (order: any) => {
-    const tags = Array.isArray(order.tags) ? order.tags.map((t: string) => t.trim()) : 
-                typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) :
-                [];
-    
-    // Helper function to get tag value
-    const getTagValue = (prefix: string): string | null => {
-      const tag = tags.find((tag: string) => tag.startsWith(prefix));
-      const value = tag ? tag.split(':')[1].trim() : null;
-      return value === "null" ? null : value;
-    };
-
-    const cityId = getTagValue('mylerz_city_id');
-    const neighborhoodId = getTagValue('mylerz_neighborhood_id');
-    const subZoneId = getTagValue('mylerz_subzone_id');
-
-    return cityId && neighborhoodId && subZoneId &&
-           cityId !== "null" && neighborhoodId !== "null" && subZoneId !== "null";
-  };
-
-  // Check if all selected orders have complete address tags
-  // Helper: detect instapay order and whether it is marked paid
-  const isInstapayOrder = (order: any) => {
-    const gateways = Array.isArray(order?.payment_gateway_names) ? order.payment_gateway_names : [];
-    const gatewayStr = gateways.join(' ').toLowerCase();
-    const mentionsInsta = gatewayStr.includes('instapay') || gatewayStr.includes('pay via instapay');
-    const tags = Array.isArray(order?.tags) ? order.tags : typeof order?.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) : [];
-    return mentionsInsta || tags.includes('instapay') || tags.includes('instapay_paid');
-  };
-
-  const isInstapayPaid = (order: any) => {
-    const tags = Array.isArray(order?.tags) ? order.tags : typeof order?.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) : [];
-    return tags.includes('instapay_paid');
-  };
-
-  const allSelectedOrdersAreShippable = selectedOrders.length > 0 &&
-    selectedOrders.every(orderId => {
-      const order = orders?.find(o => o.id === orderId);
-      if (!order) return false;
-      const addressOk = hasCompleteAddressTags(order);
-      if (!addressOk) return false;
-      if (isInstapayOrder(order) && !isInstapayPaid(order)) return false;
-      return true;
-    });
-
-  const createShipmentsMutation = useMutation({
-    mutationFn: async (orderIds: number[]) => {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/shipping/create-shipments`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ orderIds }),
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to create shipments');
-      }
-      return response.json();
-    },
-    onSuccess: (data) => {
-      toast.success(`Successfully created ${data.successful} shipments`);
-      if (data.failed > 0) {
-        toast.error(`Failed to create ${data.failed} shipments`);
-      }
-      scheduleBackgroundOrdersRefresh();
-      setSelectedOrders([]);
-    },
-    onError: (error: any) => {
-      toast.error(error.message || 'Failed to create shipments');
-      console.error('Error creating shipments:', error);
-    }
-  });
-
-  const handleCreateShipments = async () => {
-    if (!selectedOrders.length) {
-      toast.error('Please select at least one order');
-      return;
-    }
-
-    // Validate that all selected orders have the required location tags
-    const ordersWithMissingTags = orders?.filter(order => {
-      if (!selectedOrders.includes(order.id)) return false;
-
-      const tags = Array.isArray(order.tags) ? order.tags :
-                  typeof order.tags === 'string' ? order.tags.split(',').map(t => t.trim()) :
-                  [];
-
-      const hasAllLocationTags = tags.some(tag => tag.startsWith('mylerz_city_id:')) &&
-                                tags.some(tag => tag.startsWith('mylerz_neighborhood_id:')) &&
-                                tags.some(tag => tag.startsWith('mylerz_subzone_id:'));
-
-      return !hasAllLocationTags;
-    });
-
-    if (ordersWithMissingTags && ordersWithMissingTags.length > 0) {
-      toast.error('Some orders are missing location tags. Please add address tags first.');
-      return;
-    }
-
-    // Block InstaPay orders that are not marked paid
-    const unpaidInstaPayOrders = orders?.filter(order => {
-      if (!selectedOrders.includes(order.id)) return false;
-      return isInstapayOrder(order) && !isInstapayPaid(order);
-    });
-    if (unpaidInstaPayOrders && unpaidInstaPayOrders.length > 0) {
-      toast.error('Some InstaPay orders are not marked as paid. Please set InstaPay to Paid first.');
-      return;
-    }
-
-    try {
-      await createShipmentsMutation.mutateAsync(selectedOrders);
-    } catch (error) {
-      // Error handling is done in the mutation
-    }
-  };
 
   // Mutation for updating tags
   const updateTagsMutation = useMutation({
@@ -1578,63 +1553,12 @@ const Orders = () => {
     updateTagsMutation.mutate({ orderId, newTags });
   };
 
-  const handleSendEmail = () => {
-    if (!selectedOrders.length || !orders) return;
 
-    const selectedOrdersData = orders.filter(order => selectedOrders.includes(order.id));
-    const shippedOrders = selectedOrdersData.filter(order => {
-      const tags = Array.isArray(order.tags) ? order.tags : 
-                  typeof order.tags === 'string' ? order.tags.split(',').map(t => t.trim()) :
-                  [];
-      return tags.includes('shipped');
-    });
-    
-    const barcodes = shippedOrders
-      .map(order => {
-        const tags = Array.isArray(order.tags) ? order.tags : 
-                    typeof order.tags === 'string' ? order.tags.split(',').map(t => t.trim()) :
-                    [];
-        const barcodeTag = tags.find(tag => tag.startsWith('shipping_barcode:'));
-        return barcodeTag ? barcodeTag.split(':')[1].trim() : null;
-      })
-      .filter((barcode): barcode is string => barcode !== null);
-
-    if (barcodes.length === 0) {
-      toast.error('No shipping barcodes found in selected orders');
-      return;
-    }
-
-    const emailBody = `Dear Mylerz,
-
-The following orders are late and still undelivered. Please check and update us with the current status:
-
-Order Barcodes:
-
-${barcodes.join('\n')}
-
-___`;
-
-    const mailtoLink = `mailto:support@mylerz.com?subject=Late Orders Status Request&body=${encodeURIComponent(emailBody)}`;
-    window.open(mailtoLink, '_blank');
-  };
-
-  // Function to check if all selected orders are shipped
-  const areAllSelectedOrdersShipped = () => {
-    if (!selectedOrders.length || !orders) return false;
-    
-    const selectedOrdersData = orders.filter(order => selectedOrders.includes(order.id));
-    return selectedOrdersData.every(order => {
-      const tags = Array.isArray(order.tags) ? order.tags : 
-                  typeof order.tags === 'string' ? order.tags.split(',').map(t => t.trim()) :
-                  [];
-      return tags.includes('shipped');
-    });
-  };
 
   // Get visible tabs based on current status filter
-  // Order: production -> days -> city -> shipping -> rushed
-  const getVisibleTabs = (): Array<'production' | 'city' | 'days' | 'shipping' | 'rushed'> => {
-    const tabs: Array<'production' | 'city' | 'days' | 'shipping' | 'rushed'> = [];
+  // Order: production -> days -> city -> shipping -> rushed -> fulfillment_month -> paid_month
+  const getVisibleTabs = (): Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month'> => {
+    const tabs: Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month'> = [];
     
     // For on_hold view, show all tabs
     if (statusFilter === 'on_hold') {
@@ -1666,6 +1590,16 @@ ___`;
     
     // Rushed tab (always visible)
     tabs.push('rushed');
+    
+    // Fulfillment month tab (only for fulfilled orders)
+    if (statusFilter === 'fulfilled') {
+      tabs.push('fulfillment_month');
+    }
+    
+    // Paid month tab (only for paid orders)
+    if (statusFilter === 'paid') {
+      tabs.push('paid_month');
+    }
     
     return tabs;
   };
@@ -1780,6 +1714,100 @@ ___`;
       .map(type => ({ type, count: typeCounts[type] }));
   };
 
+  // Calculate data for fulfillment month tab
+  const getFulfillmentMonthData = () => {
+    if (!orders) return [];
+    
+    const ordersToProcess = selectedOrders.length > 0
+      ? orders.filter(order => selectedOrders.includes(order.id))
+      : orders.filter(order => filterOrdersByStatus(order));
+    
+    const monthCounts: { [key: string]: number } = {};
+    
+    ordersToProcess.forEach(order => {
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(t => t.trim())
+          : [];
+      
+      // Check if order is fulfilled
+      const isFulfilled = tags.some((tag: string) => tag.trim().toLowerCase() === 'fulfilled');
+      if (!isFulfilled) return;
+      
+      // Get fulfillment_date - ONLY use fulfillment_date, no fallback
+      const fulfillmentDateTag = tags.find((tag: string) => 
+        tag.trim().startsWith('fulfillment_date:')
+      );
+      
+      if (fulfillmentDateTag) {
+        const dateStr = fulfillmentDateTag.split(':')[1]?.trim();
+        if (dateStr) {
+          const month = dateStr.substring(0, 7); // YYYY-MM
+          const [year, monthNum] = month.split('-');
+          const monthName = format(new Date(parseInt(year), parseInt(monthNum) - 1, 1), 'MMMM yyyy');
+          monthCounts[monthName] = (monthCounts[monthName] || 0) + 1;
+        }
+      }
+    });
+    
+    // Sort by month (most recent first)
+    return Object.entries(monthCounts)
+      .map(([month, count]) => ({ month, count }))
+      .sort((a, b) => {
+        const aDate = new Date(a.month);
+        const bDate = new Date(b.month);
+        return bDate.getTime() - aDate.getTime(); // Descending (newest first)
+      });
+  };
+
+  // Calculate data for paid month tab (for paid filter view)
+  const getPaidMonthData = () => {
+    if (!orders) return [];
+    
+    const ordersToProcess = selectedOrders.length > 0
+      ? orders.filter(order => selectedOrders.includes(order.id))
+      : orders.filter(order => filterOrdersByStatus(order));
+    
+    const monthCounts: { [key: string]: number } = {};
+    
+    ordersToProcess.forEach(order => {
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(t => t.trim())
+          : [];
+      
+      // Check if order is paid
+      const isPaid = tags.some((tag: string) => tag.trim().toLowerCase() === 'paid');
+      if (!isPaid) return;
+      
+      // Get paid_date - ONLY use paid_date, no fallback
+      const paidDateTag = tags.find((tag: string) => 
+        tag.trim().startsWith('paid_date:')
+      );
+      
+      if (paidDateTag) {
+        const dateStr = paidDateTag.split(':')[1]?.trim();
+        if (dateStr) {
+          const month = dateStr.substring(0, 7); // YYYY-MM
+          const [year, monthNum] = month.split('-');
+          const monthName = format(new Date(parseInt(year), parseInt(monthNum) - 1, 1), 'MMMM yyyy');
+          monthCounts[monthName] = (monthCounts[monthName] || 0) + 1;
+        }
+      }
+    });
+    
+    // Sort by month (most recent first)
+    return Object.entries(monthCounts)
+      .map(([month, count]) => ({ month, count }))
+      .sort((a, b) => {
+        const aDate = new Date(a.month);
+        const bDate = new Date(b.month);
+        return bDate.getTime() - aDate.getTime(); // Descending (newest first)
+      });
+  };
+
   // Calculate accumulated item quantities for pending orders
   const calculatePendingItemsSummary = (ordersToUse?: Order[]) => {
     if (!orders) return { items: [], totalOrders: 0, totalPieces: 0 };
@@ -1863,8 +1891,12 @@ ___`;
       if (visibleTabs.length > 0) {
         // Only reset if current tab is not in visible tabs
         if (!visibleTabs.includes(activeQuickFilterTab)) {
-          // Prefer production if available, otherwise first visible tab
-          if (visibleTabs.includes('production')) {
+          // For paid orders, prefer paid_month tab
+          if (statusFilter === 'paid' && visibleTabs.includes('paid_month')) {
+            setActiveQuickFilterTab('paid_month');
+          } else if (statusFilter === 'fulfilled' && visibleTabs.includes('fulfillment_month')) {
+            setActiveQuickFilterTab('fulfillment_month');
+          } else if (visibleTabs.includes('production')) {
             setActiveQuickFilterTab('production');
           } else {
             setActiveQuickFilterTab(visibleTabs[0]);
@@ -1886,6 +1918,10 @@ ___`;
           return getShippingData();
         case 'rushed':
           return getRushedData();
+        case 'fulfillment_month':
+          return getFulfillmentMonthData();
+        case 'paid_month':
+          return getPaidMonthData();
         default:
           return [];
       }
@@ -1904,6 +1940,10 @@ ___`;
           return selectedShippingMethods;
         case 'rushed':
           return selectedRushTypes;
+        case 'fulfillment_month':
+          return selectedFulfillmentMonths;
+        case 'paid_month':
+          return selectedPaidMonths;
         default:
           return new Set<string>();
       }
@@ -1954,6 +1994,22 @@ ___`;
             return newSet;
           });
           break;
+        case 'fulfillment_month':
+          setSelectedFulfillmentMonths(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(value)) newSet.delete(value);
+            else newSet.add(value);
+            return newSet;
+          });
+          break;
+        case 'paid_month':
+          setSelectedPaidMonths(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(value)) newSet.delete(value);
+            else newSet.add(value);
+            return newSet;
+          });
+          break;
       }
     };
 
@@ -1964,6 +2020,8 @@ ___`;
       setSelectedDayRanges(new Set());
       setSelectedShippingMethods(new Set());
       setSelectedRushTypes(new Set());
+      setSelectedFulfillmentMonths(new Set());
+      setSelectedPaidMonths(new Set());
     };
 
     const currentData = getCurrentTabData();
@@ -1976,7 +2034,31 @@ ___`;
       selectedCities.size > 0 ||
       selectedDayRanges.size > 0 ||
       selectedShippingMethods.size > 0 ||
-      selectedRushTypes.size > 0;
+      selectedRushTypes.size > 0 ||
+      selectedFulfillmentMonths.size > 0 ||
+      selectedPaidMonths.size > 0;
+
+    // Calculate total revenue of selected orders (excluding cancelled orders)
+    const selectedOrdersRevenue = useMemo(() => {
+      if (!orders || selectedOrders.length === 0) return 0;
+      return selectedOrders.reduce((sum, orderId) => {
+        const order = orders.find(o => o.id === orderId);
+        if (!order) return sum;
+        
+        // Check if order is cancelled - exclude cancelled orders from revenue
+        const tags = Array.isArray(order.tags) 
+          ? order.tags 
+          : typeof order.tags === 'string' 
+            ? order.tags.split(',').map(t => t.trim())
+            : [];
+        const isCancelled = tags.some((tag: string) => tag.trim().toLowerCase() === 'cancelled');
+        
+        // Cancelled orders don't contribute to revenue (we didn't receive money)
+        if (isCancelled) return sum;
+        
+        return sum + parseFloat(order.total_price || '0');
+      }, 0);
+    }, [orders, selectedOrders]);
 
     // Don't show card in "all orders" view
     if (statusFilter === 'all') return null;
@@ -1989,6 +2071,8 @@ ___`;
       days: { icon: '📅', label: 'Days', tooltip: 'Days Left' },
       shipping: { icon: '🚚', label: 'Shipping', tooltip: 'Shipping Method' },
       rushed: { icon: '⚡', label: 'Rushed', tooltip: 'Rushed/Standard' },
+      fulfillment_month: { icon: '📆', label: 'Month', tooltip: 'Fulfillment Month' },
+      paid_month: { icon: '📅', label: 'Calendar', tooltip: 'Paid Month' },
     };
 
     return (
@@ -1996,19 +2080,29 @@ ___`;
         {/* Header */}
         <div className="flex items-center justify-between mb-4 pb-3 border-b border-blue-200">
           <h3 className="font-semibold text-gray-900">Quick Filters</h3>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col items-end gap-1">
             <p className="text-xs text-gray-600">
               {selectedOrders.length > 0 
                 ? `${selectedOrders.length} selected order${selectedOrders.length > 1 ? 's' : ''}`
-                : `${orders?.filter(filterOrdersByStatus).length || 0} orders`}
+                : `${orders?.filter(matchesAllFilters).length || 0} orders`}
             </p>
+            {selectedOrders.length > 0 && (
+              <p className="text-xs font-semibold text-green-600">
+                Revenue: {new Intl.NumberFormat('en-EG', {
+                  style: 'currency',
+                  currency: 'EGP',
+                  minimumFractionDigits: 0,
+                  maximumFractionDigits: 0,
+                }).format(selectedOrdersRevenue)}
+              </p>
+            )}
             {hasAnyFilters && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   handleClearFilter();
                 }}
-                className="text-xs text-blue-600 font-medium bg-white px-2 py-1 rounded hover:bg-gray-50 border border-blue-200"
+                className="text-xs text-blue-600 font-medium bg-white px-2 py-1 rounded hover:bg-gray-50 border border-blue-200 mt-1"
                 title="Clear all filters"
               >
                 Clear
@@ -2049,6 +2143,8 @@ ___`;
                          activeQuickFilterTab === 'city' ? item.city :
                          activeQuickFilterTab === 'days' ? item.range :
                          activeQuickFilterTab === 'shipping' ? item.method :
+                         activeQuickFilterTab === 'fulfillment_month' ? item.month :
+                         activeQuickFilterTab === 'paid_month' ? item.month :
                          item.type;
             const count = item.quantity || item.count;
             const isSelected = selectedItems.has(value);
@@ -2205,16 +2301,13 @@ ___`;
               )}
             </Popover>
 
-            {/* Upload Button */}
-            <MoneyTransferUpload onUploadComplete={handleUploadComplete} />
-
             {/* Select All Button */}
             <button
               onClick={handleSelectAll}
-              className={`p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 relative ${orders && selectedOrders.length === orders.filter(filterOrdersByStatus).length ? 'bg-blue-50 border-blue-400' : ''}`}
-              title="Select all orders"
+              className={`p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 relative ${orders && selectedOrders.length === orders.filter(matchesAllFilters).length && orders.filter(matchesAllFilters).length > 0 ? 'bg-blue-50 border-blue-400' : ''}`}
+              title="Select all visible orders"
             >
-              <CheckIcon className={`w-5 h-5 ${orders && selectedOrders.length === orders.filter(filterOrdersByStatus).length ? 'text-blue-600' : 'text-gray-600'}`} />
+              <CheckIcon className={`w-5 h-5 ${orders && selectedOrders.length === orders.filter(matchesAllFilters).length && orders.filter(matchesAllFilters).length > 0 ? 'text-blue-600' : 'text-gray-600'}`} />
               {selectedOrders.length > 0 && (
                 <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-xs rounded-full px-1.5 py-0.5">{selectedOrders.length}</span>
               )}
@@ -2242,34 +2335,6 @@ ___`;
               Extract Delivery Form ({selectedOrders.length})
             </button>
 
-            {areAllSelectedOrdersShipped() ? (
-              // Show email button for shipped orders
-              <button
-                onClick={handleSendEmail}
-                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
-              >
-                Send Status Request Email
-              </button>
-            ) : (
-              // Show Add Shipments button for non-shipped orders
-            <button
-              onClick={handleCreateShipments}
-              disabled={createShipmentsMutation.isPending || !allSelectedOrdersAreShippable}
-              className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 disabled:bg-purple-400 disabled:cursor-not-allowed"
-            >
-              {createShipmentsMutation.isPending ? (
-                <>
-                  <svg className="animate-spin h-4 w-4 mr-2" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  Creating Shipments...
-                </>
-              ) : (
-                'Add Shipments'
-              )}
-            </button>
-            )}
 
             <Menu as="div" className="relative inline-block text-left">
               {({ open }) => (

@@ -172,6 +172,17 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [isShippedModalOpen, setIsShippedModalOpen] = useState(false);
+  const [isScooterShippingCostModalOpen, setIsScooterShippingCostModalOpen] = useState(false);
+  const [scooterShippingCost, setScooterShippingCost] = useState('');
+  const [scooterFulfillmentDate, setScooterFulfillmentDate] = useState<Date>(new Date());
+  const [isCompanyShippingCostModalOpen, setIsCompanyShippingCostModalOpen] = useState(false);
+  const [companyShippingCost, setCompanyShippingCost] = useState('');
+  const [companyFulfillmentDate, setCompanyFulfillmentDate] = useState<Date>(new Date());
+  const [isPickupFulfillmentDateModalOpen, setIsPickupFulfillmentDateModalOpen] = useState(false);
+  const [pickupFulfillmentDate, setPickupFulfillmentDate] = useState<Date>(new Date());
+  const [isCancellationReasonModalOpen, setIsCancellationReasonModalOpen] = useState(false);
+  const [cancellationReason, setCancellationReason] = useState('');
+  const [pendingCancellationStatus, setPendingCancellationStatus] = useState<string | null>(null);
   const [isNeighborhoodDialogOpen, setIsNeighborhoodDialogOpen] = useState(false);
   const [isSubzoneDialogOpen, setIsSubzoneDialogOpen] = useState(false);
   const [isCityDialogOpen, setIsCityDialogOpen] = useState(false);
@@ -528,6 +539,14 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const handleStatusChange = (newStatus: string) => {
     if (newStatus === currentStatus) return;
     
+    // If the new status is cancelled, open cancellation reason dialog
+    if (newStatus === 'cancelled') {
+      setPendingCancellationStatus('cancelled');
+      setCancellationReason('');
+      setIsCancellationReasonModalOpen(true);
+      return; // Don't update status yet, wait for reason
+    }
+    
     // Store the previous status before updating to the new one
     const previousStatus = currentStatus;
     
@@ -546,6 +565,49 @@ const OrderCard: React.FC<OrderCardProps> = ({
     // Add fulfillment date tag when status changes to fulfilled
     if (newStatus === 'fulfilled') {
       const today = format(new Date(), 'yyyy-MM-dd');
+      
+      // Check if shipping method is Scooter
+      const shippingMethod = getShippingMethod();
+      if (shippingMethod === 'Scooter') {
+        // Check if scooter shipping cost tag already exists
+        const scooterCostTag = trimmedTags.find((tag: string) => tag.trim().startsWith('scooter_shipping_cost:'));
+        if (!scooterCostTag) {
+          // Open scooter shipping cost dialog
+          setTimeout(() => {
+            setScooterFulfillmentDate(new Date()); // Reset to today when opening
+            setIsScooterShippingCostModalOpen(true);
+          }, 100);
+          // Don't update status yet - wait for cost input
+          return;
+        }
+      }
+      
+      // Check if shipping method is Other Company
+      if (shippingMethod === 'Other Company') {
+        // Check if shipping company cost tag already exists
+        const companyCostTag = trimmedTags.find((tag: string) => tag.trim().startsWith('shipping_company_cost:'));
+        if (!companyCostTag) {
+          // Open company shipping cost dialog
+          setTimeout(() => {
+            setCompanyFulfillmentDate(new Date()); // Reset to today when opening
+            setIsCompanyShippingCostModalOpen(true);
+          }, 100);
+          // Don't update status yet - wait for cost input
+          return;
+        }
+      }
+      
+      // Check if shipping method is Pickup - open date picker dialog
+      if (shippingMethod === 'Pickup') {
+        // Open pickup fulfillment date dialog
+        setTimeout(() => {
+          setPickupFulfillmentDate(new Date()); // Reset to today when opening
+          setIsPickupFulfillmentDateModalOpen(true);
+        }, 100);
+        // Don't update status yet - wait for date input
+        return;
+      }
+      
       if (onUpdateStatus) {
         // Remove priority tag and add fulfillment date
         setLocalPriority(false);
@@ -665,6 +727,191 @@ const OrderCard: React.FC<OrderCardProps> = ({
     window.open(whatsAppLink, '_blank');
     
     setIsShippedModalOpen(false);
+  };
+
+  const handleScooterShippingCostSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cost = parseFloat(scooterShippingCost);
+    
+    if (isNaN(cost) || cost < 0) {
+      toast.error('Please enter a valid shipping cost');
+      return;
+    }
+    
+    // Get current tags
+    const currentTags = getCurrentTags();
+    
+    // Remove any existing scooter_shipping_cost, paid, paid_date, and fulfillment_date tags
+    const tagsWithoutCost = currentTags.filter((tag: string) => 
+      !tag.trim().startsWith('scooter_shipping_cost:') &&
+      tag.trim() !== 'paid' &&
+      !tag.trim().startsWith('paid_date:') &&
+      !tag.trim().startsWith('fulfillment_date:')
+    );
+    
+    // Format selected date
+    const selectedDate = format(scooterFulfillmentDate, 'yyyy-MM-dd');
+    
+    // Add new scooter_shipping_cost, paid, paid_date, and fulfillment_date tags
+    const updatedTags = [
+      ...tagsWithoutCost, 
+      `scooter_shipping_cost:${cost}`,
+      'paid',
+      `paid_date:${selectedDate}`,
+      `fulfillment_date:${selectedDate}`
+    ];
+    
+    // Update tags
+    if (onUpdateTags) {
+      onUpdateTags(order.id, updatedTags);
+    }
+    
+    // Now update status to fulfilled
+    if (onUpdateStatus) {
+      setLocalPriority(false);
+      onUpdateStatus(order.id, `fulfilled,fulfillment_date:${selectedDate}`.trim());
+    }
+    
+    // Close modal and reset cost and date
+    setIsScooterShippingCostModalOpen(false);
+    setScooterShippingCost('');
+    setScooterFulfillmentDate(new Date());
+    toast.success('Scooter shipping cost saved');
+  };
+
+  const handleCompanyShippingCostSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cost = parseFloat(companyShippingCost);
+    
+    if (isNaN(cost) || cost < 0) {
+      toast.error('Please enter a valid shipping cost');
+      return;
+    }
+    
+    // Get current tags
+    const currentTags = getCurrentTags();
+    
+    // Remove any existing shipping_company_cost, paid, paid_date, and fulfillment_date tags
+    const tagsWithoutCost = currentTags.filter((tag: string) => 
+      !tag.trim().startsWith('shipping_company_cost:') &&
+      !tag.trim().startsWith('shipping_company_cost_date:') &&
+      tag.trim() !== 'paid' &&
+      !tag.trim().startsWith('paid_date:') &&
+      !tag.trim().startsWith('fulfillment_date:')
+    );
+    
+    // Format selected date
+    const selectedDate = format(companyFulfillmentDate, 'yyyy-MM-dd');
+    
+    // Add new shipping_company_cost, shipping_company_cost_date, paid, paid_date, and fulfillment_date tags
+    const updatedTags = [
+      ...tagsWithoutCost, 
+      `shipping_company_cost:${cost}`,
+      `shipping_company_cost_date:${selectedDate}`,
+      'paid',
+      `paid_date:${selectedDate}`,
+      `fulfillment_date:${selectedDate}`
+    ];
+    
+    // Update tags
+    if (onUpdateTags) {
+      onUpdateTags(order.id, updatedTags);
+    }
+    
+    // Now update status to fulfilled
+    if (onUpdateStatus) {
+      setLocalPriority(false);
+      onUpdateStatus(order.id, `fulfilled,fulfillment_date:${selectedDate}`.trim());
+    }
+    
+    // Close modal and reset cost and date
+    setIsCompanyShippingCostModalOpen(false);
+    setCompanyShippingCost('');
+    setCompanyFulfillmentDate(new Date());
+    toast.success('Shipping company cost saved');
+  };
+
+  const handlePickupFulfillmentDateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Get current tags
+    const currentTags = getCurrentTags();
+    
+    // Remove any existing paid, paid_date, and fulfillment_date tags
+    const tagsWithoutPaid = currentTags.filter((tag: string) => 
+      tag.trim() !== 'paid' &&
+      !tag.trim().startsWith('paid_date:') &&
+      !tag.trim().startsWith('fulfillment_date:')
+    );
+    
+    // Format selected date
+    const selectedDate = format(pickupFulfillmentDate, 'yyyy-MM-dd');
+    
+    // Add paid, paid_date, and fulfillment_date tags for pickup orders
+    const updatedTags = [
+      ...tagsWithoutPaid,
+      'paid',
+      `paid_date:${selectedDate}`,
+      `fulfillment_date:${selectedDate}`
+    ];
+    
+    // Update tags
+    if (onUpdateTags) {
+      onUpdateTags(order.id, updatedTags);
+    }
+    
+    // Now update status to fulfilled
+    if (onUpdateStatus) {
+      setLocalPriority(false);
+      onUpdateStatus(order.id, `fulfilled,fulfillment_date:${selectedDate}`.trim());
+    }
+    
+    // Close modal and reset date
+    setIsPickupFulfillmentDateModalOpen(false);
+    setPickupFulfillmentDate(new Date());
+    toast.success('Pickup order fulfilled');
+  };
+  
+  const handleCancellationReasonSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancellationReason.trim()) {
+      toast.error('Please enter a cancellation reason');
+      return;
+    }
+    
+    // Get current tags
+    const currentTags = getCurrentTags();
+    
+    // Remove existing status tags and cancellation_reason tag
+    const statusTags = ['order_ready', 'on_hold', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+    let filtered = currentTags.filter((tag: string) => {
+      const trimmed = tag.trim().toLowerCase();
+      return !statusTags.some(st => st.trim().toLowerCase() === trimmed) &&
+             !tag.trim().toLowerCase().startsWith('cancellation_reason:');
+    });
+    
+    // Add cancelled tag and cancellation reason tag
+    filtered = [...filtered, 'cancelled', `cancellation_reason:${cancellationReason.trim()}`];
+    
+    // Update tags first
+    if (onUpdateTags) {
+      onUpdateTags(order.id, filtered);
+    }
+    
+    // Then update status
+    if (onUpdateStatus) {
+      setLocalPriority(false);
+      onUpdateStatus(order.id, 'cancelled');
+    }
+    
+    // Update local status
+    setCurrentStatus('cancelled');
+    
+    // Close modal and reset
+    setIsCancellationReasonModalOpen(false);
+    setCancellationReason('');
+    setPendingCancellationStatus(null);
+    toast.success('Order cancelled');
   };
   
   // Format phone number for WhatsApp
@@ -871,6 +1118,20 @@ Could you kindly confirm if you'll be available to receive it during that time? 
   };
 
   const isOrderCancelled = trimmedTags.some((tag: string) => tag.trim() === 'cancelled');
+  
+  // Get cancellation reason from tags
+  const getCancellationReason = () => {
+    const reasonTag = trimmedTags.find((tag: string) => tag.trim().toLowerCase().startsWith('cancellation_reason:'));
+    return reasonTag ? reasonTag.split(':')[1]?.trim() : null;
+  };
+  
+  const cancellationReasonText = getCancellationReason();
+  
+  // Check if order was cancelled after shipping (has cancelled tag AND shipping cost tag)
+  const isCancelledAfterShipping = isOrderCancelled && (
+    trimmedTags.some((tag: string) => tag.trim().toLowerCase().startsWith('scooter_shipping_cost:')) ||
+    trimmedTags.some((tag: string) => tag.trim().toLowerCase().startsWith('shipping_company_cost:'))
+  );
 
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1342,8 +1603,8 @@ Could you kindly confirm if you'll be available to receive it during that time? 
         isRushOrder ? 'border-l-4 border-l-red-500 hover:border-l-red-500' : 
         isHandmadeOrder ? 'border-l-4 border-l-blue-500 hover:border-l-blue-500' : 
         'hover:border-gray-300'
-      } ${isNoReplyCancelled ? 'border-2 border-red-400 bg-red-50' : ''} ${isConfirmedFromOnHold ? 'ring-2 ring-amber-400 bg-amber-50' : ''}`}
-      title={isRushOrder ? 'Rush Order (3 days)' : isHandmadeOrder ? 'Handmade Timeline (7 days)' : undefined}
+      } ${isNoReplyCancelled ? 'border-2 border-red-400 bg-red-50' : ''} ${isConfirmedFromOnHold ? 'ring-2 ring-amber-400 bg-amber-50' : ''} ${isCancelledAfterShipping ? 'bg-red-100 border-2 border-red-500' : ''}`}
+      title={isRushOrder ? 'Rush Order (3 days)' : isHandmadeOrder ? 'Handmade Timeline (7 days)' : isCancelledAfterShipping ? 'Cancelled after shipping - shipping cost incurred' : undefined}
     >
       <div className="p-4">
         {/* Two-Column Header Layout */}
@@ -1527,19 +1788,32 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                       onClick={(e) => e.stopPropagation()}
                     >
                       <div className="py-1">
+                        {/* Add note - always visible */}
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              onClick={handleNoteIconClick}
+                              className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                            >
+                              <PencilIcon className="w-4 h-4" />
+                              Add note
+                            </button>
+                          )}
+                        </Menu.Item>
+                        {/* Manage tags - always visible */}
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              onClick={handleTagClick}
+                              className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                            >
+                              <TagIcon className="w-4 h-4" />
+                              Manage tags
+                            </button>
+                          )}
+                        </Menu.Item>
                         {!isOrderCancelled && (
                           <>
-                            <Menu.Item>
-                              {({ active }) => (
-                                <button
-                                  onClick={handleNoteIconClick}
-                                  className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
-                                >
-                                  <PencilIcon className="w-4 h-4" />
-                                  Add note
-                                </button>
-                              )}
-                            </Menu.Item>
                             {(currentStatus === 'pending' || currentStatus === 'order-ready') && (
                               <Menu.Item>
                                 {({ active }) => (
@@ -1585,17 +1859,6 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                                 )}
                               </Menu.Item>
                             )}
-                            <Menu.Item>
-                              {({ active }) => (
-                                <button
-                                  onClick={handleTagClick}
-                                  className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
-                                >
-                                  <TagIcon className="w-4 h-4" />
-                                  Manage tags
-                                </button>
-                              )}
-                            </Menu.Item>
                             <Menu.Item>
                               {({ active }) => (
                                 <button
@@ -1858,8 +2121,35 @@ Could you kindly confirm if you'll be available to receive it during that time? 
           </div>
         </div>
 
+        {/* Cancellation Reason - show if cancelled */}
+        {isOrderCancelled && cancellationReasonText && (
+          <div className="mb-4 p-3 bg-red-50 rounded-md border border-red-200">
+            <div className="flex gap-2">
+              <XCircleIcon className="w-5 h-5 text-red-600 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-xs font-semibold text-red-800 mb-1">Cancellation Reason:</p>
+                <p className="text-sm text-red-700">
+                  {cancellationReasonText}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* Highlight for cancelled after shipping */}
+        {isCancelledAfterShipping && (
+          <div className="mb-4 p-3 bg-red-200 rounded-md border-2 border-red-500">
+            <div className="flex items-center gap-2">
+              <ExclamationTriangleIcon className="w-5 h-5 text-red-700 flex-shrink-0" />
+              <p className="text-sm font-semibold text-red-800">
+                ⚠️ Order was cancelled after shipping - shipping cost was incurred
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Order Notes - only show if not cancelled */}
-        {!isOrderCancelled && order.note && (
+        {!isOrderCancelled && order.note && order.note.trim() && (
           <div 
             className="mb-4 p-3 bg-amber-50 rounded-md cursor-pointer hover:bg-amber-100 transition-colors"
             onClick={handleNoteIconClick}
@@ -2297,6 +2587,264 @@ Could you kindly confirm if you'll be available to receive it during that time? 
               />
             )}
           </>
+        )}
+
+        {/* Scooter Shipping Cost Modal */}
+        {isScooterShippingCostModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full relative" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Scooter Shipping Cost</h3>
+                <button
+                  onClick={() => {
+                    setIsScooterShippingCostModalOpen(false);
+                    setScooterShippingCost('');
+                  }}
+                  className="p-1 rounded-full bg-white hover:bg-gray-100 text-gray-400 hover:text-gray-500"
+                >
+                  <XMarkIcon className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                Please enter the actual shipping cost for this scooter delivery (in EGP).
+              </p>
+              <form onSubmit={handleScooterShippingCostSubmit}>
+                <input
+                  type="number"
+                  value={scooterShippingCost}
+                  onChange={(e) => setScooterShippingCost(e.target.value)}
+                  placeholder="Enter shipping cost (EGP)"
+                  className="w-full p-2 border rounded-md mb-4 bg-white text-gray-900"
+                  min="0"
+                  step="0.01"
+                  required
+                  autoFocus
+                />
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Fulfillment Date
+                  </label>
+                  <DatePicker
+                    selected={scooterFulfillmentDate}
+                    onChange={(date: Date | null) => {
+                      if (date) {
+                        setScooterFulfillmentDate(date);
+                      }
+                    }}
+                    dateFormat="yyyy-MM-dd"
+                    className="w-full p-2 border rounded-md bg-white text-gray-900"
+                    maxDate={new Date()}
+                    required
+                  />
+                </div>
+                <div className="flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsScooterShippingCostModalOpen(false);
+                      setScooterShippingCost('');
+                      setScooterFulfillmentDate(new Date());
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+                  >
+                    Save & Fulfill
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Other Company Shipping Cost Modal */}
+        {isCompanyShippingCostModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full relative" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Shipping Company Cost</h3>
+                <button
+                  onClick={() => {
+                    setIsCompanyShippingCostModalOpen(false);
+                    setCompanyShippingCost('');
+                  }}
+                  className="p-1 rounded-full bg-white hover:bg-gray-100 text-gray-400 hover:text-gray-500"
+                >
+                  <XMarkIcon className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                Please enter the actual shipping cost for this shipping company delivery (in EGP).
+              </p>
+              <form onSubmit={handleCompanyShippingCostSubmit}>
+                <input
+                  type="number"
+                  value={companyShippingCost}
+                  onChange={(e) => setCompanyShippingCost(e.target.value)}
+                  placeholder="Enter shipping cost (EGP)"
+                  className="w-full p-2 border rounded-md mb-4 bg-white text-gray-900"
+                  min="0"
+                  step="0.01"
+                  required
+                  autoFocus
+                />
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Fulfillment Date
+                  </label>
+                  <DatePicker
+                    selected={companyFulfillmentDate}
+                    onChange={(date: Date | null) => {
+                      if (date) {
+                        setCompanyFulfillmentDate(date);
+                      }
+                    }}
+                    dateFormat="yyyy-MM-dd"
+                    className="w-full p-2 border rounded-md bg-white text-gray-900"
+                    maxDate={new Date()}
+                    required
+                  />
+                </div>
+                <div className="flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCompanyShippingCostModalOpen(false);
+                      setCompanyShippingCost('');
+                      setCompanyFulfillmentDate(new Date());
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+                  >
+                    Save & Fulfill
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Pickup Fulfillment Date Modal */}
+        {isPickupFulfillmentDateModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full relative" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Pickup Order Fulfillment</h3>
+                <button
+                  onClick={() => {
+                    setIsPickupFulfillmentDateModalOpen(false);
+                    setPickupFulfillmentDate(new Date());
+                  }}
+                  className="p-1 rounded-full bg-white hover:bg-gray-100 text-gray-400 hover:text-gray-500"
+                >
+                  <XMarkIcon className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                Please select the fulfillment and paid date for this pickup order.
+              </p>
+              <form onSubmit={handlePickupFulfillmentDateSubmit}>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Fulfillment & Paid Date
+                  </label>
+                  <DatePicker
+                    selected={pickupFulfillmentDate}
+                    onChange={(date: Date | null) => {
+                      if (date) {
+                        setPickupFulfillmentDate(date);
+                      }
+                    }}
+                    dateFormat="yyyy-MM-dd"
+                    className="w-full p-2 border rounded-md bg-white text-gray-900"
+                    maxDate={new Date()}
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div className="flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPickupFulfillmentDateModalOpen(false);
+                      setPickupFulfillmentDate(new Date());
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+                  >
+                    Save & Fulfill
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Cancellation Reason Dialog */}
+        {isCancellationReasonModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 relative" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Cancel Order</h3>
+                <button
+                  onClick={() => {
+                    setIsCancellationReasonModalOpen(false);
+                    setCancellationReason('');
+                    setPendingCancellationStatus(null);
+                  }}
+                  className="p-1 rounded-full bg-white hover:bg-gray-100 text-gray-400 hover:text-gray-500"
+                >
+                  <XMarkIcon className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                Please provide a reason for cancelling this order. This will be saved with the order.
+              </p>
+              <form onSubmit={handleCancellationReasonSubmit}>
+                <textarea
+                  value={cancellationReason}
+                  onChange={(e) => setCancellationReason(e.target.value)}
+                  placeholder="Enter cancellation reason..."
+                  className="w-full h-32 p-2 border rounded-md mb-4 bg-white text-gray-900"
+                  required
+                  autoFocus
+                />
+                <div className="flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCancellationReasonModalOpen(false);
+                      setCancellationReason('');
+                      setPendingCancellationStatus(null);
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700"
+                  >
+                    Confirm Cancellation
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         )}
 
         {/* Tag Management Dialog */}
