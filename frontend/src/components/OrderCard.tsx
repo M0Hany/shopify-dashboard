@@ -33,115 +33,172 @@ interface OrderCardProps {
 
 // Add new ShippingStatus component
 const ShippingStatus: React.FC<{ 
-  status: string; 
   orderTags: string[];
+  orderId: number;
   fulfillments?: Array<{
     id: number;
     status: string;
-    shipment_status?: string;
+    displayStatus?: string;
     tracking_company?: string;
     tracking_number?: string;
     created_at?: string;
     updated_at?: string;
   }>;
-}> = ({ status, orderTags, fulfillments }) => {
-  // Check if order is shipped with ShipBlu
-  const isShipBlu = orderTags.some((tag: string) => 
-    tag.trim().toLowerCase() === 'sent to shipblu'
-  );
-
-  // Get ShipBlu delivery status from fulfillments
-  const getShipBluStatus = () => {
-    if (!isShipBlu || !fulfillments || fulfillments.length === 0) return null;
+  onUpdateStatus?: (orderId: number, status: string) => void;
+  onUpdateTags?: (orderId: number, newTags: string[]) => void;
+}> = ({ orderTags, orderId, fulfillments, onUpdateStatus, onUpdateTags }) => {
+  // Get delivery status from fulfillments displayStatus
+  const getDeliveryStatus = (): string | null => {
+    if (!fulfillments || fulfillments.length === 0) return null;
     
-    // Find the most recent fulfillment with shipment_status
+    // Find the most recent fulfillment with displayStatus
     const fulfillmentWithStatus = fulfillments
-      .filter(f => f.shipment_status)
+      .filter(f => f.displayStatus)
       .sort((a, b) => {
         const aDate = a.updated_at ? new Date(a.updated_at).getTime() : 0;
         const bDate = b.updated_at ? new Date(b.updated_at).getTime() : 0;
         return bDate - aDate; // Most recent first
       })[0];
     
-    return fulfillmentWithStatus?.shipment_status || null;
+    return fulfillmentWithStatus?.displayStatus || null;
   };
 
-  // Get shipping date from tags
-  const getShippingDaysAgo = () => {
-    const now = new Date();
-    const shippingDateTag = orderTags.find((tag: string) => tag.trim().startsWith('shipping_date:'));
-    if (shippingDateTag) {
-      const dateStr = shippingDateTag.trim().split(':')[1]?.trim();
-      if (dateStr) {
-        const shippingDate = new Date(dateStr);
-        const diffTime = Math.abs(now.getTime() - shippingDate.getTime());
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        return `Shipped ${diffDays} days ago`;
-      }
+  // Map Shopify displayStatus enum to human-readable text
+  const formatDisplayStatus = (displayStatus: string | null): string => {
+    if (!displayStatus) return 'No status';
+    
+    // Map enum values to human-readable text
+    const statusMap: Record<string, string> = {
+      'IN_TRANSIT': 'In transit',
+      'OUT_FOR_DELIVERY': 'Out for delivery',
+      'ATTEMPTED_DELIVERY': 'Attempted delivery',
+      'DELAYED': 'Delayed',
+      'FAILED_DELIVERY': 'Failed delivery',
+      'DELIVERED': 'Delivered',
+      'TRACKING_ADDED': 'Tracking Added',
+      'FULFILLED': 'Tracking Added',
+      'NOT_DELIVERED': 'Cancelled',
+      'NO_STATUS': 'No status'
+    };
+    
+    return statusMap[displayStatus] || displayStatus.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+  };
+
+  // Get color based on delivery status
+  const getStatusColor = (displayStatus: string | null): { bg: string; border: string; text: string; icon: string } => {
+    if (!displayStatus) {
+      return {
+        bg: 'bg-gray-50',
+        border: 'border-gray-200',
+        text: 'text-gray-700',
+        icon: 'text-gray-500'
+      };
     }
-    return 'Shipped recently';
+    
+    const statusUpper = displayStatus.toUpperCase();
+    
+    // Not Delivered = Cancelled (red, highlighted)
+    if (statusUpper === 'NOT_DELIVERED') {
+      return {
+        bg: 'bg-red-50',
+        border: 'border-red-300',
+        text: 'text-red-800',
+        icon: 'text-red-600'
+      };
+    } else if (statusUpper === 'DELIVERED') {
+      return {
+        bg: 'bg-green-50',
+        border: 'border-green-300',
+        text: 'text-green-800',
+        icon: 'text-green-600'
+      };
+    } else if (statusUpper === 'IN_TRANSIT' || statusUpper === 'OUT_FOR_DELIVERY') {
+      return {
+        bg: 'bg-blue-50',
+        border: 'border-blue-300',
+        text: 'text-blue-800',
+        icon: 'text-blue-600'
+      };
+    } else if (statusUpper === 'DELAYED' || statusUpper === 'FAILED_DELIVERY' || statusUpper === 'ATTEMPTED_DELIVERY') {
+      return {
+        bg: 'bg-yellow-50',
+        border: 'border-yellow-300',
+        text: 'text-yellow-800',
+        icon: 'text-yellow-600'
+      };
+    } else {
+      // Fulfilled / Tracking Added - subtle gray (not picked up yet)
+      return {
+        bg: 'bg-gray-50',
+        border: 'border-gray-200',
+        text: 'text-gray-700',
+        icon: 'text-gray-500'
+      };
+    }
   };
 
-  // Get shipping barcode from tags
-  const getShippingBarcode = () => {
-    const barcodeTag = orderTags.find((tag: string) => tag.trim().startsWith('shipping_barcode:'));
-    return barcodeTag ? barcodeTag.trim().split(':')[1]?.trim() : null;
+  const deliveryStatus = getDeliveryStatus();
+  const formattedStatus = formatDisplayStatus(deliveryStatus);
+  const colors = getStatusColor(deliveryStatus);
+  const isNotDelivered = deliveryStatus?.toUpperCase() === 'NOT_DELIVERED';
+  const isShipped = orderTags.some((tag: string) => tag.trim().toLowerCase() === 'shipped');
+
+  const handleMarkAsCancelled = () => {
+    if (!onUpdateTags || !onUpdateStatus) return;
+    
+    const currentTags: string[] = Array.isArray(orderTags) 
+      ? orderTags 
+      : typeof orderTags === 'string'
+        ? orderTags.split(',').map((t: string) => t.trim())
+        : [];
+    
+    // Remove existing status tags
+    const statusTags = ['order_ready', 'on_hold', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+    let filtered = currentTags.filter((tag: string) => {
+      const trimmed = tag.trim().toLowerCase();
+      return !statusTags.some((st: string) => st.trim().toLowerCase() === trimmed) &&
+             !tag.trim().toLowerCase().startsWith('cancellation_reason:');
+    });
+    
+    // Add cancelled tag
+    filtered = [...filtered, 'cancelled'];
+    
+    // Add cancelled_date tag
+    const today = format(new Date(), 'yyyy-MM-dd');
+    filtered = filtered.filter(tag => !tag.toLowerCase().startsWith('cancelled_date:'));
+    filtered = [...filtered, `cancelled_date:${today}`];
+    
+    // If order is shipped, add cancelled_after_shipping tag
+    if (isShipped) {
+      filtered = [...filtered, 'cancelled_after_shipping'];
+    }
+    
+    // Update tags first
+    onUpdateTags(orderId, filtered);
+    
+    // Then update status
+    onUpdateStatus(orderId, 'cancelled');
   };
-
-  // Get shipping status from tags
-  const getShippingStatus = () => {
-    const statusTag = orderTags.find((tag: string) => tag.trim().startsWith('shipping_status:'));
-    return statusTag ? statusTag.trim().split(':')[1]?.trim() : null;
-  };
-
-  const shippingBarcode = getShippingBarcode();
-  const shippingStatus = getShippingStatus();
-  const shipBluStatus = getShipBluStatus();
-
-  // If ShipBlu, show ShipBlu status; otherwise show regular shipping status
-  if (isShipBlu) {
-    return (
-      <div className="flex items-center gap-2 p-2 bg-blue-50 rounded-md">
-        <TruckIcon className="w-5 h-5 text-blue-600" />
-        <div className="flex flex-col">
-          <span className="text-sm text-blue-700 font-medium">
-            {getShippingDaysAgo()}
-          </span>
-          {shipBluStatus && (
-            <div className="text-xs text-blue-600">
-              <div className="italic">
-                Delivery Status: {shipBluStatus}
-              </div>
-            </div>
-          )}
-          {shippingBarcode && (
-            <div className="text-xs font-mono text-blue-500 mt-1">
-              {shippingBarcode}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div className="flex items-center gap-2 p-2 bg-purple-50 rounded-md">
-      <TruckIcon className="w-5 h-5 text-purple-600" />
-      <div className="flex flex-col">
-        <span className="text-sm text-purple-700 font-medium">
-          {getShippingDaysAgo()}
-        </span>
-        {shippingStatus && (
-          <div className="text-xs text-purple-600">
-            <div className="italic">
-              {shippingStatus}
-            </div>
+    <div className={`w-full mb-4 p-4 rounded-lg border-2 ${colors.bg} ${colors.border} shadow-sm`}>
+      <div className="flex items-center gap-3">
+        <TruckIcon className={`w-6 h-6 ${colors.icon} flex-shrink-0`} />
+        <div className="flex-1">
+          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+            Delivery Status
           </div>
-        )}
-        {shippingBarcode && (
-          <div className="text-xs font-mono text-purple-500 mt-1">
-            {shippingBarcode}
+          <div className={`text-lg font-bold ${colors.text}`}>
+            {formattedStatus}
           </div>
+        </div>
+        {isNotDelivered && onUpdateStatus && onUpdateTags && (
+          <button
+            onClick={handleMarkAsCancelled}
+            className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 transition-colors whitespace-nowrap"
+          >
+            Mark as Cancelled
+          </button>
         )}
       </div>
     </div>
@@ -286,10 +343,41 @@ const OrderCard: React.FC<OrderCardProps> = ({
     return null;
   };
 
-  // Detect making time from line items
-  const makingTimeDays = detectMakingTime(order.line_items || []);
-  const isRushOrder = makingTimeDays === 3;
-  const isHandmadeOrder = makingTimeDays === 7;
+  // Detect rush type from line items (Rushed, Standard, or Mix)
+  const getRushType = (): 'Rushed' | 'Standard' | 'Mix' => {
+    const lineItems = order.line_items || [];
+    if (lineItems.length === 0) return 'Standard';
+    
+    let hasRushed = false;
+    let hasStandard = false;
+    
+    // Check each line item for making time
+    for (const item of lineItems) {
+      const makingTimeDays = detectMakingTime([item]);
+      if (makingTimeDays === 3) {
+        hasRushed = true;
+      } else if (makingTimeDays === 7 || makingTimeDays === null) {
+        hasStandard = true;
+      }
+    }
+    
+    // If order has both rushed and standard items, it's a Mix
+    if (hasRushed && hasStandard) {
+      return 'Mix';
+    }
+    
+    // If only rushed items found
+    if (hasRushed) {
+      return 'Rushed';
+    }
+    
+    // Default to Standard
+    return 'Standard';
+  };
+
+  const rushType = getRushType();
+  const isRushOrder = rushType === 'Rushed';
+  const isHandmadeOrder = rushType === 'Standard' && !isRushOrder;
   
   // Separate regular line items from addon line items
   const regularLineItems = (order.line_items || []).filter((item: any) => {
@@ -314,6 +402,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const startDateTag = trimmedTags.find((tag: string) => tag.startsWith('custom_start_date:'));
   const orderReadyDateTag = trimmedTags.find((tag: string) => tag.toLowerCase().startsWith('order_ready_date:'));
   const movedToOnHoldDateTag = trimmedTags.find((tag: string) => tag.toLowerCase().startsWith('moved_to_on_hold:'));
+  const customerConfirmedDateTag = trimmedTags.find((tag: string) => tag.toLowerCase().startsWith('customer_confirmed_date:'));
+  const shippedDateTag = trimmedTags.find((tag: string) => tag.toLowerCase().startsWith('shipped_date:') || tag.toLowerCase().startsWith('shipping_date:'));
   
   // Calculate dates in Cairo timezone
   let startDate;
@@ -340,6 +430,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
   
   if (!dueDate) {
     // Calculate due date based on making time if detected, otherwise default to 7 days
+    // For mixed orders, use the longest making time (7 days for standard)
+    const makingTimeDays = detectMakingTime(order.line_items || []);
     const daysToAdd = makingTimeDays || 7;
     dueDate = new Date(startDate);
     dueDate.setDate(dueDate.getDate() + daysToAdd);
@@ -439,8 +531,58 @@ const OrderCard: React.FC<OrderCardProps> = ({
     }
   };
 
+  // Calculate days since customer_confirmed_date
+  const getDaysInConfirmed = (): number | null => {
+    if (!customerConfirmedDateTag) return null;
+    try {
+      const dateStr = customerConfirmedDateTag.split(':')[1];
+      const confirmedDate = convertToCairoTime(new Date(dateStr));
+      if (isNaN(confirmedDate.getTime())) return null;
+      
+      const now = convertToCairoTime(new Date());
+      // Reset hours to midnight for accurate day calculation
+      const confirmed = new Date(confirmedDate);
+      confirmed.setHours(0, 0, 0, 0);
+      const current = new Date(now);
+      current.setHours(0, 0, 0, 0);
+      
+      // Calculate days from customer_confirmed_date to now
+      const diffTime = current.getTime() - confirmed.getTime();
+      const days = Math.round(diffTime / (1000 * 60 * 60 * 24));
+      return Math.max(0, days); // Don't show negative days
+    } catch (error) {
+      return null;
+    }
+  };
+
+  // Calculate days since shipped_date
+  const getDaysInShipped = (): number | null => {
+    if (!shippedDateTag) return null;
+    try {
+      const dateStr = shippedDateTag.split(':')[1];
+      const shippedDate = convertToCairoTime(new Date(dateStr));
+      if (isNaN(shippedDate.getTime())) return null;
+      
+      const now = convertToCairoTime(new Date());
+      // Reset hours to midnight for accurate day calculation
+      const shipped = new Date(shippedDate);
+      shipped.setHours(0, 0, 0, 0);
+      const current = new Date(now);
+      current.setHours(0, 0, 0, 0);
+      
+      // Calculate days from shipped_date to now
+      const diffTime = current.getTime() - shipped.getTime();
+      const days = Math.round(diffTime / (1000 * 60 * 60 * 24));
+      return Math.max(0, days); // Don't show negative days
+    } catch (error) {
+      return null;
+    }
+  };
+
   const daysInOrderReady = getDaysInOrderReady();
   const daysInOnHold = getDaysInOnHold();
+  const daysInConfirmed = getDaysInConfirmed();
+  const daysInShipped = getDaysInShipped();
 
   // Determine the current status based on tags and fulfillment status
   const getCurrentStatus = () => {
@@ -624,6 +766,18 @@ const OrderCard: React.FC<OrderCardProps> = ({
         statusTag = 'customer_confirmed';
       } else if (newStatus.trim().toLowerCase() === 'order-ready') {
         statusTag = 'order_ready';
+        // Add order_ready tag and order_ready_date tag when manually changing to order-ready
+        const currentTags = getCurrentTags();
+        const today = format(new Date(), 'yyyy-MM-dd');
+        const orderReadyDateTag = `order_ready_date:${today}`;
+        // Remove any existing order_ready and order_ready_date tags
+        const filteredTags = currentTags.filter((tag: string) => 
+          !tag.startsWith('order_ready_date:') && tag.trim().toLowerCase() !== 'order_ready'
+        );
+        const updatedTags = [...filteredTags, 'order_ready', orderReadyDateTag];
+        if (onUpdateTags) {
+          onUpdateTags(order.id, updatedTags);
+        }
       } else if (newStatus.trim().toLowerCase() === 'on_hold') {
         statusTag = 'on_hold';
       }
@@ -769,7 +923,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
     // Now update status to fulfilled
     if (onUpdateStatus) {
       setLocalPriority(false);
-      onUpdateStatus(order.id, `fulfilled,fulfillment_date:${selectedDate}`.trim());
+      onUpdateStatus(order.id, 'fulfilled');
     }
     
     // Close modal and reset cost and date
@@ -821,7 +975,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
     // Now update status to fulfilled
     if (onUpdateStatus) {
       setLocalPriority(false);
-      onUpdateStatus(order.id, `fulfilled,fulfillment_date:${selectedDate}`.trim());
+      onUpdateStatus(order.id, 'fulfilled');
     }
     
     // Close modal and reset cost and date
@@ -882,6 +1036,9 @@ const OrderCard: React.FC<OrderCardProps> = ({
     // Get current tags
     const currentTags = getCurrentTags();
     
+    // Check if order is shipped
+    const isShipped = trimmedTags.includes('shipped');
+    
     // Remove existing status tags and cancellation_reason tag
     const statusTags = ['order_ready', 'on_hold', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
     let filtered = currentTags.filter((tag: string) => {
@@ -892,6 +1049,16 @@ const OrderCard: React.FC<OrderCardProps> = ({
     
     // Add cancelled tag and cancellation reason tag
     filtered = [...filtered, 'cancelled', `cancellation_reason:${cancellationReason.trim()}`];
+    
+    // Add cancelled_date tag
+    const today = format(new Date(), 'yyyy-MM-dd');
+    filtered = filtered.filter(tag => !tag.toLowerCase().startsWith('cancelled_date:'));
+    filtered = [...filtered, `cancelled_date:${today}`];
+    
+    // If order is shipped, add cancelled_after_shipping tag
+    if (isShipped) {
+      filtered = [...filtered, 'cancelled_after_shipping'];
+    }
     
     // Update tags first
     if (onUpdateTags) {
@@ -1127,10 +1294,13 @@ Could you kindly confirm if you'll be available to receive it during that time? 
   
   const cancellationReasonText = getCancellationReason();
   
-  // Check if order was cancelled after shipping (has cancelled tag AND shipping cost tag)
-  const isCancelledAfterShipping = isOrderCancelled && (
-    trimmedTags.some((tag: string) => tag.trim().toLowerCase().startsWith('scooter_shipping_cost:')) ||
-    trimmedTags.some((tag: string) => tag.trim().toLowerCase().startsWith('shipping_company_cost:'))
+  // Check if order was cancelled after shipping (has cancelled tag AND cancelled_after_shipping tag)
+  const isCancelledAfterShipping = isOrderCancelled && trimmedTags.includes('cancelled_after_shipping');
+  
+  // Check if shipping cost was incurred (has shipping cost tag)
+  const hasShippingCost = trimmedTags.some((tag: string) => 
+    tag.trim().toLowerCase().startsWith('scooter_shipping_cost:') ||
+    tag.trim().toLowerCase().startsWith('shipping_company_cost:')
   );
 
   const handleDeleteClick = (e: React.MouseEvent) => {
@@ -1290,7 +1460,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
       const dateStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
       const orderReadyDateTag = `order_ready_date:${dateStr}`;
       // Remove any existing order_ready_date tag
-      filtered = filtered.filter(tag => !tag.startsWith('order_ready_date:'));
+      filtered = filtered.filter((tag: string) => !tag.startsWith('order_ready_date:'));
       filtered = [...filtered, orderReadyDateTag];
       
       // Add automated_whatsapp_confirmation tag if it doesn't exist
@@ -1599,12 +1769,8 @@ Could you kindly confirm if you'll be available to receive it during that time? 
   return (
     <>
     <div 
-      className={`bg-white rounded-lg border ${isOrderCancelled ? 'border-red-200' : 'border-gray-200'} transition-all duration-200 ${
-        isRushOrder ? 'border-l-4 border-l-red-500 hover:border-l-red-500' : 
-        isHandmadeOrder ? 'border-l-4 border-l-blue-500 hover:border-l-blue-500' : 
-        'hover:border-gray-300'
-      } ${isNoReplyCancelled ? 'border-2 border-red-400 bg-red-50' : ''} ${isConfirmedFromOnHold ? 'ring-2 ring-amber-400 bg-amber-50' : ''} ${isCancelledAfterShipping ? 'bg-red-100 border-2 border-red-500' : ''}`}
-      title={isRushOrder ? 'Rush Order (3 days)' : isHandmadeOrder ? 'Handmade Timeline (7 days)' : isCancelledAfterShipping ? 'Cancelled after shipping - shipping cost incurred' : undefined}
+      className="bg-white rounded-lg border border-gray-200 transition-all duration-200 hover:border-gray-300"
+      title={rushType === 'Rushed' ? 'Rush Order (3 days)' : rushType === 'Mix' ? 'Mixed Order (Rushed & Standard items)' : rushType === 'Standard' ? 'Handmade Timeline (7 days)' : isCancelledAfterShipping ? (hasShippingCost ? 'Cancelled after shipping - shipping cost incurred' : 'Cancelled after shipping - may incur shipping costs') : undefined}
     >
       <div className="p-4">
         {/* Two-Column Header Layout */}
@@ -1634,7 +1800,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                   }`}
                   title={orderNumberCopied ? "Copied!" : "Click to copy order number"}
                 >
-                  {order.name} {orderNumberCopied && <ClipboardDocumentIcon className="w-3 h-3 text-green-600 inline-block ml-1" />}
+                  {order.name} • <span className={rushType === 'Rushed' ? 'text-red-600 font-medium' : rushType === 'Mix' ? 'text-orange-600 font-medium' : 'text-gray-600'}>{rushType}</span> {orderNumberCopied && <ClipboardDocumentIcon className="w-3 h-3 text-green-600 inline-block ml-1" />}
                 </span>
               </div>
             </div>
@@ -2121,29 +2287,54 @@ Could you kindly confirm if you'll be available to receive it during that time? 
           </div>
         </div>
 
-        {/* Cancellation Reason - show if cancelled */}
-        {isOrderCancelled && cancellationReasonText && (
-          <div className="mb-4 p-3 bg-red-50 rounded-md border border-red-200">
-            <div className="flex gap-2">
-              <XCircleIcon className="w-5 h-5 text-red-600 flex-shrink-0" />
+        {/* Warning boxes for different cancellation scenarios */}
+        {isCancelledAfterShipping && (
+          <div className={`mb-4 p-4 rounded-lg border-2 shadow-sm ${
+            hasShippingCost 
+              ? 'bg-red-50 border-red-400' 
+              : 'bg-yellow-50 border-yellow-400'
+          }`}>
+            <div className="flex items-center gap-3">
+              {hasShippingCost ? (
+                <XCircleIcon className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
+              ) : (
+                <ExclamationTriangleIcon className="w-6 h-6 text-yellow-600 flex-shrink-0 mt-0.5" />
+              )}
               <div className="flex-1">
-                <p className="text-xs font-semibold text-red-800 mb-1">Cancellation Reason:</p>
-                <p className="text-sm text-red-700">
-                  {cancellationReasonText}
-                </p>
+                <div className={`text-sm font-bold ${
+                  hasShippingCost ? 'text-red-800' : 'text-yellow-800'
+                }`}>
+                  {hasShippingCost ? 'Shipping Cost Incurred' : 'May Incur Shipping Cost'}
+                </div>
               </div>
             </div>
           </div>
         )}
         
-        {/* Highlight for cancelled after shipping */}
-        {isCancelledAfterShipping && (
-          <div className="mb-4 p-3 bg-red-200 rounded-md border-2 border-red-500">
-            <div className="flex items-center gap-2">
-              <ExclamationTriangleIcon className="w-5 h-5 text-red-700 flex-shrink-0" />
-              <p className="text-sm font-semibold text-red-800">
-                ⚠️ Order was cancelled after shipping - shipping cost was incurred
-              </p>
+        {/* No Reply Cancelled */}
+        {isNoReplyCancelled && (
+          <div className="mb-4 p-4 rounded-lg border-2 shadow-sm bg-orange-50 border-orange-400">
+            <div className="flex items-center gap-3">
+              <ClockIcon className="w-6 h-6 text-orange-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <div className="text-sm font-bold text-orange-800">
+                  No Reply Cancelled
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* Manual Cancellation with Reason */}
+        {isOrderCancelled && cancellationReasonText && !isCancelledAfterShipping && !isNoReplyCancelled && (
+          <div className="mb-4 p-4 rounded-lg border-2 shadow-sm bg-gray-50 border-gray-400">
+            <div className="flex items-center gap-3">
+              <XCircleIcon className="w-6 h-6 text-gray-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <div className="text-sm font-bold text-gray-800">
+                  {cancellationReasonText}
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -2165,13 +2356,13 @@ Could you kindly confirm if you'll be available to receive it during that time? 
 
         {/* Shipping Status - only show if shipped */}
         {!isOrderCancelled && !trimmedTags.includes('paid') && trimmedTags.includes('shipped') && (
-          <div className="mb-4">
-            <ShippingStatus 
-              status={order.packageENStatus || 'Pending pickup'} 
-              orderTags={trimmedTags}
-              fulfillments={order.fulfillments}
-            />
-          </div>
+          <ShippingStatus 
+            orderTags={trimmedTags}
+            orderId={order.id}
+            fulfillments={order.fulfillments}
+            onUpdateStatus={onUpdateStatus}
+            onUpdateTags={onUpdateTags}
+          />
         )}
 
         {/* Priority 1: Items Section - Most Prominent */}
@@ -2247,8 +2438,8 @@ Could you kindly confirm if you'll be available to receive it during that time? 
               <span className="text-[10px] font-medium">{getDaysLeftText()}</span>
             </div>
             
-            {/* Order Ready Days - Only show if order_ready_date tag exists and order is NOT on_hold */}
-            {daysInOrderReady !== null && currentStatus !== 'on_hold' && (
+            {/* Order Ready Days - Only show if order_ready_date tag exists and order is in order-ready status */}
+            {daysInOrderReady !== null && currentStatus === 'order-ready' && (
               <>
                 {/* Separator */}
                 <div className="h-3 w-px bg-gray-300" />
@@ -2259,8 +2450,8 @@ Could you kindly confirm if you'll be available to receive it during that time? 
               </>
             )}
             
-            {/* On Hold Days - Only show if moved_to_on_hold tag exists */}
-            {daysInOnHold !== null && (
+            {/* On Hold Days - Only show if moved_to_on_hold tag exists and order is in on_hold status */}
+            {daysInOnHold !== null && currentStatus === 'on_hold' && (
               <>
                 {/* Separator */}
                 <div className="h-3 w-px bg-gray-300" />
@@ -2271,8 +2462,32 @@ Could you kindly confirm if you'll be available to receive it during that time? 
               </>
             )}
             
+            {/* Confirmed Days - Only show if customer_confirmed_date tag exists and order is in confirmed or ready_to_ship status */}
+            {daysInConfirmed !== null && (currentStatus === 'confirmed' || currentStatus === 'ready_to_ship') && (
+              <>
+                {/* Separator */}
+                <div className="h-3 w-px bg-gray-300" />
+                <div className="flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-md border min-w-[60px] bg-green-50 border-green-200">
+                  <HandThumbUpIcon className="w-4 h-4 text-green-600" />
+                  <span className="text-[10px] font-medium text-green-700">{daysInConfirmed === 0 ? 'Today' : `${daysInConfirmed}d`}</span>
+                </div>
+              </>
+            )}
+            
+            {/* Shipped Days - Only show if shipped_date tag exists and order is in shipped status */}
+            {daysInShipped !== null && currentStatus === 'shipped' && (
+              <>
+                {/* Separator */}
+                <div className="h-3 w-px bg-gray-300" />
+                <div className="flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-md border min-w-[60px] bg-purple-50 border-purple-200">
+                  <TruckIcon className="w-4 h-4 text-purple-600" />
+                  <span className="text-[10px] font-medium text-purple-700">{daysInShipped === 0 ? 'Today' : `${daysInShipped}d`}</span>
+                </div>
+              </>
+            )}
+            
             {/* Separator - Only show if we have date boxes displayed */}
-            {((daysInOrderReady !== null && currentStatus !== 'on_hold') || daysInOnHold !== null) && (
+            {((daysInOrderReady !== null && currentStatus === 'order-ready') || (daysInOnHold !== null && currentStatus === 'on_hold') || (daysInConfirmed !== null && (currentStatus === 'confirmed' || currentStatus === 'ready_to_ship')) || (daysInShipped !== null && currentStatus === 'shipped')) && (
               <div className="h-3 w-px bg-gray-300" />
             )}
             

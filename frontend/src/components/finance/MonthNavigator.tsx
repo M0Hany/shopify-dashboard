@@ -39,13 +39,13 @@ export default function MonthNavigator({ selectedMonth, onMonthChange, showDateP
   const isFutureMonth = selectedMonth > `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-stretch border border-gray-300 rounded-lg bg-white overflow-hidden">
       <button
         onClick={() => navigateMonth('prev')}
-        className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
+        className="p-0 w-8 flex items-center justify-center text-gray-500 hover:text-gray-700 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200 flex-shrink-0 border-0 self-stretch"
         title="Previous month"
       >
-        <ChevronLeftIcon className="w-5 h-5 text-gray-600" />
+        <ChevronLeftIcon className="w-5 h-5" />
       </button>
       
       {showDatePicker && (
@@ -53,12 +53,13 @@ export default function MonthNavigator({ selectedMonth, onMonthChange, showDateP
           type="month"
           value={selectedMonth}
           onChange={(e) => onMonthChange(e.target.value)}
-          className="rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+          className="px-3 text-sm text-gray-900 bg-white border-0 focus:outline-none focus:ring-0 flex-1 min-w-0"
+          style={{ paddingTop: '0.375rem', paddingBottom: '0.375rem' }}
         />
       )}
       
       {!showDatePicker && (
-        <span className="text-sm text-gray-600 font-medium px-3 py-2 bg-gray-50 rounded-md border border-gray-200">
+        <span className="px-3 text-sm text-gray-900 bg-white flex-1 min-w-0 flex items-center" style={{ paddingTop: '0.375rem', paddingBottom: '0.375rem' }}>
           {formatMonthDisplay(selectedMonth)}
         </span>
       )}
@@ -66,16 +67,16 @@ export default function MonthNavigator({ selectedMonth, onMonthChange, showDateP
       <button
         onClick={() => navigateMonth('next')}
         disabled={isFutureMonth}
-        className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        className="p-0 w-8 flex items-center justify-center text-gray-500 hover:text-gray-700 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-all duration-200 flex-shrink-0 border-0 self-stretch"
         title="Next month"
       >
-        <ChevronRightIcon className="w-5 h-5 text-gray-600" />
+        <ChevronRightIcon className="w-5 h-5" />
       </button>
       
       {showToday && !isCurrentMonth && (
         <button
           onClick={goToCurrentMonth}
-          className="px-3 py-2 text-sm rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
+          className="px-3 py-2 text-xs font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200 flex-shrink-0 flex items-center"
           title="Go to current month"
         >
           Today
@@ -84,4 +85,3 @@ export default function MonthNavigator({ selectedMonth, onMonthChange, showDateP
     </div>
   );
 }
-

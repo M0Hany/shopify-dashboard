@@ -13,7 +13,6 @@ import {
   Cog6ToothIcon,
   CubeIcon
 } from '@heroicons/react/24/outline';
-import MonthNavigator from './MonthNavigator';
 import { SkeletonCard, SkeletonChart } from '../common/SkeletonLoader';
 import { 
   LineChart, 
@@ -206,15 +205,21 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
     gcTime: 0,
   });
 
-  // Fetch expenses when expenses modal is opened
+  // Fetch expenses - always fetch to calculate correct expenses in the box
   const { data: expensesForModal, isLoading: expensesModalLoading } = useQuery({
     queryKey: ['financial-expenses', selectedMonth],
     queryFn: () => financialService.getExpenses(selectedMonth),
-    enabled: showExpensesModal && !!selectedMonth,
+    enabled: !!selectedMonth,
     staleTime: 0,
     refetchOnMount: 'always',
     gcTime: 0,
   });
+
+  // Calculate expenses from expenses query (not from profit.total_expenses)
+  const calculatedExpenses = useMemo(() => {
+    if (!expensesForModal || expensesForModal.length === 0) return 0;
+    return expensesForModal.reduce((sum: number, expense: any) => sum + expense.amount, 0);
+  }, [expensesForModal]);
 
   // Fetch shipping records - always fetch to calculate correct profit/loss
   const { data: shippingRecordsForModal, isLoading: shippingRecordsModalLoading } = useQuery({
@@ -383,7 +388,7 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
     return format(date, 'MMMM yyyy');
   };
 
-  // Calculate revenue from actual orders (matching modal calculation)
+  // Calculate revenue from actual orders (only non-cancelled paid orders contribute to revenue)
   const calculatedRevenue = useMemo(() => {
     if (!fulfilledOrders || fulfilledOrders.length === 0) return 0;
     
@@ -391,6 +396,7 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
       const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) : [];
       const isCancelled = tags.some((tag: string) => tag.trim().toLowerCase() === 'cancelled');
       // Cancelled orders don't contribute to revenue (we didn't receive money)
+      // But they are included in the modal and their shipping costs are deducted from net
       return sum + (isCancelled ? 0 : parseFloat(order.total_price || '0'));
     }, 0);
   }, [fulfilledOrders]);
@@ -420,9 +426,8 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
   // Calculate DPP using calculated revenue and shipping cost (matching modal logic)
   // DPP = Revenue - Expenses - Shipping Cost
   const calculatedDPP = useMemo(() => {
-    const expenses = profit?.total_expenses ?? 0;
-    return calculatedRevenue - expenses - calculatedShippingCost;
-  }, [calculatedRevenue, calculatedShippingCost, profit?.total_expenses]);
+    return calculatedRevenue - calculatedExpenses - calculatedShippingCost;
+  }, [calculatedRevenue, calculatedExpenses, calculatedShippingCost]);
 
   // Calculate payouts and final profit directly from displayed numbers
   const calculatedPayouts = useMemo(() => {
@@ -477,53 +482,10 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
   ] : [];
 
   // Combined loading state - wait for all critical data before showing numbers
-  const isAllDataLoading = isLoading || ordersLoading || shippingRecordsModalLoading || configLoading;
+  const isAllDataLoading = isLoading || ordersLoading || shippingRecordsModalLoading || configLoading || expensesModalLoading;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h3 className="text-xl font-semibold text-gray-900">Profit Overview</h3>
-          <p className="text-sm text-gray-500 mt-1">Financial performance for {formatMonthDisplay(selectedMonth)}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <MonthNavigator 
-            selectedMonth={selectedMonth} 
-            onMonthChange={setSelectedMonth}
-            showDatePicker={true}
-            showToday={false}
-          />
-          {onNavigate && (
-            <>
-              <button
-                onClick={() => onNavigate('product-margins')}
-                className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-                title="Product Margins"
-              >
-                <CubeIcon className="w-5 h-5 text-gray-600" />
-              </button>
-              {onRefresh && (
-                <button
-                  onClick={onRefresh}
-                  disabled={isRefreshing}
-                  className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Refresh data"
-                >
-                  <ArrowPathIcon className={`w-5 h-5 text-gray-600 ${isRefreshing ? 'animate-spin' : ''}`} />
-                </button>
-              )}
-              <button
-                onClick={() => onNavigate('settings')}
-                className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-                title="Settings"
-              >
-                <Cog6ToothIcon className="w-5 h-5 text-gray-600" />
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
       {isAllDataLoading ? (
         <div className="space-y-6">
           <div className="flex justify-center items-center py-12">
@@ -602,14 +564,14 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
                 </div>
                 {previousProfit && (
                   <ComparisonBadge 
-                    current={profit?.total_expenses ?? 0} 
+                    current={calculatedExpenses} 
                     previous={previousProfit.total_expenses ?? 0} 
                     label="Expenses"
                   />
                 )}
               </div>
               <p className="text-3xl font-bold text-red-700">
-                EGP <AnimatedNumber value={profit?.total_expenses ?? 0} />
+                EGP <AnimatedNumber value={calculatedExpenses} />
               </p>
             </div>
 

@@ -90,8 +90,8 @@ export class ProfitEngineService {
    * Only uses 'paid' and 'paid_date' tags - no fallback to fulfilled tags
    */
   async getFulfilledOrdersForMonth(month: string): Promise<any[]> {
-    // Get all orders
-    const orders = await shopifyService.getOrders({ limit: 250 });
+    // Get all orders (no limit to ensure we get all paid orders for the month)
+    const orders = await shopifyService.getOrders({});
 
     // Filter for paid orders in the specified month
     const paidOrders = orders.filter(order => {
@@ -134,8 +134,8 @@ export class ProfitEngineService {
    * They have shipping_company_cost tags but are cancelled, so they represent pure shipping losses
    */
   async getCancelledOrdersWithShippingCosts(month: string): Promise<any[]> {
-    // Get all orders
-    const orders = await shopifyService.getOrders({ limit: 250 });
+    // Get all orders (no limit to ensure we get all cancelled orders with shipping costs)
+    const orders = await shopifyService.getOrders({});
 
     // Filter for cancelled orders with shipping costs in the specified month
     const cancelledOrders = orders.filter(order => {
@@ -149,32 +149,46 @@ export class ProfitEngineService {
       const isCancelled = tags.some(tag => tag.trim().toLowerCase() === 'cancelled');
       if (!isCancelled) return false;
 
-      // Check if order has shipping_company_cost tag (indicates shipping was paid)
+      // Check if order has shipping_company_cost OR scooter_shipping_cost tag (indicates shipping was paid)
       const hasShippingCost = tags.some(tag => 
-        tag.trim().startsWith('shipping_company_cost:')
+        tag.trim().startsWith('shipping_company_cost:') ||
+        tag.trim().startsWith('scooter_shipping_cost:')
       );
       if (!hasShippingCost) return false;
 
-      // Get paid_date from tags to determine the month
-      // For cancelled orders, we use paid_date to determine which month the shipping cost belongs to
-      const paidDateTag = tags.find(tag => 
+      // Get date from tags to determine the month
+      // For cancelled orders, we use paid_date, fulfillment_date, or shipping cost date to determine which month the shipping cost belongs to
+      let dateTag = tags.find(tag => 
         tag.trim().startsWith('paid_date:')
       );
-      if (!paidDateTag) {
-        // If no paid_date tag, try shipping_company_cost_date
-        const costDateTag = tags.find(tag => 
+      
+      if (!dateTag) {
+        // Try fulfillment_date
+        dateTag = tags.find(tag => 
+          tag.trim().startsWith('fulfillment_date:')
+        );
+      }
+      
+      if (!dateTag) {
+        // Try shipping_company_cost_date
+        dateTag = tags.find(tag => 
           tag.trim().startsWith('shipping_company_cost_date:')
         );
-        if (!costDateTag) return false;
-        
-        const dateStr = costDateTag.split(':')[1]?.trim();
-        if (!dateStr) return false;
-        
-        const orderMonth = dateStr.substring(0, 7); // YYYY-MM
-        return orderMonth === month;
+      }
+      
+      if (!dateTag) {
+        // Try scooter_shipping_cost_date (if it exists in the future)
+        dateTag = tags.find(tag => 
+          tag.trim().startsWith('scooter_shipping_cost_date:')
+        );
+      }
+      
+      if (!dateTag) {
+        // If no date tag found, exclude this order
+        return false;
       }
 
-      const dateStr = paidDateTag.split(':')[1]?.trim();
+      const dateStr = dateTag.split(':')[1]?.trim();
       if (!dateStr) return false;
 
       const orderMonth = dateStr.substring(0, 7); // YYYY-MM

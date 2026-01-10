@@ -156,8 +156,16 @@ async function updateOrderWithCustomerConfirmation(targetOrder: any, customerPho
   // Remove on_hold_reason tag if it exists (order is now confirmed)
   filtered = filtered.filter((t: string) => !t.trim().toLowerCase().startsWith('on_hold_reason:'));
   
+  // Remove existing customer_confirmed_date tag if it exists
+  filtered = filtered.filter((t: string) => !t.trim().toLowerCase().startsWith('customer_confirmed_date:'));
+  
   // Add customer_confirmed tag
   filtered = [...filtered, 'customer_confirmed'];
+  
+  // Add customer_confirmed_date tag with today's date
+  const today = new Date();
+  const confirmedDate = today.toISOString().split('T')[0]; // Get only YYYY-MM-DD
+  filtered = [...filtered, `customer_confirmed_date:${confirmedDate}`];
   
   // If order was in on_hold, add tag to highlight it was confirmed from on_hold
   const wasOnHold = currentTags.some((t: string) => t.trim().toLowerCase() === 'on_hold');
@@ -809,4 +817,4 @@ router.post('/webhook', express.json(), async (req, res) => {
   }
 });
 
-export default router; 
+export default router;

@@ -7,10 +7,8 @@ import {
   ArrowUpIcon,
   ArrowDownIcon,
   FunnelIcon,
-  ArrowDownTrayIcon,
-  ArrowLeftIcon
+  ArrowDownTrayIcon
 } from '@heroicons/react/24/outline';
-import MonthNavigator from './MonthNavigator';
 import { SkeletonTable } from '../common/SkeletonLoader';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import toast from 'react-hot-toast';
@@ -296,28 +294,9 @@ export default function ProductMarginsTab({ selectedMonth, setSelectedMonth, onB
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-            title="Back to Profit Overview"
-          >
-            <ArrowLeftIcon className="w-5 h-5 text-gray-600" />
-          </button>
-          <div>
-            <h3 className="text-xl font-semibold text-gray-900">Product Margins</h3>
-            <p className="text-sm text-gray-500 mt-1">Analyze profitability by product for {formatMonthDisplay(selectedMonth)}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <MonthNavigator 
-            selectedMonth={selectedMonth} 
-            onMonthChange={setSelectedMonth}
-            showDatePicker={true}
-            showToday={false}
-          />
-        </div>
+      <div className="mb-6">
+        <h3 className="text-xl font-semibold text-gray-900">Product Margins</h3>
+        <p className="text-sm text-gray-500 mt-1">Analyze profitability by product for {formatMonthDisplay(selectedMonth)}</p>
       </div>
 
       {/* Search and Filters */}

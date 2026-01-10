@@ -1,9 +1,9 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
-import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, FunnelIcon, CheckIcon, DocumentArrowUpIcon, ArrowPathIcon, ArrowUpCircleIcon, Squares2X2Icon, MapPinIcon, CalendarDaysIcon, TruckIcon, BoltIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, FunnelIcon, CheckIcon, DocumentArrowUpIcon, ArrowPathIcon, ArrowUpCircleIcon, Squares2X2Icon, MapPinIcon, CalendarDaysIcon, TruckIcon, BoltIcon, ClockIcon, SparklesIcon, PauseCircleIcon, HandThumbUpIcon, PaperAirplaneIcon, CheckBadgeIcon, BanknotesIcon, XCircleIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Menu, Popover, Transition } from '@headlessui/react';
@@ -207,6 +207,71 @@ const statusOptions = [
   { value: 'all', label: 'All Orders' },
 ];
 
+// Get status icon JSX element (matching OrderCard.tsx)
+const getStatusIcon = (status: string, className: string) => {
+  const baseClasses = 'w-5 h-5 flex-shrink-0';
+  const fullClassName = `${baseClasses} ${className}`;
+  
+  switch (status) {
+    case 'pending':
+      return <ClockIcon className={fullClassName} />;
+    case 'order-ready':
+      return <SparklesIcon className={fullClassName} />;
+    case 'on_hold':
+      return <PauseCircleIcon className={fullClassName} />;
+    case 'confirmed':
+      return <HandThumbUpIcon className={fullClassName} />;
+    case 'ready-to-ship':
+      return <PaperAirplaneIcon className={fullClassName} />;
+    case 'shipped':
+      return <TruckIcon className={fullClassName} />;
+    case 'fulfilled':
+      return <CheckBadgeIcon className={fullClassName} />;
+    case 'paid':
+      return <BanknotesIcon className={fullClassName} />;
+    case 'cancelled':
+      return <XCircleIcon className={fullClassName} />;
+    case 'all':
+      return <ViewColumnsIcon className={fullClassName} />;
+    default:
+      return <ClockIcon className={fullClassName} />;
+  }
+};
+
+// Get status color (matching OrderCard.tsx)
+const getStatusColor = (status: string, isActive: boolean) => {
+  if (isActive) {
+    // Active state - use the status color as background
+    switch (status) {
+      case 'pending':
+        return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+      case 'order-ready':
+        return 'bg-orange-500 text-white border-orange-600';
+      case 'on_hold':
+        return 'bg-amber-500 text-white border-amber-600';
+      case 'confirmed':
+        return 'bg-green-500 text-white border-green-600';
+      case 'ready-to-ship':
+        return 'bg-blue-600 text-white border-blue-700';
+      case 'shipped':
+        return 'bg-purple-600 text-white border-purple-700';
+      case 'fulfilled':
+        return 'bg-emerald-600 text-white border-emerald-700';
+      case 'cancelled':
+        return 'bg-red-600 text-white border-red-700';
+      case 'paid':
+        return 'bg-indigo-600 text-white border-indigo-700';
+      case 'all':
+        return 'bg-slate-700 text-white border-slate-800';
+      default:
+        return 'bg-slate-700 text-white border-slate-800';
+    }
+  } else {
+    // Inactive state - subtle gray with icon color
+    return 'bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:bg-gray-50';
+  }
+};
+
 const findOldestShippedOrderDate = (orders: Order[]): Date => {
   const shippedButNotFulfilledOrders = orders.filter(order => {
     const tags = Array.isArray(order.tags) ? 
@@ -275,7 +340,7 @@ const Orders = () => {
   const ordersRefreshTimerRef = useRef<number | null>(null);
   
   // Quick Filter state
-  const [activeQuickFilterTab, setActiveQuickFilterTab] = useState<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month'>('production');
+  const [activeQuickFilterTab, setActiveQuickFilterTab] = useState<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'>('production');
   const [selectedProductionItems, setSelectedProductionItems] = useState<Set<string>>(new Set());
   const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
   const [selectedDayRanges, setSelectedDayRanges] = useState<Set<string>>(new Set());
@@ -283,6 +348,8 @@ const Orders = () => {
   const [selectedRushTypes, setSelectedRushTypes] = useState<Set<string>>(new Set());
   const [selectedFulfillmentMonths, setSelectedFulfillmentMonths] = useState<Set<string>>(new Set());
   const [selectedPaidMonths, setSelectedPaidMonths] = useState<Set<string>>(new Set());
+  const [selectedCancelledMonths, setSelectedCancelledMonths] = useState<Set<string>>(new Set());
+  const [selectedCancelledReasons, setSelectedCancelledReasons] = useState<Set<string>>(new Set());
   const [isQuickFilterExpanded, setIsQuickFilterExpanded] = useState(false);
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
@@ -292,16 +359,38 @@ const Orders = () => {
   // Handle scroll to show/hide scroll-to-top button
   useEffect(() => {
     const handleScroll = () => {
-      setShowScrollToTop(window.scrollY > 300);
+      // Check both window scroll and main element scroll
+      const scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+      setShowScrollToTop(scrollY > 300);
     };
 
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
+    // Listen to window scroll (for normal scroll behavior)
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    
+    // Also listen to main element scroll if it exists (for contained scroll)
+    const mainElement = document.querySelector('main');
+    if (mainElement) {
+      mainElement.addEventListener('scroll', handleScroll, { passive: true });
+    }
+    
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (mainElement) {
+        mainElement.removeEventListener('scroll', handleScroll);
+      }
+    };
   }, []);
 
   // Scroll to top function
   const scrollToTop = () => {
+    // Try window scroll first
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    
+    // Also try scrolling the main element if it exists
+    const mainElement = document.querySelector('main');
+    if (mainElement) {
+      mainElement.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   // Read search query from URL params on mount or when search param changes
@@ -842,6 +931,65 @@ const Orders = () => {
       }
     }
     
+    // Quick filter: Cancelled calendar (for cancelled filter view)
+    if (selectedCancelledMonths.size > 0 && statusFilter === 'cancelled') {
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(t => t.trim())
+          : [];
+      
+      // Check if order is cancelled
+      const isCancelled = tags.some((tag: string) => tag.trim().toLowerCase() === 'cancelled');
+      if (!isCancelled) return false;
+      
+      // Get cancelled_date
+      const cancelledDateTag = tags.find((tag: string) => 
+        tag.trim().startsWith('cancelled_date:')
+      );
+      
+      if (cancelledDateTag) {
+        const dateStr = cancelledDateTag.split(':')[1]?.trim();
+        if (dateStr) {
+          const month = dateStr.substring(0, 7); // YYYY-MM
+          const [year, monthNum] = month.split('-');
+          const monthName = format(new Date(parseInt(year), parseInt(monthNum) - 1, 1), 'MMMM yyyy');
+          if (!selectedCancelledMonths.has(monthName)) return false;
+        } else {
+          return false; // Has tag but no date, exclude
+        }
+      } else {
+        return false; // No cancelled_date tag, exclude
+      }
+    }
+    
+    // Quick filter: Cancelled reason (for cancelled filter view)
+    if (selectedCancelledReasons.size > 0 && statusFilter === 'cancelled') {
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(t => t.trim())
+          : [];
+      
+      // Check if order is cancelled
+      const isCancelled = tags.some((tag: string) => tag.trim().toLowerCase() === 'cancelled');
+      if (!isCancelled) return false;
+      
+      // Check for cancelled_after_shipping
+      const isCancelledAfterShipping = tags.some((tag: string) => tag.trim().toLowerCase() === 'cancelled_after_shipping');
+      // Check for no_reply_cancelled
+      const isNoReplyCancelled = tags.some((tag: string) => tag.trim().toLowerCase() === 'no_reply_cancelled');
+      
+      let reason = 'Other';
+      if (isCancelledAfterShipping) {
+        reason = 'Cancelled After shipping';
+      } else if (isNoReplyCancelled) {
+        reason = 'No response';
+      }
+      
+      if (!selectedCancelledReasons.has(reason)) return false;
+    }
+    
     // Legacy filter: selected summary items (for backward compatibility)
     const matchesSummaryItems = selectedSummaryItems.size === 0 || 
       Array.from(selectedSummaryItems).some(itemTitle => orderContainsItem(order, itemTitle));
@@ -1374,7 +1522,10 @@ const Orders = () => {
 
   // Helper function to get day range label
   const getDayRange = (daysLeft: number): string => {
-    if (daysLeft < 0) return 'overdue';
+    if (daysLeft < 0) {
+      const absDays = Math.abs(daysLeft);
+      return absDays === 1 ? '-1 day' : `-${absDays} days`;
+    }
     if (daysLeft === 0) return 'today';
     if (daysLeft === 1) return '1 day';
     if (daysLeft === 2) return '2 days';
@@ -1405,9 +1556,33 @@ const Orders = () => {
 
   // Helper function to get rush type from order
   const getRushTypeFromOrder = (order: Order): string => {
-    const makingTimeDays = detectMakingTime(order.line_items || []);
-    if (makingTimeDays === 3) return 'Rushed';
-    // Default to Standard (including Unknown cases)
+    const lineItems = order.line_items || [];
+    if (lineItems.length === 0) return 'Standard';
+    
+    let hasRushed = false;
+    let hasStandard = false;
+    
+    // Check each line item for making time
+    for (const item of lineItems) {
+      const makingTimeDays = detectMakingTime([item]);
+      if (makingTimeDays === 3) {
+        hasRushed = true;
+      } else if (makingTimeDays === 7 || makingTimeDays === null) {
+        hasStandard = true;
+      }
+    }
+    
+    // If order has both rushed and standard items, it's a Mix
+    if (hasRushed && hasStandard) {
+      return 'Mix';
+    }
+    
+    // If only rushed items found
+    if (hasRushed) {
+      return 'Rushed';
+    }
+    
+    // Default to Standard
     return 'Standard';
   };
 
@@ -1556,9 +1731,19 @@ const Orders = () => {
 
 
   // Get visible tabs based on current status filter
-  // Order: production -> days -> city -> shipping -> rushed -> fulfillment_month -> paid_month
-  const getVisibleTabs = (): Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month'> => {
-    const tabs: Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month'> = [];
+  // Order: production -> days -> city -> shipping -> rushed -> fulfillment_month -> paid_month -> cancelled_calendar -> cancelled_reason
+  const getVisibleTabs = (): Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'> => {
+    const tabs: Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'> = [];
+    
+    // For cancelled view, show calendar and reason tabs
+    if (statusFilter === 'cancelled') {
+      tabs.push('cancelled_calendar');
+      tabs.push('cancelled_reason');
+      tabs.push('city');
+      tabs.push('shipping');
+      tabs.push('rushed');
+      return tabs;
+    }
     
     // For on_hold view, show all tabs
     if (statusFilter === 'on_hold') {
@@ -1662,8 +1847,46 @@ const Orders = () => {
       rangeCounts[range] = (rangeCounts[range] || 0) + 1;
     });
     
-    const rangeOrder = ['overdue', 'today', '1 day', '2 days', '3 days', '4 days', '5 days', '6 days', '7 days', '+7 days'];
-    return rangeOrder
+    // Separate negative days, zero/positive days, and +7 days
+    const negativeRanges: string[] = [];
+    const positiveRanges: string[] = [];
+    let plusSevenRange: string | null = null;
+    
+    Object.keys(rangeCounts).forEach(range => {
+      if (range.startsWith('-')) {
+        negativeRanges.push(range);
+      } else if (range === '+7 days') {
+        plusSevenRange = range;
+      } else {
+        positiveRanges.push(range);
+      }
+    });
+    
+    // Sort negative ranges (most negative first, e.g., -5, -4, -3, -2, -1)
+    negativeRanges.sort((a, b) => {
+      const aNum = parseInt(a.replace(/[^-\d]/g, ''));
+      const bNum = parseInt(b.replace(/[^-\d]/g, ''));
+      return aNum - bNum; // More negative first
+    });
+    
+    // Sort positive ranges in order: today, 1 day, 2 days, etc.
+    const positiveOrder = ['today', '1 day', '2 days', '3 days', '4 days', '5 days', '6 days', '7 days'];
+    positiveRanges.sort((a, b) => {
+      const aIndex = positiveOrder.indexOf(a);
+      const bIndex = positiveOrder.indexOf(b);
+      if (aIndex === -1 && bIndex === -1) return 0;
+      if (aIndex === -1) return 1;
+      if (bIndex === -1) return -1;
+      return aIndex - bIndex;
+    });
+    
+    // Combine: negative days (most negative first), then positive days, then +7 days
+    const allRanges = [...negativeRanges, ...positiveRanges];
+    if (plusSevenRange) {
+      allRanges.push(plusSevenRange);
+    }
+    
+    return allRanges
       .filter(range => rangeCounts[range] > 0)
       .map(range => ({ range, count: rangeCounts[range] }));
   };
@@ -1699,7 +1922,8 @@ const Orders = () => {
     
     const typeCounts: { [key: string]: number } = {
       'Rushed': 0,
-      'Standard': 0
+      'Standard': 0,
+      'Mix': 0
     };
     
     ordersToProcess.forEach(order => {
@@ -1708,7 +1932,7 @@ const Orders = () => {
     });
     
     // Only show types that have count > 0
-    const typeOrder = ['Rushed', 'Standard'];
+    const typeOrder = ['Rushed', 'Standard', 'Mix'];
     return typeOrder
       .filter(type => typeCounts[type] > 0)
       .map(type => ({ type, count: typeCounts[type] }));
@@ -1808,6 +2032,98 @@ const Orders = () => {
       });
   };
 
+  // Calculate data for cancelled calendar tab
+  const getCancelledCalendarData = () => {
+    if (!orders) return [];
+    
+    const ordersToProcess = selectedOrders.length > 0
+      ? orders.filter(order => selectedOrders.includes(order.id))
+      : orders.filter(order => filterOrdersByStatus(order));
+    
+    const monthCounts: { [key: string]: number } = {};
+    
+    ordersToProcess.forEach(order => {
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(t => t.trim())
+          : [];
+      
+      // Check if order is cancelled
+      const isCancelled = tags.some((tag: string) => tag.trim().toLowerCase() === 'cancelled');
+      if (!isCancelled) return;
+      
+      // Get cancelled_date
+      const cancelledDateTag = tags.find((tag: string) => 
+        tag.trim().startsWith('cancelled_date:')
+      );
+      
+      if (cancelledDateTag) {
+        const dateStr = cancelledDateTag.split(':')[1]?.trim();
+        if (dateStr) {
+          const month = dateStr.substring(0, 7); // YYYY-MM
+          const [year, monthNum] = month.split('-');
+          const monthName = format(new Date(parseInt(year), parseInt(monthNum) - 1, 1), 'MMMM yyyy');
+          monthCounts[monthName] = (monthCounts[monthName] || 0) + 1;
+        }
+      }
+    });
+    
+    // Sort by month (most recent first)
+    return Object.entries(monthCounts)
+      .map(([month, count]) => ({ month, count }))
+      .sort((a, b) => {
+        const aDate = new Date(a.month);
+        const bDate = new Date(b.month);
+        return bDate.getTime() - aDate.getTime(); // Descending (newest first)
+      });
+  };
+
+  // Calculate data for cancelled reason tab
+  const getCancelledReasonData = () => {
+    if (!orders) return [];
+    
+    const ordersToProcess = selectedOrders.length > 0
+      ? orders.filter(order => selectedOrders.includes(order.id))
+      : orders.filter(order => filterOrdersByStatus(order));
+    
+    const reasonCounts: { [key: string]: number } = {
+      'Cancelled After shipping': 0,
+      'No response': 0,
+      'Other': 0
+    };
+    
+    ordersToProcess.forEach(order => {
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string' 
+          ? order.tags.split(',').map(t => t.trim())
+          : [];
+      
+      // Check if order is cancelled
+      const isCancelled = tags.some((tag: string) => tag.trim().toLowerCase() === 'cancelled');
+      if (!isCancelled) return;
+      
+      // Check for cancelled_after_shipping
+      const isCancelledAfterShipping = tags.some((tag: string) => tag.trim().toLowerCase() === 'cancelled_after_shipping');
+      // Check for no_reply_cancelled
+      const isNoReplyCancelled = tags.some((tag: string) => tag.trim().toLowerCase() === 'no_reply_cancelled');
+      
+      if (isCancelledAfterShipping) {
+        reasonCounts['Cancelled After shipping']++;
+      } else if (isNoReplyCancelled) {
+        reasonCounts['No response']++;
+      } else {
+        reasonCounts['Other']++;
+      }
+    });
+    
+    return Object.entries(reasonCounts)
+      .map(([reason, count]) => ({ reason, count }))
+      .filter(item => item.count > 0)
+      .sort((a, b) => b.count - a.count);
+  };
+
   // Calculate accumulated item quantities for pending orders
   const calculatePendingItemsSummary = (ordersToUse?: Order[]) => {
     if (!orders) return { items: [], totalOrders: 0, totalPieces: 0 };
@@ -1891,8 +2207,10 @@ const Orders = () => {
       if (visibleTabs.length > 0) {
         // Only reset if current tab is not in visible tabs
         if (!visibleTabs.includes(activeQuickFilterTab)) {
-          // For paid orders, prefer paid_month tab
-          if (statusFilter === 'paid' && visibleTabs.includes('paid_month')) {
+          // For cancelled orders, prefer cancelled_calendar tab
+          if (statusFilter === 'cancelled' && visibleTabs.includes('cancelled_calendar')) {
+            setActiveQuickFilterTab('cancelled_calendar');
+          } else if (statusFilter === 'paid' && visibleTabs.includes('paid_month')) {
             setActiveQuickFilterTab('paid_month');
           } else if (statusFilter === 'fulfilled' && visibleTabs.includes('fulfillment_month')) {
             setActiveQuickFilterTab('fulfillment_month');
@@ -1922,6 +2240,10 @@ const Orders = () => {
           return getFulfillmentMonthData();
         case 'paid_month':
           return getPaidMonthData();
+        case 'cancelled_calendar':
+          return getCancelledCalendarData();
+        case 'cancelled_reason':
+          return getCancelledReasonData();
         default:
           return [];
       }
@@ -1944,6 +2266,10 @@ const Orders = () => {
           return selectedFulfillmentMonths;
         case 'paid_month':
           return selectedPaidMonths;
+        case 'cancelled_calendar':
+          return selectedCancelledMonths;
+        case 'cancelled_reason':
+          return selectedCancelledReasons;
         default:
           return new Set<string>();
       }
@@ -2010,6 +2336,22 @@ const Orders = () => {
             return newSet;
           });
           break;
+        case 'cancelled_calendar':
+          setSelectedCancelledMonths(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(value)) newSet.delete(value);
+            else newSet.add(value);
+            return newSet;
+          });
+          break;
+        case 'cancelled_reason':
+          setSelectedCancelledReasons(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(value)) newSet.delete(value);
+            else newSet.add(value);
+            return newSet;
+          });
+          break;
       }
     };
 
@@ -2022,6 +2364,8 @@ const Orders = () => {
       setSelectedRushTypes(new Set());
       setSelectedFulfillmentMonths(new Set());
       setSelectedPaidMonths(new Set());
+      setSelectedCancelledMonths(new Set());
+      setSelectedCancelledReasons(new Set());
     };
 
     const currentData = getCurrentTabData();
@@ -2036,7 +2380,9 @@ const Orders = () => {
       selectedShippingMethods.size > 0 ||
       selectedRushTypes.size > 0 ||
       selectedFulfillmentMonths.size > 0 ||
-      selectedPaidMonths.size > 0;
+      selectedPaidMonths.size > 0 ||
+      selectedCancelledMonths.size > 0 ||
+      selectedCancelledReasons.size > 0;
 
     // Calculate total revenue of selected orders (excluding cancelled orders)
     const selectedOrdersRevenue = useMemo(() => {
@@ -2060,10 +2406,26 @@ const Orders = () => {
       }, 0);
     }, [orders, selectedOrders]);
 
+    // Get empty message based on active tab
+    const getEmptyMessage = () => {
+      switch (activeQuickFilterTab) {
+        case 'cancelled_calendar':
+          return "Couldn't find cancelled_date tags";
+        case 'cancelled_reason':
+          return "Couldn't find cancellation data";
+        case 'fulfillment_month':
+          return "Couldn't find fulfillment_date tags";
+        case 'paid_month':
+          return "Couldn't find paid_date tags";
+        default:
+          return null;
+      }
+    };
+
     // Don't show card in "all orders" view
     if (statusFilter === 'all') return null;
 
-    if (currentData.length === 0) return null;
+    const emptyMessage = getEmptyMessage();
 
     const tabConfig = {
       production: { icon: '🧶', label: 'Production', tooltip: 'Production' },
@@ -2073,6 +2435,8 @@ const Orders = () => {
       rushed: { icon: '⚡', label: 'Rushed', tooltip: 'Rushed/Standard' },
       fulfillment_month: { icon: '📆', label: 'Month', tooltip: 'Fulfillment Month' },
       paid_month: { icon: '📅', label: 'Calendar', tooltip: 'Paid Month' },
+      cancelled_calendar: { icon: '📅', label: 'Calendar', tooltip: 'Cancelled Month' },
+      cancelled_reason: { icon: '❌', label: 'Reason', tooltip: 'Cancellation Reason' },
     };
 
     return (
@@ -2138,42 +2502,88 @@ const Orders = () => {
 
         {/* Content Area */}
         <div className="space-y-2">
-          {displayedItems.map((item: any, index: number) => {
-            const value = activeQuickFilterTab === 'production' ? item.title :
-                         activeQuickFilterTab === 'city' ? item.city :
-                         activeQuickFilterTab === 'days' ? item.range :
-                         activeQuickFilterTab === 'shipping' ? item.method :
-                         activeQuickFilterTab === 'fulfillment_month' ? item.month :
-                         activeQuickFilterTab === 'paid_month' ? item.month :
-                         item.type;
-            const count = item.quantity || item.count;
-            const isSelected = selectedItems.has(value);
-            
-            return (
-              <div 
-                key={index} 
-                onClick={(e) => handleItemClick(value, e)}
-                className={`flex justify-between items-center py-2 px-3 rounded-md border cursor-pointer transition-colors ${
-                  isSelected 
-                    ? 'bg-blue-200 border-blue-400 shadow-sm' 
-                    : 'bg-white border-gray-200 hover:border-blue-300 hover:bg-blue-50'
-                }`}
-                title={isSelected ? "Click to deselect" : "Click to filter by this item"}
-              >
-                <span className={`text-sm truncate flex-1 ${isSelected ? 'font-semibold text-blue-900' : 'text-gray-700'}`}>
-                  {value}
-                </span>
-                <div className="flex items-center gap-2">
-                  <span className={`text-sm font-semibold ${isSelected ? 'text-blue-900' : 'text-blue-600'}`}>
-                    {count}
+          {currentData.length === 0 && emptyMessage ? (
+            <div className="text-center py-8">
+              <p className="text-sm text-gray-600">{emptyMessage}</p>
+            </div>
+          ) : (
+            displayedItems.map((item: any, index: number) => {
+              const value = activeQuickFilterTab === 'production' ? item.title :
+                           activeQuickFilterTab === 'city' ? item.city :
+                           activeQuickFilterTab === 'days' ? item.range :
+                           activeQuickFilterTab === 'shipping' ? item.method :
+                           activeQuickFilterTab === 'fulfillment_month' ? item.month :
+                           activeQuickFilterTab === 'paid_month' ? item.month :
+                           activeQuickFilterTab === 'cancelled_calendar' ? item.month :
+                           activeQuickFilterTab === 'cancelled_reason' ? item.reason :
+                           item.type;
+              const count = item.quantity || item.count;
+              const isSelected = selectedItems.has(value);
+              
+              // Check if this is an "other-company" province (should be green)
+              const otherCompanyProvinces = [
+                'New Valley',
+                'North Sinai',
+                'South Sinai',
+                'Red Sea',
+                'Matrouh',
+                'Qena',
+                'Luxor',
+                'Aswan',
+                'Asyut',
+                'Beni Suef',
+                'Fayoum',
+                'Minya',
+                'Sohag'
+              ];
+              const isOtherCompanyProvince = activeQuickFilterTab === 'city' && otherCompanyProvinces.includes(value);
+              
+              return (
+                <div 
+                  key={index} 
+                  onClick={(e) => handleItemClick(value, e)}
+                  className={`flex justify-between items-center py-2 px-3 rounded-md border cursor-pointer transition-colors ${
+                    isSelected 
+                      ? isOtherCompanyProvince
+                        ? 'bg-green-200 border-green-400 shadow-sm'
+                        : 'bg-blue-200 border-blue-400 shadow-sm'
+                      : isOtherCompanyProvince
+                        ? 'bg-green-50 border-green-300 hover:border-green-400 hover:bg-green-100'
+                        : 'bg-white border-gray-200 hover:border-blue-300 hover:bg-blue-50'
+                  }`}
+                  title={isSelected ? "Click to deselect" : "Click to filter by this item"}
+                >
+                  <span className={`text-sm truncate flex-1 ${
+                    isSelected 
+                      ? isOtherCompanyProvince
+                        ? 'font-semibold text-green-900'
+                        : 'font-semibold text-blue-900'
+                      : isOtherCompanyProvince
+                        ? 'text-green-800'
+                        : 'text-gray-700'
+                  }`}>
+                    {value}
                   </span>
-                  {isSelected && (
-                    <CheckIcon className="w-4 h-4 text-blue-600" />
-                  )}
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-semibold ${
+                      isSelected 
+                        ? isOtherCompanyProvince
+                          ? 'text-green-900'
+                          : 'text-blue-900'
+                        : isOtherCompanyProvince
+                          ? 'text-green-700'
+                          : 'text-blue-600'
+                    }`}>
+                      {count}
+                    </span>
+                    {isSelected && (
+                      <CheckIcon className={`w-4 h-4 ${isOtherCompanyProvince ? 'text-green-600' : 'text-blue-600'}`} />
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
           {!isQuickFilterExpanded && currentData.length > 5 && (
             <div 
               className="text-xs text-blue-600 text-center py-1 font-medium cursor-pointer hover:text-blue-700"
@@ -2223,142 +2633,217 @@ const Orders = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Top Bar */}
-      <div className="bg-white border-b px-2 sm:px-4 py-2 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-        {/* Search */}
-        <div className="relative w-full sm:w-[400px]">
-          <input
-            type="text"
-            placeholder="Search orders..."
-            value={searchQuery}
-            onChange={(e) => handleSearchChange(e.target.value)}
-            className="block w-full pl-10 pr-10 py-2 text-gray-900 bg-white border border-gray-300 rounded-md text-sm placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-          />
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
-          </div>
-          {searchQuery && (
-            <button
-              onClick={handleClearSearch}
-              className="absolute inset-y-[1px] right-[1px] px-3 flex items-center justify-center bg-white rounded-r-md hover:bg-gray-50 focus:outline-none focus:ring-0"
-            >
-              <XMarkIcon className="h-5 w-5 text-gray-400 hover:text-gray-600" />
-            </button>
-          )}
-        </div>
-      </div>
-      
-      {/* Main Header */}
-      <div className="bg-white border-b px-4 sm:px-8 py-4 sm:py-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          {/* Left side - Title and Description */}
-          <div>
-            <h1 className="text-2xl sm:text-[28px] font-semibold text-gray-900 leading-tight">Orders</h1>
-            <p className="text-sm sm:text-base text-gray-500">Manage and track your customer orders</p>
+      {/* Compact Header - White Background */}
+      <div className="bg-white border-b border-gray-200 shadow-sm">
+        {/* Top Row: Search and Action Buttons */}
+        <div className="px-3 sm:px-4 py-2.5 flex items-center gap-2.5 bg-gray-50/50">
+          {/* Search */}
+          <div className="relative flex-1 min-w-0">
+            <input
+              type="text"
+              placeholder="Search orders..."
+              value={searchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              className="block w-full pl-10 pr-10 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-lg placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+            />
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
+            </div>
+            {searchQuery && (
+              <button
+                onClick={handleClearSearch}
+                className="absolute inset-y-0 right-0 pr-3 flex items-center justify-center rounded-r-lg transition-colors"
+                title="Clear search"
+              >
+                <XMarkIcon className="h-5 w-5 text-gray-400" />
+              </button>
+            )}
           </div>
 
-          {/* Right side - Filter, Sort, and Select All */}
-          <div className="flex flex-wrap items-center gap-2 sm:gap-4 w-full sm:w-auto">
-            {/* Filter Dropdown */}
-            <Popover className="relative">
-              {({ open, close }) => (
-                <>
-                  <Popover.Button
-                    className={`p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 ${open ? 'ring-2 ring-blue-500' : ''}`}
-                    title="Filter orders"
-                  >
-                    <FunnelIcon className="w-5 h-5 text-gray-600" />
-                  </Popover.Button>
-                  <Transition
-                    show={open}
-                    enter="transition duration-100 ease-out"
-                    enterFrom="transform scale-95 opacity-0"
-                    enterTo="transform scale-100 opacity-100"
-                    leave="transition duration-75 ease-in"
-                    leaveFrom="transform scale-100 opacity-100"
-                    leaveTo="transform scale-95 opacity-0"
-                  >
-                    <Popover.Panel className="absolute z-10 mt-2 w-48 bg-white border border-gray-200 rounded-md shadow-lg">
-                      <div className="py-1">
-                        {statusOptions.map(option => (
-                          <button
-                            key={option.value}
-                            onClick={() => {
-                              setPreviousStatusFilter(statusFilter);
-                              setStatusFilter(option.value);
-                              setIsSearchOverridingFilter(false);
-                              close();
-                            }}
-                            className={`w-full text-left px-4 py-2 text-sm bg-white ${statusFilter === option.value ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-gray-700'} hover:bg-gray-100`}
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
-                    </Popover.Panel>
-                  </Transition>
-                </>
-              )}
-            </Popover>
-
-            {/* Select All Button */}
+          {/* Compact Action Buttons Group */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {/* Select All */}
             <button
               onClick={handleSelectAll}
-              className={`p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 relative ${orders && selectedOrders.length === orders.filter(matchesAllFilters).length && orders.filter(matchesAllFilters).length > 0 ? 'bg-blue-50 border-blue-400' : ''}`}
+              className={`
+                relative p-1.5 rounded-lg transition-all duration-200
+                ${orders && selectedOrders.length === orders.filter(matchesAllFilters).length && orders.filter(matchesAllFilters).length > 0
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'text-gray-500'
+                }
+              `}
               title="Select all visible orders"
             >
-              <CheckIcon className={`w-5 h-5 ${orders && selectedOrders.length === orders.filter(matchesAllFilters).length && orders.filter(matchesAllFilters).length > 0 ? 'text-blue-600' : 'text-gray-600'}`} />
+              <CheckIcon className="w-5 h-5" />
               {selectedOrders.length > 0 && (
-                <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-xs rounded-full px-1.5 py-0.5">{selectedOrders.length}</span>
+                <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold text-white bg-blue-600 rounded-full">
+                  {selectedOrders.length}
+                </span>
               )}
             </button>
 
-            {/* Refresh Button */}
+            {/* Refresh */}
             <button
               onClick={handleManualRefreshWithLoading}
               disabled={ordersLoading || isRefreshing}
-              className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="p-1.5 rounded-lg text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
               title="Refresh orders"
             >
-              <ArrowPathIcon className={`w-5 h-5 text-gray-600 ${ordersLoading || isRefreshing ? 'animate-spin' : ''}`} />
+              <ArrowPathIcon className={`w-5 h-5 ${ordersLoading || isRefreshing ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
 
-        {/* Export Button and Bulk Actions - Only show when orders are selected */}
+        {/* Filter Icons - Icon Only, All Visible, No Scroll */}
+        <div className="px-3 sm:px-4 py-2 bg-white">
+          <div className="flex items-center justify-center gap-1 flex-wrap">
+            {statusOptions.map(option => {
+              const isActive = statusFilter === option.value;
+              
+              // Get background and icon color based on status and active state
+              const getButtonStyles = () => {
+                if (isActive) {
+                  // Active state - use icon color as background, white icon
+                  switch (option.value) {
+                    case 'pending':
+                      return { bg: 'bg-yellow-500', icon: 'text-white' };
+                    case 'order-ready':
+                      return { bg: 'bg-orange-500', icon: 'text-white' };
+                    case 'on_hold':
+                      return { bg: 'bg-amber-500', icon: 'text-white' };
+                    case 'confirmed':
+                      return { bg: 'bg-green-500', icon: 'text-white' };
+                    case 'ready-to-ship':
+                      return { bg: 'bg-blue-500', icon: 'text-white' };
+                    case 'shipped':
+                      return { bg: 'bg-purple-500', icon: 'text-white' };
+                    case 'fulfilled':
+                      return { bg: 'bg-emerald-500', icon: 'text-white' };
+                    case 'cancelled':
+                      return { bg: 'bg-red-500', icon: 'text-white' };
+                    case 'paid':
+                      return { bg: 'bg-indigo-500', icon: 'text-white' };
+                    case 'all':
+                      return { bg: 'bg-gray-600', icon: 'text-white' };
+                    default:
+                      return { bg: 'bg-gray-600', icon: 'text-white' };
+                  }
+                } else {
+                  // Inactive state - transparent background with colored icon
+                  switch (option.value) {
+                    case 'pending':
+                      return { bg: 'bg-transparent', icon: 'text-yellow-500' };
+                    case 'order-ready':
+                      return { bg: 'bg-transparent', icon: 'text-orange-500' };
+                    case 'on_hold':
+                      return { bg: 'bg-transparent', icon: 'text-amber-500' };
+                    case 'confirmed':
+                      return { bg: 'bg-transparent', icon: 'text-green-500' };
+                    case 'ready-to-ship':
+                      return { bg: 'bg-transparent', icon: 'text-blue-500' };
+                    case 'shipped':
+                      return { bg: 'bg-transparent', icon: 'text-purple-500' };
+                    case 'fulfilled':
+                      return { bg: 'bg-transparent', icon: 'text-emerald-500' };
+                    case 'cancelled':
+                      return { bg: 'bg-transparent', icon: 'text-red-500' };
+                    case 'paid':
+                      return { bg: 'bg-transparent', icon: 'text-indigo-500' };
+                    case 'all':
+                      return { bg: 'bg-transparent', icon: 'text-gray-400' };
+                    default:
+                      return { bg: 'bg-transparent', icon: 'text-gray-400' };
+                  }
+                }
+              };
+              
+              const styles = getButtonStyles();
+              
+              // Map background classes to actual colors for inline styles
+              const getBackgroundColor = () => {
+                if (isActive) {
+                  switch (option.value) {
+                    case 'pending': return '#eab308'; // yellow-500
+                    case 'order-ready': return '#f97316'; // orange-500
+                    case 'on_hold': return '#f59e0b'; // amber-500
+                    case 'confirmed': return '#22c55e'; // green-500
+                    case 'ready-to-ship': return '#3b82f6'; // blue-500
+                    case 'shipped': return '#a855f7'; // purple-500
+                    case 'fulfilled': return '#10b981'; // emerald-500
+                    case 'cancelled': return '#ef4444'; // red-500
+                    case 'paid': return '#6366f1'; // indigo-500
+                    case 'all': return '#4b5563'; // gray-600
+                    default: return '#4b5563';
+                  }
+                }
+                return 'transparent';
+              };
+              
+              return (
+                <button
+                  key={option.value}
+                  onClick={() => {
+                    setPreviousStatusFilter(statusFilter);
+                    setStatusFilter(option.value);
+                    setIsSearchOverridingFilter(false);
+                  }}
+                  className={`
+                    flex-shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-lg
+                    focus:outline-none focus:ring-0
+                  `}
+                  style={{
+                    backgroundColor: getBackgroundColor(),
+                    WebkitTapHighlightColor: 'transparent',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = getBackgroundColor();
+                    e.currentTarget.style.opacity = '1';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = getBackgroundColor();
+                    e.currentTarget.style.opacity = '1';
+                  }}
+                  title={option.label}
+                >
+                  {getStatusIcon(option.value, styles.icon)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Bulk Actions Bar - Only when orders selected */}
         {selectedOrders.length > 0 && (
-          <div className="mt-4 flex items-center gap-2">
+          <div className="px-3 sm:px-4 py-2.5 bg-blue-50 border-t border-blue-100 flex items-center gap-2 flex-wrap">
             <button
               onClick={handleExport}
-              className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              className="inline-flex items-center justify-center px-4 py-2 text-xs font-medium rounded-lg bg-blue-600 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200"
+              title={`Export ${selectedOrders.length} order${selectedOrders.length > 1 ? 's' : ''}`}
             >
-              Extract Delivery Form ({selectedOrders.length})
+              <DocumentArrowUpIcon className="w-4 h-4 mr-1.5" />
+              Export ({selectedOrders.length})
             </button>
 
-
-            <Menu as="div" className="relative inline-block text-left">
+            {/* Bulk Actions Menu */}
+            <Menu as="div" className="relative">
               {({ open }) => (
                 <>
-                  <div>
-                    <Menu.Button 
-                      className="inline-flex items-center justify-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                    >
-                      Bulk Status Update
-                      <ChevronDownIcon className="w-4 h-4 ml-1" />
-                    </Menu.Button>
-                  </div>
+                  <Menu.Button className="inline-flex items-center justify-center px-4 py-2 text-xs font-medium rounded-lg border border-gray-300 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200">
+                    Bulk Actions
+                    <ChevronDownIcon className="w-3.5 h-3.5 ml-1.5" />
+                  </Menu.Button>
                   {open && (
                     <Menu.Items
                       static
-                      className="absolute right-0 mt-1 w-48 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50"
+                      className="absolute left-0 mt-2 w-56 origin-top-left rounded-lg bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50 border border-gray-200"
                     >
                       <div className="py-1">
                         <Menu.Item>
                           {({ active }) => (
                             <button
                               className={`${
-                                active ? 'bg-gray-100' : ''
-                              } block w-full text-left px-4 py-2 text-sm text-white bg-orange-500 hover:bg-orange-600`}
+                                active ? 'bg-gray-50' : ''
+                              } block w-full text-left px-4 py-2 text-xs font-medium text-white bg-orange-500 transition-colors`}
                               onClick={() => handleBulkStatusUpdate('order-ready')}
                             >
                               Mark Order Ready
@@ -2369,8 +2854,8 @@ const Orders = () => {
                           {({ active }) => (
                             <button
                               className={`${
-                                active ? 'bg-gray-100' : ''
-                              } block w-full text-left px-4 py-2 text-sm text-white bg-green-600 hover:bg-green-700`}
+                                active ? 'bg-gray-50' : ''
+                              } block w-full text-left px-4 py-2 text-xs font-medium text-white bg-green-600 transition-colors`}
                               onClick={() => handleBulkStatusUpdate('confirmed')}
                             >
                               Mark Confirmed
@@ -2381,8 +2866,8 @@ const Orders = () => {
                           {({ active }) => (
                             <button
                               className={`${
-                                active ? 'bg-gray-100' : ''
-                              } block w-full text-left px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 font-medium`}
+                                active ? 'bg-gray-50' : ''
+                              } block w-full text-left px-4 py-2 text-xs font-medium text-white bg-blue-600 transition-colors`}
                               onClick={() => handleBulkStatusUpdate('ready_to_ship')}
                             >
                               Mark Ready to Ship
@@ -2393,8 +2878,8 @@ const Orders = () => {
                           {({ active }) => (
                             <button
                               className={`${
-                                active ? 'bg-gray-100' : ''
-                              } block w-full text-left px-4 py-2 text-sm text-white bg-purple-600 hover:bg-purple-700`}
+                                active ? 'bg-gray-50' : ''
+                              } block w-full text-left px-4 py-2 text-xs font-medium text-white bg-purple-600 transition-colors`}
                               onClick={() => handleBulkStatusUpdate('shipped')}
                             >
                               Mark Shipped
@@ -2405,8 +2890,8 @@ const Orders = () => {
                           {({ active }) => (
                             <button
                               className={`${
-                                active ? 'bg-gray-100' : ''
-                              } block w-full text-left px-4 py-2 text-sm text-white bg-emerald-600 hover:bg-emerald-700`}
+                                active ? 'bg-gray-50' : ''
+                              } block w-full text-left px-4 py-2 text-xs font-medium text-white bg-emerald-600 transition-colors`}
                               onClick={() => handleBulkStatusUpdate('fulfilled')}
                             >
                               Mark Fulfilled
@@ -2448,10 +2933,10 @@ const Orders = () => {
       {showScrollToTop && (
         <button
           onClick={scrollToTop}
-          className="fixed bottom-6 right-6 z-50 bg-white rounded-full p-3 shadow-lg hover:shadow-xl transition-all duration-200 border border-gray-200"
+          className="fixed bottom-24 right-6 md:bottom-6 z-50 bg-black rounded-full p-3 shadow-lg hover:shadow-xl transition-all duration-200 hover:bg-gray-900"
           title="Scroll to top"
         >
-          <ArrowUpIcon className="w-6 h-6 text-gray-700" />
+          <ArrowUpIcon className="w-6 h-6 text-white" />
         </button>
       )}
     </div>

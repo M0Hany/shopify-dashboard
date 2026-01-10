@@ -60,7 +60,7 @@ export interface ShopifyOrder {
   fulfillments?: Array<{
     id: number;
     status: string;
-    shipment_status?: string;
+    displayStatus?: string;
     tracking_company?: string;
     tracking_number?: string;
     created_at?: string;
@@ -322,6 +322,7 @@ export class ShopifyService {
                   fulfillments(first: 10) {
                     id
                     status
+                    displayStatus
                     trackingInfo {
                       company
                       number
@@ -437,7 +438,7 @@ export class ShopifyService {
           const fulfillments = node.fulfillments?.map((fulfillment: any) => ({
             id: parseInt(fulfillment.id.split('/').pop() || '0', 10),
             status: fulfillment.status,
-            shipment_status: fulfillment.status, // shipmentStatus deprecated, use status instead
+            displayStatus: fulfillment.displayStatus || null,
             tracking_company: fulfillment.trackingInfo?.[0]?.company,
             tracking_number: fulfillment.trackingInfo?.[0]?.number,
             created_at: fulfillment.createdAt,
@@ -611,12 +612,14 @@ export class ShopifyService {
       const actualStatus = statusParts[0]; // First part is the status
       const additionalTags = statusParts.slice(1); // Rest are additional tags
 
-      // Filter out existing status tags and shipping date tag (case-insensitive)
+      // Filter out existing status tags and date tags (case-insensitive)
       const statusTags = ['order_ready', 'customer_confirmed', 'ready_to_ship', 'ready-to-ship', 'shipped', 'fulfilled', 'cancelled', 'on_hold'].map(tag => tag.trim().toLowerCase());
       const filteredTags = existingTags.filter((tag: string) => {
         const trimmed = tag.trim().toLowerCase();
         return !statusTags.includes(trimmed) && 
                !tag.trim().startsWith('shipping_date:') &&
+               !tag.trim().startsWith('shipped_date:') &&
+               !tag.trim().startsWith('customer_confirmed_date:') &&
                !tag.trim().startsWith('fulfilled_at:') &&
                !tag.trim().startsWith('fulfillment_date:');
       });
@@ -634,46 +637,42 @@ export class ShopifyService {
         }
       });
 
-      // If moving from ready_to_ship (or ready-to-ship) to shipped, add shipping date tag
-      const normalizedPreviousStatus = previousStatus.trim().toLowerCase();
-      const normalizedNewStatus = actualStatus.trim().toLowerCase();
-      // Check for both ready_to_ship and ready-to-ship variations
-      const isReadyToShip = normalizedPreviousStatus === 'ready_to_ship' || normalizedPreviousStatus === 'ready-to-ship';
-      const isShipped = normalizedNewStatus === 'shipped';
-      
-      logger.info('Checking shipping date tag addition', {
-        orderId,
-        previousStatus,
-        normalizedPreviousStatus,
-        status,
-        normalizedNewStatus,
-        isReadyToShip,
-        isShipped,
-        willAddShippingDate: isReadyToShip && isShipped,
-        existingTags: existingTags,
-        filteredTagsBefore: filteredTags
-      });
-      
-      if (isReadyToShip && isShipped) {
-        const today = new Date();
-        const shippingDate = today.toISOString().split('T')[0]; // Get only YYYY-MM-DD
-        const shippingDateTag = `shipping_date:${shippingDate}`;
-        filteredTags.push(shippingDateTag);
-        logger.info('Added shipping_date tag', {
-          orderId,
-          shippingDate,
-          shippingDateTag,
-          filteredTagsAfter: filteredTags
-        });
-      } else {
-        logger.warn('Shipping date tag NOT added', {
-          orderId,
-          reason: !isReadyToShip ? 'Previous status is not ready_to_ship' : 'New status is not shipped',
-          previousStatus,
-          normalizedPreviousStatus,
-          status,
-          normalizedNewStatus
-        });
+      // Add customer_confirmed_date tag when order is confirmed
+      if (actualStatus.trim().toLowerCase() === 'customer_confirmed') {
+        // Check if customer_confirmed_date tag already exists
+        const existingConfirmedDateTag = filteredTags.find(tag => 
+          tag.trim().startsWith('customer_confirmed_date:')
+        );
+        if (!existingConfirmedDateTag) {
+          const today = new Date();
+          const confirmedDate = today.toISOString().split('T')[0]; // Get only YYYY-MM-DD
+          const confirmedDateTag = `customer_confirmed_date:${confirmedDate}`;
+          filteredTags.push(confirmedDateTag);
+          logger.info('Added customer_confirmed_date tag', {
+            orderId,
+            confirmedDate,
+            confirmedDateTag,
+          });
+        }
+      }
+
+      // Add shipped_date tag when order is shipped
+      if (actualStatus.trim().toLowerCase() === 'shipped') {
+        // Check if shipped_date tag already exists
+        const existingShippedDateTag = filteredTags.find(tag => 
+          tag.trim().startsWith('shipped_date:') || tag.trim().startsWith('shipping_date:')
+        );
+        if (!existingShippedDateTag) {
+          const today = new Date();
+          const shippedDate = today.toISOString().split('T')[0]; // Get only YYYY-MM-DD
+          const shippedDateTag = `shipped_date:${shippedDate}`;
+          filteredTags.push(shippedDateTag);
+          logger.info('Added shipped_date tag', {
+            orderId,
+            shippedDate,
+            shippedDateTag,
+          });
+        }
       }
 
       // Remove priority tag if status is fulfilled or cancelled
@@ -684,21 +683,21 @@ export class ShopifyService {
         }
       }
 
-      // Add fulfilled_at date tag when order is fulfilled
+      // Add fulfilled_date tag when order is fulfilled
       if (actualStatus.trim().toLowerCase() === 'fulfilled') {
         // Check if fulfilled_at or fulfillment_date tag already exists (from additional tags or existing)
-        const existingFulfilledAtTag = filteredTags.find(tag => 
+        const existingFulfilledDateTag = filteredTags.find(tag => 
           tag.trim().startsWith('fulfilled_at:') || tag.trim().startsWith('fulfillment_date:')
         );
-        if (!existingFulfilledAtTag) {
+        if (!existingFulfilledDateTag) {
           const today = new Date();
           const fulfilledDate = today.toISOString().split('T')[0]; // Get only YYYY-MM-DD
-          const fulfilledAtTag = `fulfilled_at:${fulfilledDate}`;
-          filteredTags.push(fulfilledAtTag);
-          logger.info('Added fulfilled_at tag', {
+          const fulfilledDateTag = `fulfillment_date:${fulfilledDate}`;
+          filteredTags.push(fulfilledDateTag);
+          logger.info('Added fulfillment_date tag', {
             orderId,
             fulfilledDate,
-            fulfilledAtTag,
+            fulfilledDateTag,
           });
         }
 

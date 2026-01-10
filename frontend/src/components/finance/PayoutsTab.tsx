@@ -2,10 +2,8 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { financialService } from '../../services/financialService';
 import { format } from 'date-fns';
-import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { SkeletonCard } from '../common/SkeletonLoader';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import MonthNavigator from './MonthNavigator';
 
 interface PayoutsTabProps {
   selectedMonth: string;
@@ -160,26 +158,9 @@ export default function PayoutsTab({ selectedMonth, setSelectedMonth, onBack }: 
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-            title="Back to Profit Overview"
-          >
-            <ArrowLeftIcon className="w-5 h-5 text-gray-600" />
-          </button>
-          <div>
-            <h3 className="text-xl font-semibold text-gray-900">Payouts</h3>
-            <p className="text-sm text-gray-500 mt-1">Commission distribution for {formatMonthDisplay(selectedMonth)}</p>
-          </div>
-        </div>
-        <MonthNavigator 
-          selectedMonth={selectedMonth} 
-          onMonthChange={setSelectedMonth}
-          showDatePicker={true}
-          showToday={false}
-        />
+      <div className="mb-6">
+        <h3 className="text-xl font-semibold text-gray-900">Payouts</h3>
+        <p className="text-sm text-gray-500 mt-1">Commission distribution for {formatMonthDisplay(selectedMonth)}</p>
       </div>
 
       {calculatedPayouts ? (

@@ -2,9 +2,8 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { financialService, ShippingRecord, ShippingRecordInput, ShippingType, ShippingStatus } from '../../services/financialService';
 import { format } from 'date-fns';
-import { TrashIcon, PencilIcon, XMarkIcon, PlusIcon, DocumentArrowDownIcon, ArrowLeftIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import { TrashIcon, PencilIcon, XMarkIcon, PlusIcon, DocumentArrowDownIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
-import MonthNavigator from './MonthNavigator';
 import BulkShippingCostImportDialog from './BulkShippingCostImportDialog';
 import BulkShippingCostRevertDialog from './BulkShippingCostRevertDialog';
 
@@ -292,29 +291,12 @@ export default function ShippingLedgerTab({ selectedMonth, setSelectedMonth, onB
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div className="flex items-center gap-3">
-          {onBack && (
-            <button
-              onClick={onBack}
-              className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-              title="Back to Profit Overview"
-            >
-              <ArrowLeftIcon className="w-5 h-5 text-gray-600" />
-            </button>
-          )}
+      <div className="mb-6">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h3 className="text-xl font-semibold text-gray-900">Shipping Ledger</h3>
             <p className="text-sm text-gray-500 mt-1">Manage shipping costs and track performance</p>
           </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <MonthNavigator 
-            selectedMonth={selectedMonth} 
-            onMonthChange={setSelectedMonth}
-            showDatePicker={true}
-            showToday={false}
-          />
           <button
             onClick={() => setIsBulkImportOpen(true)}
             className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50"
@@ -760,4 +742,3 @@ export default function ShippingLedgerTab({ selectedMonth, setSelectedMonth, onB
     </div>
   );
 }
-

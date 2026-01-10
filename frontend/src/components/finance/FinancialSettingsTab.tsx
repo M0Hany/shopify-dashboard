@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { financialService, ProductCost, ProductCostInput, PayoutConfig, PayoutConfigInput, ProductionCost, ProductionCostInput } from '../../services/financialService';
-import { TrashIcon, PencilIcon, XMarkIcon, PlusIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
+import { TrashIcon, PencilIcon, XMarkIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 import MonthNavigator from './MonthNavigator';
@@ -278,15 +278,9 @@ export default function FinancialSettingsTab({ selectedMonth, setSelectedMonth, 
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3 mb-4">
-        <button
-          onClick={onBack}
-          className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-          title="Back to Profit Overview"
-        >
-          <ArrowLeftIcon className="w-5 h-5 text-gray-600" />
-        </button>
+      <div className="mb-6">
         <h3 className="text-xl font-semibold text-gray-900">Financial Settings</h3>
+        <p className="text-sm text-gray-500 mt-1">Configure product costs and payout settings</p>
       </div>
       {/* Section Tabs */}
       <div className="border-b border-gray-200">

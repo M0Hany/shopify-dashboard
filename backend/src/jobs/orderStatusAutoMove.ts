@@ -241,6 +241,11 @@ async function moveOnHoldToCancelled(): Promise<void> {
         // Add cancelled tag
         filtered.push('cancelled');
         
+        // Add cancelled_date tag
+        const todayStr = today.toISOString().split('T')[0];
+        filtered = filtered.filter(tag => !tag.toLowerCase().startsWith('cancelled_date:'));
+        filtered.push(`cancelled_date:${todayStr}`);
+        
         // Add no_reply_cancelled tag for highlighting
         if (!filtered.some(tag => tag.trim().toLowerCase() === 'no_reply_cancelled')) {
           filtered.push('no_reply_cancelled');
@@ -324,4 +329,3 @@ export async function runOrderStatusAutoMove(): Promise<void> {
     throw error;
   }
 }
-

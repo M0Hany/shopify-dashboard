@@ -418,13 +418,6 @@ const WhatsAppInbox: React.FC = () => {
                   {markAllAsReadMutation.isPending ? 'Marking...' : 'Read All'}
                 </button>
               )}
-              {/* Mobile close button */}
-              <button
-                onClick={() => setShowConversations(false)}
-                className="md:hidden p-2 text-white/80 hover:text-white transition-colors"
-              >
-                <XMarkIcon className="w-5 h-5" />
-              </button>
             </div>
           </div>
           
@@ -436,7 +429,7 @@ const WhatsAppInbox: React.FC = () => {
               placeholder="Search conversations..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-10 py-2.5 bg-white/20 backdrop-blur-sm border-0 rounded-full text-white placeholder-white/70 focus:outline-none focus:ring-2 focus:ring-white/50 focus:bg-white/30 transition-all"
+              className="w-full pl-10 pr-10 py-2.5 bg-white/20 backdrop-blur-sm border-0 rounded-full text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-white/50 focus:bg-white/30 transition-all"
             />
             {searchQuery && (
               <button
@@ -587,7 +580,7 @@ const WhatsAppInbox: React.FC = () => {
                 {/* Mobile back button */}
                 <button
                   onClick={() => setShowConversations(true)}
-                  className="md:hidden p-2 text-white/80 hover:text-white transition-colors"
+                  className="md:hidden p-2 text-black hover:text-gray-800 transition-colors"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />

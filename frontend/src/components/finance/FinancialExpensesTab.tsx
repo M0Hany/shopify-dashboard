@@ -2,11 +2,10 @@ import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { financialService, FinancialExpense, FinancialExpenseCategory, ExpenseType } from '../../services/financialService';
 import { format, subMonths } from 'date-fns';
-import { TrashIcon, PencilIcon, XMarkIcon, PlusIcon, MagnifyingGlassIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
+import { TrashIcon, PencilIcon, XMarkIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { SkeletonCard } from '../common/SkeletonLoader';
 import { PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import toast from 'react-hot-toast';
-import MonthNavigator from './MonthNavigator';
 
 const EXPENSE_CATEGORIES: FinancialExpenseCategory[] = [
   "Ads",
@@ -28,11 +27,25 @@ interface FinancialExpensesTabProps {
   selectedMonth: string;
   setSelectedMonth: (month: string) => void;
   onBack: () => void;
+  openAddModal?: boolean;
+  onAddModalClose?: () => void;
 }
 
-export default function FinancialExpensesTab({ selectedMonth, setSelectedMonth, onBack }: FinancialExpensesTabProps) {
+export default function FinancialExpensesTab({ selectedMonth, setSelectedMonth, onBack, openAddModal, onAddModalClose }: FinancialExpensesTabProps) {
   const queryClient = useQueryClient();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+
+  // Sync external modal state
+  useEffect(() => {
+    if (openAddModal !== undefined) {
+      setIsAddModalOpen(openAddModal);
+    }
+  }, [openAddModal]);
+
+  const handleCloseModal = () => {
+    setIsAddModalOpen(false);
+    onAddModalClose?.();
+  };
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedExpense, setSelectedExpense] = useState<FinancialExpense | null>(null);
@@ -140,7 +153,7 @@ export default function FinancialExpensesTab({ selectedMonth, setSelectedMonth, 
         return updated;
       });
       
-      setIsAddModalOpen(false);
+      handleCloseModal();
       setFormData({
         category: "Ads",
         amount: '',
@@ -350,35 +363,9 @@ export default function FinancialExpensesTab({ selectedMonth, setSelectedMonth, 
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="p-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-            title="Back to Profit Overview"
-          >
-            <ArrowLeftIcon className="w-5 h-5 text-gray-600" />
-          </button>
-          <div>
-            <h3 className="text-xl font-semibold text-gray-900">Financial Expenses</h3>
-            <p className="text-sm text-gray-500 mt-1">Track and manage business expenses for {formatMonthDisplay(selectedMonth)}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <MonthNavigator 
-            selectedMonth={selectedMonth} 
-            onMonthChange={setSelectedMonth}
-            showDatePicker={true}
-            showToday={false}
-          />
-          <button
-            onClick={() => setIsAddModalOpen(true)}
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 transition-colors"
-          >
-            <PlusIcon className="w-5 h-5 mr-2" />
-            Add Expense
-          </button>
-        </div>
+      <div className="mb-6">
+        <h3 className="text-xl font-semibold text-gray-900">Financial Expenses</h3>
+        <p className="text-sm text-gray-500 mt-1">Track and manage business expenses for {formatMonthDisplay(selectedMonth)}</p>
       </div>
 
       {/* Search */}
@@ -557,7 +544,7 @@ export default function FinancialExpensesTab({ selectedMonth, setSelectedMonth, 
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium">Add Expense</h3>
               <button
-                onClick={() => setIsAddModalOpen(false)}
+                onClick={handleCloseModal}
                 className="p-1 rounded-full hover:bg-gray-100"
               >
                 <XMarkIcon className="w-5 h-5 text-gray-400" />
@@ -619,7 +606,7 @@ export default function FinancialExpensesTab({ selectedMonth, setSelectedMonth, 
               <div className="flex justify-end gap-3 pt-4">
                 <button
                   type="button"
-                  onClick={() => setIsAddModalOpen(false)}
+                  onClick={handleCloseModal}
                   className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
                 >
                   Cancel

@@ -3,6 +3,7 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { LoginForm } from '../auth/LoginForm';
 import { Header } from './Header';
+import BottomNavigation from './BottomNavigation';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -27,11 +28,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, hideHeader }) => {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 overflow-hidden">
+    <div className="flex flex-col min-h-screen bg-gray-50">
       {!hideHeader && <Header />}
-      <main className="flex-1 bg-gray-50 overflow-y-auto min-h-0">
+      <main className={`flex-1 bg-gray-50 ${!hideHeader ? 'pb-16 md:pb-0' : ''}`}>
         {children}
       </main>
+      {!hideHeader && <BottomNavigation />}
     </div>
   );
 }; 

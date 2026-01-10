@@ -491,4 +491,3 @@ export class DiscordNotificationService {
 
 // Export singleton instance
 export const discordNotificationService = new DiscordNotificationService();
-

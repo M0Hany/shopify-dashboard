@@ -738,6 +738,47 @@ router.post('/webhook/order-created', async (req: Request, res: Response) => {
       return res.sendStatus(401);
     }
 
+    // Auto-tag orders with specific provinces as "shipping_method:other-company"
+    const otherCompanyProvinces = [
+      'New Valley',
+      'North Sinai',
+      'South Sinai',
+      'Red Sea',
+      'Matrouh',
+      'Qena',
+      'Luxor',
+      'Aswan',
+      'Asyut',
+      'Beni Suef',
+      'Fayoum',
+      'Minya',
+      'Sohag'
+    ];
+    
+    const province = order.shipping_address?.province;
+    if (province && otherCompanyProvinces.includes(province)) {
+      const tags = Array.isArray(order.tags) 
+        ? order.tags 
+        : typeof order.tags === 'string'
+          ? order.tags.split(',').map((t: string) => t.trim())
+          : [];
+      
+      // Check if shipping_method:other-company tag already exists
+      const hasOtherCompanyTag = tags.some((tag: string) => 
+        tag.trim().toLowerCase() === 'shipping_method:other-company'
+      );
+      
+      if (!hasOtherCompanyTag) {
+        const updatedTags = [...tags, 'shipping_method:other-company'];
+        await shopifyServiceInstance.updateOrderTags(order.id.toString(), updatedTags);
+        logger.info('Auto-tagged order with shipping_method:other-company', {
+          orderId: order.id,
+          orderName: order.name,
+          province
+        });
+      }
+    }
+
     // Process the new order
     await orderConfirmationService.handleNewOrder(order);
     
@@ -749,4 +790,4 @@ router.post('/webhook/order-created', async (req: Request, res: Response) => {
   }
 });
 
-export default router; 
+export default router;
