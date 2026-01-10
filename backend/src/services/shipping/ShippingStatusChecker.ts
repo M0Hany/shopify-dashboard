@@ -117,10 +117,10 @@ export class ShippingStatusChecker {
       // Process ShipBlu orders - check fulfillments for delivered status
       await Promise.all(shipBluOrders.map(async (order) => {
         try {
-          // Check if order has fulfillments with shipment_status === "delivered"
+          // Check if order has fulfillments with displayStatus === "DELIVERED"
           if (order.fulfillments && Array.isArray(order.fulfillments) && order.fulfillments.length > 0) {
             const deliveredFulfillment = order.fulfillments.find(
-              (fulfillment: any) => fulfillment.shipment_status?.toLowerCase() === 'delivered'
+              (fulfillment) => fulfillment.displayStatus === 'DELIVERED'
             );
 
             if (deliveredFulfillment) {
@@ -149,7 +149,7 @@ export class ShippingStatusChecker {
               logger.info('Updated ShipBlu order status to fulfilled (delivered)', {
                 orderId: order.id,
                 orderName: order.name,
-                shipmentStatus: deliveredFulfillment.shipment_status,
+                displayStatus: deliveredFulfillment.displayStatus,
                 previousStatus: 'shipped',
                 newStatus: 'fulfilled'
               });
