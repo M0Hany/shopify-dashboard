@@ -72,8 +72,8 @@ const BottomNavigation: React.FC = () => {
             >
               <div className="relative">
                 <IconComponent className="w-6 h-6 mx-auto" />
-                {item.badge && item.badge > 0 && (
-                  <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white bg-green-500 rounded-full shadow-lg ring-2 ring-slate-800">
+                {item.badge !== undefined && (
+                  <span className="absolute -bottom-1 -left-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white bg-green-500 rounded-full shadow-lg ring-2 ring-slate-800">
                     {item.badge > 99 ? '99+' : item.badge}
                   </span>
                 )}

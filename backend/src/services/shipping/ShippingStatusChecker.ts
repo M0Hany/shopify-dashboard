@@ -35,8 +35,6 @@ export class ShippingStatusChecker {
         return tags.includes('cancelled') && tags.some(tag => tag.startsWith('shipping_barcode:'));
       });
 
-      logger.info(`Found ${cancelledOrders.length} cancelled orders with shipping barcodes to check`);
-
       // Get all shipping statuses
       const shippingResponse = await this.fetchAllShippingStatuses(new Date());
       const shippingStatuses = [
@@ -57,10 +55,7 @@ export class ShippingStatusChecker {
           const barcodeTag = tags.find(tag => tag.startsWith('shipping_barcode:'));
           const barcode = barcodeTag ? barcodeTag.split(':')[1] : null;
 
-          if (!barcode) {
-            logger.warn('No barcode found for cancelled order', { orderId: order.id });
-            return;
-          }
+          if (!barcode) return;
 
           // Find matching shipping status
           const shippingStatus = shippingStatuses.find(
@@ -77,7 +72,6 @@ export class ShippingStatusChecker {
               
               logger.info('Added deleted tag to cancelled order', {
                 orderId: order.id,
-                barcode,
                 shippingStatus: shippingStatus.PackageENStatus
               });
             }
@@ -90,26 +84,14 @@ export class ShippingStatusChecker {
         }
       }));
 
-      // Process shipped orders
-      const shippedOrders = orders.filter(order => {
-        const tags = Array.isArray(order.tags) ? 
-          order.tags.map(t => t.trim()) : 
-          typeof order.tags === 'string' ? 
-            order.tags.split(',').map(t => t.trim()) : 
-            [];
-        return tags.includes('shipped');
-      });
-
-      logger.info(`Found ${shippedOrders.length} shipped orders to check`);
-
-      // Process ShipBlu orders first (check fulfillments for delivered status)
-      const shipBluOrders = shippedOrders.filter(order => {
+      // Process ShipBlu shipped orders only (check fulfillments for delivered status; no shipping API fetch)
+      const shipBluOrders = orders.filter(order => {
         const tags = Array.isArray(order.tags) ? 
           order.tags.map(t => t.trim().toLowerCase()) : 
           typeof order.tags === 'string' ? 
             order.tags.split(',').map(t => t.trim().toLowerCase()) : 
             [];
-        return tags.includes('sent to shipblu');
+        return tags.includes('shipped') && tags.includes('sent to shipblu');
       });
 
       logger.info(`Found ${shipBluOrders.length} ShipBlu shipped orders to check for delivery status`);
@@ -192,8 +174,6 @@ export class ShippingStatusChecker {
         return barcodeTag ? barcodeTag.split(':')[1] : null;
       }).filter(Boolean);
 
-      logger.info(`Found ${barcodes.length} barcodes to check`);
-
       // Fetch shipping statuses for all barcodes
       const shippingData = await this.fetchAllShippingStatuses(new Date());
       const allShippingOrders = [
@@ -214,10 +194,7 @@ export class ShippingStatusChecker {
           const barcodeTag = tags.find(tag => tag.startsWith('shipping_barcode:'));
           const barcode = barcodeTag ? barcodeTag.split(':')[1] : null;
 
-          if (!barcode) {
-            logger.warn('No barcode found for order', { orderId: order.id });
-            return;
-          }
+          if (!barcode) return;
 
           // Find matching shipping status
           const shippingStatus = allShippingOrders.find(
@@ -245,7 +222,6 @@ export class ShippingStatusChecker {
               
               logger.info('Updated order status to shipped', {
                 orderId: order.id,
-                barcode,
                 shippingDate: today,
                 shippingStatus: shippingStatus.PackageENStatus
               });
