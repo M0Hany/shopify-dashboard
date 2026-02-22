@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+.git
+.env
+.env.*
+!.env.example
+*.md
+dist
+coverage
+.nyc_output
+*.log

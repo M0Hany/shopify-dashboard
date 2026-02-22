@@ -2,9 +2,16 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Install dependencies first (better caching)
+# Reduce memory use during install (helps on small DO droplets; adjust if you have more RAM)
+ENV NODE_OPTIONS=--max-old-space-size=512
+# Show npm progress so build doesn't appear frozen
+ENV NPM_CONFIG_LOGLEVEL=info
+ENV NPM_CONFIG_FUND=false
+ENV NPM_CONFIG_AUDIT=false
+
+# Install dependencies first (better caching); npm ci is faster and more reliable than npm install
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 # Copy source code
 COPY . .

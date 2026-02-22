@@ -54,6 +54,26 @@ The application will be available at:
 - Frontend: http://localhost:5173
 - Backend: http://localhost:3000
 
+#### Building on DigitalOcean (or low-memory servers)
+
+If the build appears to freeze during `RUN npm install` / `RUN npm ci`:
+
+1. **Use full build logs** so you can see progress and any errors:
+   ```bash
+   docker compose build --progress=plain --no-cache
+   ```
+   Or to build and start:
+   ```bash
+   docker compose build --progress=plain && docker compose up -d
+   ```
+
+2. **If the server runs out of memory** during install:
+   - Add swap (e.g. 1–2 GB) on the droplet, or
+   - Upgrade to a droplet with at least 2 GB RAM for building, or
+   - In the Dockerfiles, increase `NODE_OPTIONS=--max-old-space-size=512` to `768` or `1024` only if the droplet has enough RAM.
+
+3. The Dockerfiles are set up to use `npm ci` (faster, deterministic), show npm progress (`NPM_CONFIG_LOGLEVEL=info`), and limit Node memory to reduce OOM kills on small servers.
+
 ### 3. Production Deployment (Vercel + GitHub Pages)
 
 #### Backend Deployment (Vercel)
