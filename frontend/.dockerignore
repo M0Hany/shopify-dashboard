@@ -2,8 +2,10 @@ node_modules
 npm-debug.log
 .git
 .env
-.env.*
+.env.local
+.env.docker
 !.env.example
+!.env.production
 dist
 *.md
 coverage

@@ -74,6 +74,11 @@ If the build appears to freeze during `RUN npm install` / `RUN npm ci`:
 
 3. The Dockerfiles are set up to use `npm ci` (faster, deterministic), show npm progress (`NPM_CONFIG_LOGLEVEL=info`), and limit Node memory to reduce OOM kills on small servers.
 
+#### After build: "Unexpected token 'export'" or "&lt;!DOCTYPE ... is not valid JSON"
+
+- **API returns HTML / "not valid JSON"**: The frontend build must have `VITE_API_URL` set at build time (e.g. from `.env.production`). The frontend `.dockerignore` is set so `.env.production` is **included** in the image during build; ensure that file exists and has `VITE_API_URL=https://your-api-origin` (same origin as your backend, e.g. `https://ocdcrochet.store` if the API is there).
+- **"Unexpected token 'export'"**: If you serve the built frontend with **nginx** (or another static server), do **not** serve `index.html` for every request. Serve real files for `/assets/*` (and `/favicon.png`, etc.). Only use the SPA fallback (`try_files $uri $uri/ /index.html`) for routes that are not files. Otherwise the browser requests a JS chunk, gets HTML, and throws this error.
+
 ### 3. Production Deployment (Vercel + GitHub Pages)
 
 #### Backend Deployment (Vercel)
