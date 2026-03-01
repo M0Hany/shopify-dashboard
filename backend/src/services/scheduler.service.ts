@@ -27,9 +27,6 @@ export class SchedulerService {
   }
 
   private initializeJobs() {
-    // Rescheduled deliveries check — every hour (placeholder for future logic)
-    this.addJob('0 * * * *', this.checkRescheduledDeliveries);
-
     // Pending orders: schedule WhatsApp confirmation for orders without confirmation — every 30 min
     this.addJob('*/30 * * * *', this.checkPendingOrders);
 
