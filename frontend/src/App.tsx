@@ -4,6 +4,7 @@ import { Toaster } from 'react-hot-toast';
 import Orders from './pages/Orders';
 import Finance from './pages/Finance';
 import WhatsAppInbox from './pages/WhatsAppInbox';
+import WhatsAppTemplates from './pages/WhatsAppTemplates';
 import { Layout } from './components/layout/Layout';
 
 const queryClient = new QueryClient({
@@ -63,6 +64,7 @@ function App() {
             <Route path="/orders" element={<Orders />} />
             <Route path="/finance" element={<Finance />} />
             <Route path="/whatsapp" element={<WhatsAppInbox />} />
+            <Route path="/whatsapp/templates" element={<WhatsAppTemplates />} />
           </Routes>
         </Layout>
       </HashRouter>

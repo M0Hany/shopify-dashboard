@@ -1,9 +1,14 @@
 import { CronJob } from 'cron';
 import { logger } from '../utils/logger';
-import { statusQueue, shippingQueue } from '../jobs/queue';
 import { OrderConfirmationService } from './orderConfirmation.service';
 import { runOrderStatusAutoMove } from '../jobs/orderStatusAutoMove';
 
+const CRON_TIMEZONE = 'Africa/Cairo';
+
+/**
+ * SchedulerService runs recurring cron jobs. Additional jobs started from index.ts:
+ * - startShippingStatusChecker() — ShipBlu delivery status, every 30 min
+ */
 export class SchedulerService {
   private static instance: SchedulerService;
   private jobs: CronJob[] = [];
@@ -22,19 +27,16 @@ export class SchedulerService {
   }
 
   private initializeJobs() {
-    // Check for rescheduled deliveries every hour
+    // Rescheduled deliveries check — every hour (placeholder for future logic)
     this.addJob('0 * * * *', this.checkRescheduledDeliveries);
 
-    // Check shipping statuses every 30 minutes
-    this.addJob('*/30 * * * *', this.updateShippingStatuses);
-
-    // Check pending orders every 30 minutes
+    // Pending orders: schedule WhatsApp confirmation for orders without confirmation — every 30 min
     this.addJob('*/30 * * * *', this.checkPendingOrders);
 
-    // Auto-move orders: order_ready → on_hold → cancelled (runs every 6 hours)
+    // Auto-move orders: order_ready → on_hold (2 days) → cancelled (2 more days) — every 6 hours
     this.addJob('0 */6 * * *', this.runOrderStatusAutoMove);
 
-    // Daily cleanup at midnight
+    // Daily cleanup at midnight Cairo time (placeholder for future logic)
     this.addJob('0 0 * * *', this.dailyCleanup);
   }
 
@@ -52,20 +54,11 @@ export class SchedulerService {
         }
       },
       null,
-      true
+      true,
+      CRON_TIMEZONE
     );
 
     this.jobs.push(job);
-  }
-
-  private async checkRescheduledDeliveries() {
-    logger.info('Checking for rescheduled deliveries');
-    // Add logic to check and process rescheduled deliveries
-  }
-
-  private async updateShippingStatuses() {
-    logger.info('Updating shipping statuses');
-    // Add logic to update shipping statuses
   }
 
   private async checkPendingOrders(): Promise<void> {

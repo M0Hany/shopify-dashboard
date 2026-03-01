@@ -57,7 +57,7 @@ const BottomNavigation: React.FC = () => {
     <nav className="fixed bottom-0 left-0 right-0 z-50 bg-slate-800 border-t border-slate-700 shadow-2xl md:hidden backdrop-blur-lg bg-opacity-95">
       <div className="flex justify-around items-center h-16 px-2">
         {navigation.map((item) => {
-          const isActive = location.pathname === item.href;
+          const isActive = location.pathname === item.href || (item.href === '/whatsapp' && location.pathname.startsWith('/whatsapp/'));
           const IconComponent = isActive ? item.iconSolid : item.icon;
           
           return (

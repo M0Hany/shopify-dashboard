@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import whatsappLogo from '../assets/whatsapp.png';
 import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon, EllipsisHorizontalIcon, DocumentTextIcon, ClockIcon, SparklesIcon, CheckBadgeIcon, PaperAirplaneIcon, XCircleIcon, BanknotesIcon, BoltIcon, HandRaisedIcon, HandThumbUpIcon, PauseCircleIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid, PhoneArrowUpRightIcon } from '@heroicons/react/24/solid';
 import { convertToCairoTime, calculateDaysRemaining } from '../utils/dateUtils';
-import { Menu } from '@headlessui/react';
+import { Menu, Dialog } from '@headlessui/react';
 import { format } from 'date-fns';
 import LocationDialog, { Zone, SubZone } from './ui/LocationDialog';
 import { locationData } from '../data/locations';
@@ -248,6 +249,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const [itemsExpanded, setItemsExpanded] = useState(false);
   const [orderNumberCopied, setOrderNumberCopied] = useState(false);
   const [phoneNumberCopied, setPhoneNumberCopied] = useState(false);
+  const [showTemplateDialog, setShowTemplateDialog] = useState(false);
   const noteModalRef = useRef<HTMLDivElement>(null);
   const whatsAppModalRef = useRef<HTMLDivElement>(null);
   const shippedModalRef = useRef<HTMLDivElement>(null);
@@ -278,6 +280,30 @@ const OrderCard: React.FC<OrderCardProps> = ({
   
   // Check if automated WhatsApp confirmation tag exists
   const hasAutomatedWhatsAppConfirmation = trimmedTags.includes('automated_whatsapp_confirmation');
+
+  // Fetch manual WhatsApp confirmation template from API (for inline button when order ready)
+  const { data: manualConfirmationTemplate } = useQuery({
+    queryKey: ['whatsapp-template', 'manual_whatsapp_confirmation'],
+    queryFn: async () => {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/templates/key/manual_whatsapp_confirmation`);
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json as { id: string; key: string; name: string; body: string };
+    },
+  });
+
+  // Fetch all templates when Send template dialog is open
+  const { data: allTemplates = [] } = useQuery({
+    queryKey: ['whatsapp-templates'],
+    queryFn: async () => {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/templates`);
+      if (!res.ok) return [];
+      const json = await res.json();
+      return (json.templates || []) as Array<{ id: string; key: string; name: string; body: string }>;
+    },
+    enabled: showTemplateDialog,
+  });
+
   // Utility function to detect making time from line items
   const detectMakingTime = (lineItems: any[]): number | null => {
     if (!lineItems || lineItems.length === 0) return null;
@@ -1195,13 +1221,23 @@ Could you kindly confirm if you'll be available to receive it during that time? 
   const handleManualWhatsAppConfirmation = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!order.customer?.phone || !isOrderReady) return;
-    
-    // Generate the WhatsApp message
-    const message = getManualWhatsAppConfirmationTemplate(
-      order.customer.first_name || '',
-      order.line_items || []
-    );
-    
+
+    const customerFirstName = order.customer.first_name || '';
+    const orderItems = order.line_items || [];
+    const itemsList = orderItems.map((item: any) => {
+      const variant = item.variant_title ? ` (${item.variant_title})` : '';
+      return `- ${item.title}${variant}`;
+    }).join('\n');
+
+    let message: string;
+    if (manualConfirmationTemplate?.body) {
+      message = manualConfirmationTemplate.body
+        .replace(/\{\{customer_first_name\}\}/g, customerFirstName)
+        .replace(/\{\{items_list\}\}/g, itemsList);
+    } else {
+      message = getManualWhatsAppConfirmationTemplate(customerFirstName, orderItems);
+    }
+
     // Format phone number for WhatsApp
     const formattedPhone = formatPhoneNumber(order.customer.phone);
     
@@ -1227,6 +1263,26 @@ Could you kindly confirm if you'll be available to receive it during that time? 
         onUpdateTags(order.id, updatedTags);
       }
     }
+  };
+
+  // Apply template and open WA with filled message (for Send template in three-dots menu)
+  const handleSendTemplateSelect = (t: { id: string; key: string; name: string; body: string }) => {
+    if (!order.customer?.phone) {
+      toast.error('No phone number for this order');
+      return;
+    }
+    const customerFirstName = order.customer.first_name?.trim() || 'Customer';
+    const itemsList = (order.line_items || []).map((item: any) => {
+      const variant = item.variant_title ? ` (${item.variant_title})` : '';
+      return `- ${item.title}${variant}`;
+    }).join('\n') || '—';
+    const body = t.body
+      .replace(/\{\{customer_first_name\}\}/g, customerFirstName)
+      .replace(/\{\{items_list\}\}/g, itemsList);
+    const formattedPhone = formatPhoneNumber(order.customer.phone);
+    const whatsAppLink = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(body)}`;
+    window.open(whatsAppLink, '_blank');
+    setShowTemplateDialog(false);
   };
 
   const handlePriorityClick = (e: React.MouseEvent) => {
@@ -1818,6 +1874,20 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                 <StarIconSolid className="w-5 h-5 text-yellow-500" />
               </button>
             )}
+            {/* WhatsApp confirmation - only when order is ready */}
+            {isOrderReady && order.customer?.phone && (
+              <button
+                onClick={(e) => { e.stopPropagation(); handleManualWhatsAppConfirmation(e); }}
+                className="p-1.5 rounded-full hover:bg-gray-100 transition-colors"
+                title={hasManualWhatsAppConfirmation ? 'WhatsApp confirmation already sent' : 'Send WhatsApp shipping confirmation'}
+              >
+                <img
+                  src={whatsappLogo}
+                  alt="WhatsApp confirmation"
+                  className={`w-5 h-5 ${hasManualWhatsAppConfirmation ? 'opacity-100' : 'opacity-30'}`}
+                />
+              </button>
+            )}
             {/* Status Chip - Icon Only */}
             <Menu as="div" className="relative inline-block text-left">
               {({ open }) => (
@@ -1978,6 +2048,26 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                             </button>
                           )}
                         </Menu.Item>
+                        {/* Send template - always visible for all orders */}
+                        <Menu.Item>
+                          {({ active }) => (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!order.customer?.phone) {
+                                  toast.error('No phone number for this order');
+                                  return;
+                                }
+                                setShowTemplateDialog(true);
+                              }}
+                              className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
+                              title="Send a message template via WhatsApp"
+                            >
+                              <DocumentTextIcon className="w-4 h-4" />
+                              Send template
+                            </button>
+                          )}
+                        </Menu.Item>
                         {!isOrderCancelled && (
                           <>
                             {(currentStatus === 'pending' || currentStatus === 'order-ready') && (
@@ -2003,24 +2093,6 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                                           : 'text-blue-500'
                                     }`} />
                                     {currentStatus === 'pending' ? 'Mark as ready' : 'Confirm ready'}
-                                  </button>
-                                )}
-                              </Menu.Item>
-                            )}
-                            {isOrderReady && (
-                              <Menu.Item>
-                                {({ active }) => (
-                                  <button
-                                    onClick={handleManualWhatsAppConfirmation}
-                                    className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
-                                    title={hasManualWhatsAppConfirmation ? "WhatsApp confirmation already sent" : "Send WhatsApp shipping confirmation"}
-                                  >
-                                    <img
-                                      src={whatsappLogo}
-                                      alt="WhatsApp"
-                                      className={`w-4 h-4 ${hasManualWhatsAppConfirmation ? 'opacity-100' : 'opacity-30'}`}
-                                    />
-                                    WhatsApp confirmation
                                   </button>
                                 )}
                               </Menu.Item>
@@ -3124,6 +3196,49 @@ Could you kindly confirm if you'll be available to receive it during that time? 
             </div>
           </div>
         )}
+
+        {/* Send template dialog - same UI as WhatsAppInbox template picker */}
+        <Dialog open={showTemplateDialog} onClose={() => setShowTemplateDialog(false)} className="relative z-[60]">
+          <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
+          <div className="fixed inset-0 flex items-center justify-center p-4">
+            <Dialog.Panel className="mx-auto w-full max-w-md rounded-lg bg-white shadow-xl border border-gray-200 max-h-[80vh] flex flex-col relative">
+              <button
+                type="button"
+                onClick={() => setShowTemplateDialog(false)}
+                className="absolute top-3 right-3 p-1.5 text-gray-500 hover:bg-gray-100 rounded-lg z-10"
+                aria-label="Close"
+              >
+                <XMarkIcon className="w-5 h-5" />
+              </button>
+              <div className="overflow-y-auto p-4 pt-12 space-y-2 flex-1">
+                {allTemplates.length === 0 ? (
+                  <p className="text-sm text-gray-500">No templates. Add them in WhatsApp → Message templates.</p>
+                ) : (
+                  ([...allTemplates]
+                    .sort((a, b) => (a.key === 'order_ready' ? -1 : b.key === 'order_ready' ? 1 : 0))
+                    .map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => handleSendTemplateSelect(t)}
+                        className={`w-full text-left p-3 rounded-lg border transition-colors ${
+                          t.key === 'order_ready'
+                            ? 'bg-amber-50/90 border-amber-200 hover:border-amber-300 hover:bg-amber-100/90'
+                            : 'border-gray-200 hover:border-[#25D366] hover:bg-green-50/50'
+                        }`}
+                      >
+                        <span className="font-medium text-gray-900 block">{t.name}</span>
+                        <span className="text-sm text-gray-600 line-clamp-2 mt-1 block">
+                          {t.body.split(/\r?\n/).slice(0, 2).join(' ').slice(0, 80)}…
+                        </span>
+                      </button>
+                    ))
+                  )
+                )}
+              </div>
+            </Dialog.Panel>
+          </div>
+        </Dialog>
     </>
   );
 };

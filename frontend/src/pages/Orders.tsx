@@ -168,6 +168,7 @@ interface Order {
   fulfillments?: Array<{
     id: number;
     status: string;
+    displayStatus?: string;
     shipment_status?: string;
     tracking_company?: string;
     tracking_number?: string;
@@ -340,13 +341,14 @@ const Orders = () => {
   const ordersRefreshTimerRef = useRef<number | null>(null);
   
   // Quick Filter state
-  const [activeQuickFilterTab, setActiveQuickFilterTab] = useState<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'>('production');
+  const [activeQuickFilterTab, setActiveQuickFilterTab] = useState<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'fulfillment_status' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'>('production');
   const [selectedProductionItems, setSelectedProductionItems] = useState<Set<string>>(new Set());
   const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
   const [selectedDayRanges, setSelectedDayRanges] = useState<Set<string>>(new Set());
   const [selectedShippingMethods, setSelectedShippingMethods] = useState<Set<string>>(new Set());
   const [selectedRushTypes, setSelectedRushTypes] = useState<Set<string>>(new Set());
   const [selectedFulfillmentMonths, setSelectedFulfillmentMonths] = useState<Set<string>>(new Set());
+  const [selectedFulfillmentStatuses, setSelectedFulfillmentStatuses] = useState<Set<string>>(new Set());
   const [selectedPaidMonths, setSelectedPaidMonths] = useState<Set<string>>(new Set());
   const [selectedCancelledMonths, setSelectedCancelledMonths] = useState<Set<string>>(new Set());
   const [selectedCancelledReasons, setSelectedCancelledReasons] = useState<Set<string>>(new Set());
@@ -885,6 +887,13 @@ const Orders = () => {
       if (!selectedRushTypes.has(rushType)) return false;
     }
     
+    // Quick filter: Fulfillment status (shipped orders only — carrier displayStatus)
+    if (selectedFulfillmentStatuses.size > 0 && statusFilter === 'shipped') {
+      const displayStatus = getFulfillmentDisplayStatusFromOrder(order);
+      const statusKey = displayStatus || 'NO_STATUS';
+      if (!selectedFulfillmentStatuses.has(statusKey)) return false;
+    }
+    
     // Quick filter: Fulfillment month (only for fulfilled orders)
     if (selectedFulfillmentMonths.size > 0 && statusFilter === 'fulfilled') {
       const tags = Array.isArray(order.tags) 
@@ -1045,6 +1054,11 @@ const Orders = () => {
     if (excludeTab !== 'rushed' && selectedRushTypes.size > 0) {
       const rushType = getRushTypeFromOrder(order);
       if (!selectedRushTypes.has(rushType)) return false;
+    }
+    if (excludeTab !== 'fulfillment_status' && selectedFulfillmentStatuses.size > 0 && statusFilter === 'shipped') {
+      const displayStatus = getFulfillmentDisplayStatusFromOrder(order);
+      const statusKey = displayStatus || 'NO_STATUS';
+      if (!selectedFulfillmentStatuses.has(statusKey)) return false;
     }
     if (excludeTab !== 'fulfillment_month' && selectedFulfillmentMonths.size > 0 && statusFilter === 'fulfilled') {
       const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) : [];
@@ -1565,13 +1579,27 @@ const Orders = () => {
   };
 
   // Helper function to get rush type from order
+  // Get fulfillment displayStatus from order (most recent fulfillment with displayStatus — same as OrderCard)
+  const getFulfillmentDisplayStatusFromOrder = (order: Order): string | null => {
+    const fulfillments = order.fulfillments;
+    if (!fulfillments || fulfillments.length === 0) return null;
+    const withStatus = fulfillments
+      .filter((f: { displayStatus?: string }) => f.displayStatus)
+      .sort((a: { updated_at?: string }, b: { updated_at?: string }) => {
+        const aDate = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+        const bDate = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+        return bDate - aDate;
+      });
+    return withStatus[0]?.displayStatus ?? null;
+  };
+
   const getRushTypeFromOrder = (order: Order): string => {
     const lineItems = order.line_items || [];
     if (lineItems.length === 0) return 'Standard';
-    
+
     let hasRushed = false;
     let hasStandard = false;
-    
+
     // Check each line item for making time
     for (const item of lineItems) {
       const makingTimeDays = detectMakingTime([item]);
@@ -1741,9 +1769,9 @@ const Orders = () => {
 
 
   // Get visible tabs based on current status filter
-  // Order: production -> days -> city -> shipping -> rushed -> fulfillment_month -> paid_month -> cancelled_calendar -> cancelled_reason
-  const getVisibleTabs = (): Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'> => {
-    const tabs: Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'> = [];
+  // Order: production -> days -> city -> shipping -> fulfillment_status (shipped) -> rushed -> fulfillment_month -> paid_month -> cancelled_calendar -> cancelled_reason
+  const getVisibleTabs = (): Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'fulfillment_status' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'> => {
+    const tabs: Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'fulfillment_status' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'> = [];
     
     // For cancelled view, show calendar and reason tabs
     if (statusFilter === 'cancelled') {
@@ -1781,6 +1809,11 @@ const Orders = () => {
     // Shipping tab
     if (['pending', 'order-ready', 'confirmed', 'ready-to-ship', 'shipped', 'fulfilled', 'all'].includes(statusFilter)) {
       tabs.push('shipping');
+    }
+    
+    // Fulfillment status tab (shipped orders only — carrier displayStatus)
+    if (statusFilter === 'shipped') {
+      tabs.push('fulfillment_status');
     }
     
     // Rushed tab (always visible)
@@ -1946,6 +1979,45 @@ const Orders = () => {
     return typeOrder
       .filter(type => typeCounts[type] > 0)
       .map(type => ({ type, count: typeCounts[type] }));
+  };
+
+  // Human-readable labels for fulfillment displayStatus (carrier status) — same as OrderCard
+  const formatFulfillmentDisplayStatus = (raw: string | null): string => {
+    if (!raw) return 'No status';
+    const statusMap: Record<string, string> = {
+      'IN_TRANSIT': 'In transit',
+      'OUT_FOR_DELIVERY': 'Out for delivery',
+      'ATTEMPTED_DELIVERY': 'Attempted delivery',
+      'DELAYED': 'Delayed',
+      'FAILED_DELIVERY': 'Failed delivery',
+      'DELIVERED': 'Delivered',
+      'TRACKING_ADDED': 'Tracking Added',
+      'FULFILLED': 'Tracking Added',
+      'NOT_DELIVERED': 'Cancelled',
+      'NO_STATUS': 'No status'
+    };
+    return statusMap[raw] || raw.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (l: string) => l.toUpperCase());
+  };
+
+  // Calculate data for fulfillment status tab (shipped orders only — counts reflect current displayed orders)
+  const getFulfillmentStatusData = () => {
+    if (!orders || statusFilter !== 'shipped') return [];
+
+    const ordersToProcess = selectedOrders.length > 0
+      ? orders.filter(order => selectedOrders.includes(order.id))
+      : orders.filter(order => filterOrdersByStatus(order) && orderMatchesOtherQuickFilters(order, 'fulfillment_status'));
+
+    const statusCounts: { [key: string]: number } = {};
+    ordersToProcess.forEach(order => {
+      const displayStatus = getFulfillmentDisplayStatusFromOrder(order);
+      const key = displayStatus || 'NO_STATUS';
+      statusCounts[key] = (statusCounts[key] || 0) + 1;
+    });
+
+    const order: string[] = ['DELIVERED', 'OUT_FOR_DELIVERY', 'IN_TRANSIT', 'ATTEMPTED_DELIVERY', 'DELAYED', 'TRACKING_ADDED', 'FULFILLED', 'FAILED_DELIVERY', 'NOT_DELIVERED', 'NO_STATUS'];
+    return order
+      .filter(key => (statusCounts[key] || 0) > 0)
+      .map(key => ({ status: key, count: statusCounts[key] }));
   };
 
   // Calculate data for fulfillment month tab (counts reflect current displayed orders)
@@ -2224,6 +2296,8 @@ const Orders = () => {
             setActiveQuickFilterTab('paid_month');
           } else if (statusFilter === 'fulfilled' && visibleTabs.includes('fulfillment_month')) {
             setActiveQuickFilterTab('fulfillment_month');
+          } else if (statusFilter === 'shipped' && visibleTabs.includes('fulfillment_status')) {
+            setActiveQuickFilterTab('fulfillment_status');
           } else if (visibleTabs.includes('production')) {
             setActiveQuickFilterTab('production');
           } else {
@@ -2246,6 +2320,8 @@ const Orders = () => {
           return getShippingData();
         case 'rushed':
           return getRushedData();
+        case 'fulfillment_status':
+          return getFulfillmentStatusData();
         case 'fulfillment_month':
           return getFulfillmentMonthData();
         case 'paid_month':
@@ -2272,6 +2348,8 @@ const Orders = () => {
           return selectedShippingMethods;
         case 'rushed':
           return selectedRushTypes;
+        case 'fulfillment_status':
+          return selectedFulfillmentStatuses;
         case 'fulfillment_month':
           return selectedFulfillmentMonths;
         case 'paid_month':
@@ -2330,6 +2408,14 @@ const Orders = () => {
             return newSet;
           });
           break;
+        case 'fulfillment_status':
+          setSelectedFulfillmentStatuses(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(value)) newSet.delete(value);
+            else newSet.add(value);
+            return newSet;
+          });
+          break;
         case 'fulfillment_month':
           setSelectedFulfillmentMonths(prev => {
             const newSet = new Set(prev);
@@ -2373,6 +2459,7 @@ const Orders = () => {
       setSelectedShippingMethods(new Set());
       setSelectedRushTypes(new Set());
       setSelectedFulfillmentMonths(new Set());
+      setSelectedFulfillmentStatuses(new Set());
       setSelectedPaidMonths(new Set());
       setSelectedCancelledMonths(new Set());
       setSelectedCancelledReasons(new Set());
@@ -2390,6 +2477,7 @@ const Orders = () => {
       selectedShippingMethods.size > 0 ||
       selectedRushTypes.size > 0 ||
       selectedFulfillmentMonths.size > 0 ||
+      selectedFulfillmentStatuses.size > 0 ||
       selectedPaidMonths.size > 0 ||
       selectedCancelledMonths.size > 0 ||
       selectedCancelledReasons.size > 0;
@@ -2425,6 +2513,8 @@ const Orders = () => {
           return "Couldn't find cancellation data";
         case 'fulfillment_month':
           return "Couldn't find fulfillment_date tags";
+        case 'fulfillment_status':
+          return "No fulfillment status data";
         case 'paid_month':
           return "Couldn't find paid_date tags";
         default:
@@ -2443,6 +2533,7 @@ const Orders = () => {
       days: { icon: '📅', label: 'Days', tooltip: 'Days Left' },
       shipping: { icon: '🚚', label: 'Shipping', tooltip: 'Shipping Method' },
       rushed: { icon: '⚡', label: 'Rushed', tooltip: 'Rushed/Standard' },
+      fulfillment_status: { icon: '📦', label: 'Status', tooltip: 'Fulfillment status' },
       fulfillment_month: { icon: '📆', label: 'Month', tooltip: 'Fulfillment Month' },
       paid_month: { icon: '📅', label: 'Calendar', tooltip: 'Paid Month' },
       cancelled_calendar: { icon: '📅', label: 'Calendar', tooltip: 'Cancelled Month' },
@@ -2657,11 +2748,13 @@ const Orders = () => {
                            activeQuickFilterTab === 'city' ? item.city :
                            activeQuickFilterTab === 'days' ? item.range :
                            activeQuickFilterTab === 'shipping' ? item.method :
+                           activeQuickFilterTab === 'fulfillment_status' ? item.status :
                            activeQuickFilterTab === 'fulfillment_month' ? item.month :
                            activeQuickFilterTab === 'paid_month' ? item.month :
                            activeQuickFilterTab === 'cancelled_calendar' ? item.month :
                            activeQuickFilterTab === 'cancelled_reason' ? item.reason :
                            item.type;
+              const displayLabel = activeQuickFilterTab === 'fulfillment_status' ? formatFulfillmentDisplayStatus(item.status) : value;
               const count = item.quantity || item.count;
               const isSelected = selectedItems.has(value);
               
@@ -2707,7 +2800,7 @@ const Orders = () => {
                         ? 'text-green-800'
                         : 'text-gray-700'
                   }`}>
-                    {value}
+                    {displayLabel}
                   </span>
                   <div className="flex items-center gap-2">
                     <span className={`text-sm font-semibold ${

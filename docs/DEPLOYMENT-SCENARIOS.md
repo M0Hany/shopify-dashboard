@@ -94,6 +94,21 @@ If the build appears to freeze during `RUN npm install` / `RUN npm ci`:
 3. Enable GitHub Pages in repository settings
 4. Configure GitHub Actions for automatic deployment
 
+## Backend scheduled jobs (cron)
+
+All cron times use **Africa/Cairo**. The backend starts these when the process starts; they keep running as long as the Node process is up (e.g. in Docker or PM2).
+
+| Schedule | Job | Description |
+|----------|-----|-------------|
+| **Every 30 min** | Shipping status check | ShipBlu orders: check fulfillment `displayStatus`, move to fulfilled when delivered. Started from `index.ts` (`startShippingStatusChecker`). |
+| **Every 30 min** | Pending orders (confirmation) | Find orders without confirmation tags and schedule WhatsApp confirmation (1h delay). In `SchedulerService` (`checkPendingOrders`). |
+| **Every 6 hours** | Order status auto-move | Order lifecycle: `order_ready` → `on_hold` after 2 days without confirmation; `on_hold` → `cancelled` after 2 more days. Discord notifications. In `SchedulerService` (`runOrderStatusAutoMove`). |
+| **Daily 00:00** | Daily cleanup | Placeholder (logs only). In `SchedulerService` (`dailyCleanup`). |
+
+**Queue-based (Bull + Redis):** Order confirmation messages are queued with a 1h delay when a new pending order is found; the queue processor sends the WhatsApp message. Queue cleanup runs every 24h.
+
+For production, ensure the backend process is long-running (e.g. one container or PM2 instance). If the process restarts, cron jobs run again from startup.
+
 ## Environment Variables
 
 ### Frontend (.env.local, .env.docker, .env.production)

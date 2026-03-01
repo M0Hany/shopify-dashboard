@@ -14,9 +14,7 @@ import { getConfig } from './config';
 import express from 'express';
 import { schedulerService } from './services/scheduler.service';
 import { logger } from './utils/logger';
-import { scheduleShippingStatusCheck } from './jobs/shippingStatusChecker';
-import { scheduleAddressTagCheck } from './jobs/addressTagChecker';
-import { CronJob } from 'cron';
+import { startShippingStatusChecker, scheduleShippingStatusCheck } from './jobs/shippingStatusChecker';
 import path from 'path';
 
 const app = express();
@@ -121,10 +119,12 @@ const startServer = async () => {
   try {
     // Start scheduler service
     schedulerService.startAll();
-    
-    // Schedule jobs
+
+    // Start recurring cron jobs (every 30 min) so they run in both dev and production
+    startShippingStatusChecker();
+
+    // Run shipping status check once at startup (then cron takes over)
     scheduleShippingStatusCheck();
-    scheduleAddressTagCheck();
     
     app.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);

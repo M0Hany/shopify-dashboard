@@ -6,6 +6,7 @@ import { logger } from '../utils/logger';
 import { ShopifyService } from '../services/shopify';
 import { supabase } from '../config/supabase';
 import { discordNotificationService } from '../services/discordNotifications';
+import { whatsappTemplateService } from '../services/whatsappTemplateService';
 
 const router = express.Router();
 const whatsappService = new WhatsAppService();
@@ -470,6 +471,66 @@ router.get('/stats', async (req, res) => {
   } catch (error) {
     logger.error('Error getting message statistics:', error);
     res.status(500).json({ error: 'Failed to get message statistics' });
+  }
+});
+
+// WhatsApp message templates (for OrderCard and settings)
+router.get('/templates', async (req, res) => {
+  try {
+    const templates = await whatsappTemplateService.getAll();
+    res.json({ templates });
+  } catch (error) {
+    logger.error('Error fetching WhatsApp templates:', error);
+    res.status(500).json({ error: 'Failed to fetch templates' });
+  }
+});
+
+router.get('/templates/key/:key', async (req, res) => {
+  try {
+    const { key } = req.params;
+    const template = await whatsappTemplateService.getByKey(key);
+    if (!template) return res.status(404).json({ error: 'Template not found' });
+    res.json(template);
+  } catch (error) {
+    logger.error('Error fetching WhatsApp template by key:', error);
+    res.status(500).json({ error: 'Failed to fetch template' });
+  }
+});
+
+router.post('/templates', async (req, res) => {
+  try {
+    const { key, name, body } = req.body;
+    if (!key || !name || !body) {
+      return res.status(400).json({ error: 'key, name, and body are required' });
+    }
+    const template = await whatsappTemplateService.create({ key: key.trim(), name: name.trim(), body: body.trim() });
+    res.status(201).json(template);
+  } catch (error) {
+    logger.error('Error creating WhatsApp template:', error);
+    res.status(500).json({ error: 'Failed to create template' });
+  }
+});
+
+router.put('/templates/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, body } = req.body;
+    const template = await whatsappTemplateService.update(id, { name, body });
+    res.json(template);
+  } catch (error) {
+    logger.error('Error updating WhatsApp template:', error);
+    res.status(500).json({ error: 'Failed to update template' });
+  }
+});
+
+router.delete('/templates/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await whatsappTemplateService.delete(id);
+    res.status(204).send();
+  } catch (error) {
+    logger.error('Error deleting WhatsApp template:', error);
+    res.status(500).json({ error: 'Failed to delete template' });
   }
 });
 

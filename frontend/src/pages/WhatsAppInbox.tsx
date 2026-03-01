@@ -4,16 +4,17 @@ import {
   ChatBubbleLeftIcon, 
   PaperAirplaneIcon, 
   PhoneIcon,
-  UserIcon,
   ClockIcon,
   CheckIcon,
   CheckCircleIcon,
   MagnifyingGlassIcon,
-  XMarkIcon
+  XMarkIcon,
+  DocumentTextIcon
 } from '@heroicons/react/24/outline';
 import { toast } from 'react-hot-toast';
 import { format, isToday, isYesterday, isSameDay } from 'date-fns';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, Link } from 'react-router-dom';
+import { Dialog } from '@headlessui/react';
 
 interface Message {
   id: string;
@@ -39,14 +40,29 @@ interface Conversation {
   unreadCount?: number;
 }
 
+interface WhatsAppMessageTemplate {
+  id: string;
+  key: string;
+  name: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
 const WhatsAppInbox: React.FC = () => {
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
   const [newMessage, setNewMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [showConversations, setShowConversations] = useState(true); // For mobile toggle
   const [conversationFilter, setConversationFilter] = useState<'all' | 'unread'>('all');
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const queryClient = useQueryClient();
+  const API = import.meta.env.VITE_API_URL;
+
+  const MESSAGE_INPUT_MIN_HEIGHT = 44;
+  const MESSAGE_INPUT_MAX_HEIGHT = 160;
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -90,13 +106,41 @@ const WhatsAppInbox: React.FC = () => {
     queryKey: ['whatsapp-messages', selectedPhone],
     queryFn: async () => {
       if (!selectedPhone) return [];
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/conversation/${selectedPhone}?limit=100`);
+      const response = await fetch(`${API}/api/whatsapp/conversation/${selectedPhone}?limit=100`);
       if (!response.ok) throw new Error('Failed to fetch messages');
       const data = await response.json();
       return data.messages || [];
     },
     enabled: !!selectedPhone,
     refetchInterval: selectedPhone ? 10000 : false, // Refetch every 10 seconds when conversation is selected
+  });
+
+  // Fetch templates when template dialog is open
+  const { data: templates = [] } = useQuery({
+    queryKey: ['whatsapp-templates'],
+    queryFn: async () => {
+      const res = await fetch(`${API}/api/whatsapp/templates`);
+      if (!res.ok) return [];
+      const json = await res.json();
+      return (json.templates || []) as WhatsAppMessageTemplate[];
+    },
+    enabled: templateDialogOpen,
+  });
+
+  // Fetch orders when template dialog is open (to resolve placeholders for selected phone)
+  const { data: ordersForPlaceholders = [] } = useQuery({
+    queryKey: ['orders'],
+    queryFn: async () => {
+      const res = await fetch(`${API}/api/orders`);
+      if (!res.ok) return [];
+      return (await res.json()) as Array<{
+        id: number;
+        customer?: { first_name?: string; phone?: string };
+        shipping_address?: { phone?: string };
+        line_items?: Array<{ title: string; variant_title?: string | null }>;
+      }>;
+    },
+    enabled: templateDialogOpen && !!selectedPhone,
   });
 
   // Mark messages as read when conversation is selected
@@ -330,6 +374,63 @@ const WhatsAppInbox: React.FC = () => {
     });
   };
 
+  // Normalize phone to digits for matching (e.g. 201234567890)
+  const normalizePhoneForMatch = (phone: string): string => {
+    const digits = (phone || '').replace(/\D/g, '');
+    if (digits.startsWith('201')) return digits.slice(0, 12);
+    if (digits.startsWith('20')) return '201' + digits.slice(2, 11);
+    if (digits.startsWith('01')) return '2' + digits;
+    if (digits.startsWith('1')) return '20' + digits;
+    return digits ? '201' + digits.slice(-9) : '';
+  };
+
+  // Get placeholder values from orders for the current chat phone
+  const getPlaceholderData = (): { customer_first_name: string; items_list: string } => {
+    const normalized = selectedPhone ? normalizePhoneForMatch(selectedPhone) : '';
+    const order = (ordersForPlaceholders as Array<{
+      customer?: { first_name?: string; phone?: string };
+      shipping_address?: { phone?: string };
+      line_items?: Array<{ title: string; variant_title?: string | null }>;
+    }>).find((o: any) => {
+      const p = (o.customer?.phone || o.shipping_address?.phone || '').replace(/\D/g, '');
+      const orderNorm = normalizePhoneForMatch(p || '');
+      return orderNorm && normalized && (orderNorm === normalized || orderNorm.endsWith(normalized.slice(-9)) || normalized.endsWith(orderNorm.slice(-9)));
+    });
+    const customerFirstName = order?.customer?.first_name?.trim() || 'Customer';
+    const itemsList = order?.line_items?.length
+      ? order.line_items.map((item: any) => `- ${item.title}${item.variant_title ? ` (${item.variant_title})` : ''}`).join('\n')
+      : '—';
+    return { customer_first_name: customerFirstName, items_list: itemsList };
+  };
+
+  // Apply template body with placeholder replacement
+  const applyTemplate = (body: string): string => {
+    const { customer_first_name, items_list } = getPlaceholderData();
+    return body
+      .replace(/\{\{customer_first_name\}\}/g, customer_first_name)
+      .replace(/\{\{items_list\}\}/g, items_list);
+  };
+
+  const handleSelectTemplate = (t: WhatsAppMessageTemplate) => {
+    const filled = applyTemplate(t.body);
+    setNewMessage((prev) => (prev ? prev + '\n\n' + filled : filled));
+    setTemplateDialogOpen(false);
+  };
+
+  // Auto-resize message textarea up to max height, then scroll
+  const resizeMessageInput = () => {
+    const el = messageInputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const newHeight = Math.min(Math.max(el.scrollHeight, MESSAGE_INPUT_MIN_HEIGHT), MESSAGE_INPUT_MAX_HEIGHT);
+    el.style.height = `${newHeight}px`;
+    el.style.overflowY = el.scrollHeight > MESSAGE_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+  };
+
+  useEffect(() => {
+    resizeMessageInput();
+  }, [newMessage]);
+
   const formatPhoneNumber = (phone: string) => {
     // Return phone number as stored in database (no formatting)
     return phone;
@@ -395,10 +496,11 @@ const WhatsAppInbox: React.FC = () => {
     }
   };
 
+  // Height = viewport minus nav: mobile has bottom nav (4rem), desktop has header (3.5rem)
   return (
-    <div className="flex h-full bg-gray-50 overflow-hidden">
+    <div className="flex h-[calc(100vh-4rem)] md:h-[calc(100vh-3.5rem)] min-h-0 bg-gray-50 overflow-hidden">
       {/* Conversations Sidebar */}
-      <div className={`${showConversations ? 'flex' : 'hidden'} md:flex w-full md:w-80 bg-white border-r border-gray-200 flex-col absolute md:relative z-10 h-full shadow-lg`}>
+      <div className={`${showConversations ? 'flex' : 'hidden'} md:flex w-full md:w-80 bg-white border-r border-gray-200 flex-col absolute md:relative z-10 h-full min-h-0 shadow-lg`}>
         {/* Header with WhatsApp green accent */}
         <div className="bg-gradient-to-r from-[#25D366] to-[#20BA5A] p-4">
           <div className="flex items-center justify-between mb-3">
@@ -407,6 +509,13 @@ const WhatsAppInbox: React.FC = () => {
               <h1 className="text-xl font-semibold text-white">Chats</h1>
             </div>
             <div className="flex items-center gap-2">
+              <Link
+                to="/whatsapp/templates"
+                className="px-3 py-1.5 text-xs font-medium text-white bg-white/20 hover:bg-white/30 rounded-full transition-colors"
+                title="Message templates"
+              >
+                Templates
+              </Link>
               {/* Read All button */}
               {unreadConversations.length > 0 && (
                 <button
@@ -472,7 +581,7 @@ const WhatsAppInbox: React.FC = () => {
         </div>
 
         {/* Conversations List */}
-        <div className="flex-1 overflow-y-auto bg-white">
+        <div className="flex-1 min-h-0 overflow-y-auto bg-white">
           {conversationsLoading ? (
             // Loading Skeletons
             <div className="p-2">
@@ -600,7 +709,7 @@ const WhatsAppInbox: React.FC = () => {
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 bg-[#EFEAE2] space-y-1" style={{
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 bg-[#EFEAE2] space-y-1" style={{
               backgroundImage: `url("data:image/svg+xml,%3Csvg width='40' height='40' viewBox='0 0 40 40' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23d4d0c7' fill-opacity='0.4'%3E%3Cpath d='M0 0h40v40H0z'/%3E%3C/g%3E%3C/svg%3E")`,
             }}>
               {messagesLoading ? (
@@ -688,29 +797,90 @@ const WhatsAppInbox: React.FC = () => {
 
             {/* Enhanced Message Input */}
             <div className="p-4 bg-white border-t border-gray-200">
-              <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
-                <div className="flex-1 relative">
-                  <input
-                    type="text"
+              <form onSubmit={handleSendMessage} className="flex items-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTemplateDialogOpen(true)}
+                  className="flex-shrink-0 p-3 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-[#25D366] transition-all"
+                  title="Insert template"
+                >
+                  <DocumentTextIcon className="w-5 h-5" />
+                </button>
+                <div className="flex-1 min-w-0 flex flex-col">
+                  <textarea
+                    ref={messageInputRef}
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (newMessage.trim()) {
+                          sendMessageMutation.mutate({ phone: selectedPhone!, message: newMessage.trim() });
+                        }
+                      }
+                    }}
                     placeholder="Type a message..."
-                    className="w-full px-4 py-3 bg-gray-100 border-0 rounded-full focus:outline-none focus:ring-2 focus:ring-[#25D366] focus:bg-white transition-all text-sm md:text-base"
+                    rows={1}
+                    className="w-full px-4 py-3 bg-gray-100 border-0 rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#25D366] focus:bg-white transition-all text-sm md:text-base resize-none overflow-y-auto"
                     disabled={sendMessageMutation.isPending}
+                    style={{ minHeight: MESSAGE_INPUT_MIN_HEIGHT, maxHeight: MESSAGE_INPUT_MAX_HEIGHT }}
                   />
                 </div>
                 <button
                   type="submit"
                   disabled={!newMessage.trim() || sendMessageMutation.isPending}
-                  className="p-3 bg-[#25D366] text-white rounded-full hover:bg-[#20BA5A] disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg disabled:shadow-none flex-shrink-0"
+                  className="flex-shrink-0 p-3 bg-[#25D366] text-white rounded-full hover:bg-[#20BA5A] disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg disabled:shadow-none"
                 >
                   <PaperAirplaneIcon className="w-5 h-5" />
                 </button>
               </form>
             </div>
+
+            {/* Template picker dialog */}
+            <Dialog open={templateDialogOpen} onClose={() => setTemplateDialogOpen(false)} className="relative z-50">
+              <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
+              <div className="fixed inset-0 flex items-center justify-center p-4">
+                <Dialog.Panel className="mx-auto w-full max-w-md rounded-lg bg-white shadow-xl border border-gray-200 max-h-[80vh] flex flex-col relative">
+                  <button
+                    type="button"
+                    onClick={() => setTemplateDialogOpen(false)}
+                    className="absolute top-3 right-3 p-1.5 text-gray-500 hover:bg-gray-100 rounded-lg z-10"
+                    aria-label="Close"
+                  >
+                    <XMarkIcon className="w-5 h-5" />
+                  </button>
+                  <div className="overflow-y-auto p-4 pt-12 space-y-2 flex-1">
+                    {templates.length === 0 ? (
+                      <p className="text-sm text-gray-500">No templates. Add them in Message templates.</p>
+                    ) : (
+                      ([...templates]
+                        .sort((a, b) => (a.key === 'order_ready' ? -1 : b.key === 'order_ready' ? 1 : 0))
+                        .map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => handleSelectTemplate(t)}
+                            className={`w-full text-left p-3 rounded-lg border transition-colors ${
+                              t.key === 'order_ready'
+                                ? 'bg-amber-50/90 border-amber-200 hover:border-amber-300 hover:bg-amber-100/90'
+                                : 'border-gray-200 hover:border-[#25D366] hover:bg-green-50/50'
+                            }`}
+                          >
+                            <span className="font-medium text-gray-900 block">{t.name}</span>
+                            <span className="text-sm text-gray-600 line-clamp-2 mt-1 block">
+                              {t.body.split(/\r?\n/).slice(0, 2).join(' ').slice(0, 80)}…
+                            </span>
+                          </button>
+                        ))
+                      )
+                    )}
+                  </div>
+                </Dialog.Panel>
+              </div>
+            </Dialog>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center">
+          <div className="flex-1 min-h-0 flex items-center justify-center">
             <div className="text-center p-4">
               <ChatBubbleLeftIcon className="w-12 h-12 md:w-16 md:h-16 text-gray-300 mx-auto mb-4" />
               <h3 className="text-base md:text-lg font-medium text-gray-900 mb-2">
