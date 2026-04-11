@@ -25,6 +25,9 @@ interface Message {
   type: string;
   text?: {
     body: string;
+    mediaUrl?: string | null;
+    mediaMimeType?: string | null;
+    mediaId?: string | null;
   };
   timestamp: string;
   status?: 'sent' | 'delivered' | 'read' | 'failed';
@@ -465,6 +468,59 @@ const WhatsAppInbox: React.FC = () => {
     }
   };
 
+  const getMediaUrl = (message: Message): string | null => {
+    const maybeRelative = message.text?.mediaUrl;
+    const mediaId = message.text?.mediaId;
+
+    if (maybeRelative) {
+      if (maybeRelative.startsWith('http://') || maybeRelative.startsWith('https://')) {
+        console.log('[WhatsAppInbox] image message uses absolute mediaUrl', {
+          messageId: message.message_id,
+          mediaUrl: maybeRelative
+        });
+        return maybeRelative;
+      }
+      if (!API) {
+        console.log('[WhatsAppInbox] image message uses relative mediaUrl (no API base)', {
+          messageId: message.message_id,
+          mediaUrl: maybeRelative
+        });
+        return maybeRelative;
+      }
+      const resolved = `${API.replace(/\/$/, '')}${maybeRelative}`;
+      console.log('[WhatsAppInbox] image message resolved relative mediaUrl', {
+        messageId: message.message_id,
+        mediaUrl: maybeRelative,
+        resolved
+      });
+      return resolved;
+    }
+
+    if (mediaId && API) {
+      const proxyUrl = `${API.replace(/\/$/, '')}/api/whatsapp/media/${encodeURIComponent(mediaId)}`;
+      console.log('[WhatsAppInbox] image message fallback to media proxy', {
+        messageId: message.message_id,
+        mediaId,
+        proxyUrl
+      });
+      return proxyUrl;
+    }
+
+    console.log('[WhatsAppInbox] image message has no renderable URL', {
+      messageId: message.message_id,
+      type: message.type,
+      textPayload: message.text
+    });
+    return null;
+  };
+
+  const getMessagePreview = (message?: Message): string => {
+    if (!message) return '';
+    if (message.text?.body) return message.text.body;
+    if (message.type === 'image') return 'Photo';
+    return 'Media message';
+  };
+
   const formatDateDivider = (timestamp: string | Date) => {
     try {
       const date = typeof timestamp === 'string' ? new Date(timestamp) : timestamp;
@@ -659,7 +715,7 @@ const WhatsAppInbox: React.FC = () => {
                               ? 'text-gray-900 font-medium' 
                               : 'text-gray-500'
                           }`}>
-                            {conversation.lastMessage.text?.body || 'Media message'}
+                            {getMessagePreview(conversation.lastMessage)}
                           </p>
                           {(conversation.unreadCount ?? 0) > 0 && (
                             <div className="ml-2 min-w-[20px] h-5 bg-[#25D366] rounded-full flex items-center justify-center px-2 flex-shrink-0">
@@ -772,7 +828,37 @@ const WhatsAppInbox: React.FC = () => {
                                 : 'bg-white text-gray-900 rounded-tl-sm'
                             }`}
                           >
-                            <p className="text-sm break-words leading-relaxed">{message.text?.body || 'Media message'}</p>
+                            {message.type === 'image' && getMediaUrl(message) ? (
+                              <a
+                                href={getMediaUrl(message)!}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block"
+                              >
+                                <img
+                                  src={getMediaUrl(message)!}
+                                  alt={message.text?.body || 'WhatsApp image'}
+                                  className="rounded-lg max-h-64 w-auto object-cover mb-2 cursor-zoom-in"
+                                  loading="lazy"
+                                  onLoad={() => {
+                                    console.log('[WhatsAppInbox] image loaded successfully', {
+                                      messageId: message.message_id,
+                                      src: getMediaUrl(message)
+                                    });
+                                  }}
+                                  onError={() => {
+                                    console.error('[WhatsAppInbox] image failed to load', {
+                                      messageId: message.message_id,
+                                      src: getMediaUrl(message),
+                                      textPayload: message.text
+                                    });
+                                  }}
+                                />
+                              </a>
+                            ) : null}
+                            <p className="text-sm break-words leading-relaxed">
+                              {getMessagePreview(message)}
+                            </p>
                             <div className={`flex items-center justify-end gap-1 mt-1 ${
                               isOutgoing ? 'text-gray-600' : 'text-gray-500'
                             }`}>

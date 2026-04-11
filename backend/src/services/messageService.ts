@@ -1,5 +1,7 @@
 import { supabase } from '../config/supabase';
 import { logger } from '../utils/logger';
+import fs from 'fs/promises';
+import path from 'path';
 
 export interface IMessage {
   id: string;
@@ -18,6 +20,19 @@ export interface IMessage {
 }
 
 export class MessageService {
+  private static readonly WHATSAPP_UPLOADS_DIR = path.resolve(process.cwd(), 'uploads', 'whatsapp-media');
+
+  private static async resolveLocalImageUrl(messageId: string): Promise<string | null> {
+    try {
+      const safeMessageId = messageId.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const entries = await fs.readdir(MessageService.WHATSAPP_UPLOADS_DIR);
+      const matched = entries.find((name) => name.startsWith(`${safeMessageId}.`));
+      if (!matched) return null;
+      return `/uploads/whatsapp-media/${matched}`;
+    } catch {
+      return null;
+    }
+  }
   // Store a new message
   static async storeMessage(messageData: {
     message_id: string;
@@ -115,7 +130,25 @@ export class MessageService {
         messageCount: data?.length || 0
       });
 
-      return (data || []).reverse(); // Return in chronological order
+      const chronological = (data || []).reverse();
+
+      // Backfill image payloads for legacy rows where text is null but file exists locally.
+      const hydrated = await Promise.all(
+        chronological.map(async (message) => {
+          if (message.type !== 'image' || message.text) return message;
+          const localUrl = await MessageService.resolveLocalImageUrl(message.message_id);
+          if (!localUrl) return message;
+          return {
+            ...message,
+            text: {
+              body: '',
+              mediaUrl: localUrl
+            }
+          };
+        })
+      );
+
+      return hydrated;
     } catch (error) {
       logger.error('Error retrieving conversation history', {
         error,

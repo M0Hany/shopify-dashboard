@@ -4,7 +4,7 @@ import whatsappLogo from '../assets/whatsapp.png';
 import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon, EllipsisHorizontalIcon, DocumentTextIcon, ClockIcon, SparklesIcon, CheckBadgeIcon, PaperAirplaneIcon, XCircleIcon, BanknotesIcon, BoltIcon, HandRaisedIcon, HandThumbUpIcon, PauseCircleIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid, PhoneArrowUpRightIcon } from '@heroicons/react/24/solid';
 import { convertToCairoTime, calculateDaysRemaining } from '../utils/dateUtils';
-import { Menu, Dialog } from '@headlessui/react';
+import { Menu, Dialog, Popover, Transition } from '@headlessui/react';
 import { format } from 'date-fns';
 import LocationDialog, { Zone, SubZone } from './ui/LocationDialog';
 import { locationData } from '../data/locations';
@@ -12,6 +12,12 @@ import { toast } from 'react-hot-toast';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { useNavigate } from 'react-router-dom';
+import {
+  analyzePriorityMakingLineItems,
+  isPriorityMakingLineItem,
+  mergeRushTypeWithPriorityMaking,
+  shouldHidePriorityMakingLine,
+} from '../utils/priorityMakingRush';
 
 interface LocationSelections {
   cityId: string | null;
@@ -19,7 +25,14 @@ interface LocationSelections {
   subzoneId: string | null;
 }
 
-interface OrderCardProps {
+export type OrderCardMapRoutePicker = {
+  addable: { id: string; name: string }[];
+  removable: { id: string; name: string }[];
+  onAddToRoute: (routeId: string) => void | Promise<void>;
+  onRemoveFromRoute: (routeId: string) => void | Promise<void>;
+};
+
+export interface OrderCardProps {
   order: any;
   isSelected?: boolean;
   onSelect?: (orderId: number) => void;
@@ -30,6 +43,8 @@ interface OrderCardProps {
   onUpdateTags?: (orderId: number, newTags: string[]) => void;
   onUpdateDueDate?: (orderId: number, date: string) => void;
   onUpdateStartDate?: (orderId: number, date: string) => void;
+  /** When set (e.g. map pin popup), shows Add to route / Remove from route control. */
+  mapRoutePicker?: OrderCardMapRoutePicker;
 }
 
 // Add new ShippingStatus component
@@ -216,7 +231,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
   onTogglePriority,
   onUpdateTags,
   onUpdateDueDate,
-  onUpdateStartDate
+  onUpdateStartDate,
+  mapRoutePicker,
 }) => {
   const navigate = useNavigate();
   const [showNoteDialog, setShowNoteDialog] = useState(false);
@@ -247,6 +263,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const [selectedNeighborhood, setSelectedNeighborhood] = useState<Zone | null>(null);
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
   const [itemsExpanded, setItemsExpanded] = useState(false);
+  const [mapInfoExpanded, setMapInfoExpanded] = useState(false);
+  const [mapTimelineExpanded, setMapTimelineExpanded] = useState(false);
   const [orderNumberCopied, setOrderNumberCopied] = useState(false);
   const [phoneNumberCopied, setPhoneNumberCopied] = useState(false);
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
@@ -265,7 +283,25 @@ const OrderCard: React.FC<OrderCardProps> = ({
   
   // Ensure all tags are trimmed before searching
   const trimmedTags = tags.map((tag: string) => tag.trim());
-  
+
+  const shippingRouteTagEntry = trimmedTags.find((t: string) => t.toLowerCase().startsWith('shipping_route:'));
+  const shippingRouteDateEntry = trimmedTags.find((t: string) => t.toLowerCase().startsWith('shipping_route_date:'));
+  const shippingRouteDisplayName = shippingRouteTagEntry
+    ? shippingRouteTagEntry.slice('shipping_route:'.length)
+    : null;
+  const shippingRouteDisplayDate = shippingRouteDateEntry
+    ? shippingRouteDateEntry.slice('shipping_route_date:'.length)
+    : null;
+
+  const mapRemovableRouteIdForBadge = useMemo(() => {
+    if (!mapRoutePicker?.removable?.length) return null;
+    const rem = mapRoutePicker.removable;
+    if (rem.length === 1) return rem[0].id;
+    const tag = (shippingRouteDisplayName || '').trim().toLowerCase();
+    const matched = rem.find((x) => x.name.trim().toLowerCase() === tag);
+    return matched?.id ?? rem[0].id;
+  }, [mapRoutePicker, shippingRouteDisplayName]);
+
   // Check if order is order-ready
   const isOrderReady = trimmedTags.some((tag: string) => tag.trim().toLowerCase() === 'order_ready');
   
@@ -304,18 +340,18 @@ const OrderCard: React.FC<OrderCardProps> = ({
     enabled: showTemplateDialog,
   });
 
-  // Utility function to detect making time from line items
-  const detectMakingTime = (lineItems: any[]): number | null => {
+  // Legacy making-time detection (title/properties only; per line item for rush type)
+  const detectLegacyMakingTime = (lineItems: any[]): number | null => {
     if (!lineItems || lineItems.length === 0) return null;
     
     // Look for addon line items that contain making time information
     for (const item of lineItems) {
       const title = item.title || '';
       
-      // Check for "Rush My Order [3 days]" pattern in title
+      // Rush add-on: always 3-day making time (ignore number in brackets, e.g. [4 days])
       const rushMatch = title.match(/rush.*?\[(\d+)\s*days?\]/i);
       if (rushMatch) {
-        return parseInt(rushMatch[1], 10);
+        return 3;
       }
       
       // Check for "Handmade Timeline [7 days]" pattern in title
@@ -335,7 +371,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
             // Check for rush pattern
             const rushPropMatch = propValue.match(/rush.*?\[(\d+)\s*days?\]/i);
             if (rushPropMatch) {
-              return parseInt(rushPropMatch[1], 10);
+              return 3;
             }
             // Check for handmade pattern
             const handmadePropMatch = propValue.match(/handmade.*?\[(\d+)\s*days?\]/i);
@@ -345,7 +381,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
             // Check for just the number of days
             const daysMatch = propValue.match(/(\d+)\s*days?/i);
             if (daysMatch && (propValue.toLowerCase().includes('rush') || propValue.toLowerCase().includes('3'))) {
-              return parseInt(daysMatch[1], 10);
+              return propValue.toLowerCase().includes('rush') ? 3 : parseInt(daysMatch[1], 10);
             }
             if (daysMatch && (propValue.toLowerCase().includes('handmade') || propValue.toLowerCase().includes('7'))) {
               return parseInt(daysMatch[1], 10);
@@ -372,41 +408,45 @@ const OrderCard: React.FC<OrderCardProps> = ({
   // Detect rush type from line items (Rushed, Standard, or Mix)
   const getRushType = (): 'Rushed' | 'Standard' | 'Mix' => {
     const lineItems = order.line_items || [];
-    if (lineItems.length === 0) return 'Standard';
+    if (lineItems.length === 0) {
+      return mergeRushTypeWithPriorityMaking('Standard', analyzePriorityMakingLineItems(lineItems));
+    }
     
     let hasRushed = false;
     let hasStandard = false;
     
-    // Check each line item for making time
+    // Check each line item for making time (legacy addons only)
     for (const item of lineItems) {
-      const makingTimeDays = detectMakingTime([item]);
+      const makingTimeDays = detectLegacyMakingTime([item]);
       if (makingTimeDays === 3) {
         hasRushed = true;
       } else if (makingTimeDays === 7 || makingTimeDays === null) {
         hasStandard = true;
       }
     }
-    
-    // If order has both rushed and standard items, it's a Mix
+
+    let legacy: 'Rushed' | 'Standard' | 'Mix';
     if (hasRushed && hasStandard) {
-      return 'Mix';
+      legacy = 'Mix';
+    } else if (hasRushed) {
+      legacy = 'Rushed';
+    } else {
+      legacy = 'Standard';
     }
-    
-    // If only rushed items found
-    if (hasRushed) {
-      return 'Rushed';
-    }
-    
-    // Default to Standard
-    return 'Standard';
+
+    return mergeRushTypeWithPriorityMaking(legacy, analyzePriorityMakingLineItems(lineItems));
   };
 
   const rushType = getRushType();
   const isRushOrder = rushType === 'Rushed';
   const isHandmadeOrder = rushType === 'Standard' && !isRushOrder;
+
+  const priorityMakingAnalysis = analyzePriorityMakingLineItems(order.line_items || []);
+  const hidePriorityMakingLine = shouldHidePriorityMakingLine(priorityMakingAnalysis);
   
   // Separate regular line items from addon line items
   const regularLineItems = (order.line_items || []).filter((item: any) => {
+    if (hidePriorityMakingLine && isPriorityMakingLineItem(item)) return false;
     const title = (item.title || '').toLowerCase();
     // Filter out addon line items (making time options)
     return !title.includes('choose your making time') && 
@@ -457,7 +497,11 @@ const OrderCard: React.FC<OrderCardProps> = ({
   if (!dueDate) {
     // Calculate due date based on making time if detected, otherwise default to 7 days
     // For mixed orders, use the longest making time (7 days for standard)
-    const makingTimeDays = detectMakingTime(order.line_items || []);
+    const pm = analyzePriorityMakingLineItems(order.line_items || []);
+    const makingTimeDays =
+      pm.hasPriorityMaking && pm.quantitiesMatch
+        ? 3
+        : detectLegacyMakingTime(order.line_items || []);
     const daysToAdd = makingTimeDays || 7;
     dueDate = new Date(startDate);
     dueDate.setDate(dueDate.getDate() + daysToAdd);
@@ -1223,7 +1267,9 @@ Could you kindly confirm if you'll be available to receive it during that time? 
     if (!order.customer?.phone || !isOrderReady) return;
 
     const customerFirstName = order.customer.first_name || '';
-    const orderItems = order.line_items || [];
+    const orderItems = (order.line_items || []).filter(
+      (item: any) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item))
+    );
     const itemsList = orderItems.map((item: any) => {
       const variant = item.variant_title ? ` (${item.variant_title})` : '';
       return `- ${item.title}${variant}`;
@@ -1272,7 +1318,9 @@ Could you kindly confirm if you'll be available to receive it during that time? 
       return;
     }
     const customerFirstName = order.customer.first_name?.trim() || 'Customer';
-    const itemsList = (order.line_items || []).map((item: any) => {
+    const itemsList = (order.line_items || [])
+      .filter((item: any) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item)))
+      .map((item: any) => {
       const variant = item.variant_title ? ` (${item.variant_title})` : '';
       return `- ${item.title}${variant}`;
     }).join('\n') || '—';
@@ -1825,12 +1873,12 @@ Could you kindly confirm if you'll be available to receive it during that time? 
   return (
     <>
     <div 
-      className="bg-white rounded-lg border border-gray-200 transition-all duration-200 hover:border-gray-300"
+      className={`bg-white rounded-lg border border-gray-200 transition-all duration-200 hover:border-gray-300${mapRoutePicker ? ' shadow-sm' : ''}`}
       title={rushType === 'Rushed' ? 'Rush Order (3 days)' : rushType === 'Mix' ? 'Mixed Order (Rushed & Standard items)' : rushType === 'Standard' ? 'Handmade Timeline (7 days)' : isCancelledAfterShipping ? (hasShippingCost ? 'Cancelled after shipping - shipping cost incurred' : 'Cancelled after shipping - may incur shipping costs') : undefined}
     >
-      <div className="p-4">
+      <div className={mapRoutePicker ? 'px-3 py-2' : 'p-4'}>
         {/* Two-Column Header Layout */}
-        <div className="flex justify-between items-start mb-3">
+        <div className={mapRoutePicker ? 'mb-1.5 flex items-start justify-between' : 'mb-3 flex justify-between items-start'}>
           {/* Left Column: Checkbox, Customer Name, Order Number */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
@@ -1858,6 +1906,42 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                 >
                   {order.name} • <span className={rushType === 'Rushed' ? 'text-red-600 font-medium' : rushType === 'Mix' ? 'text-orange-600 font-medium' : 'text-gray-600'}>{rushType}</span> {orderNumberCopied && <ClipboardDocumentIcon className="w-3 h-3 text-green-600 inline-block ml-1" />}
                 </span>
+                {(shippingRouteDisplayName || shippingRouteDisplayDate) && (
+                  <span
+                    className={`text-[10px] ${mapRoutePicker ? 'mt-0.5' : 'mt-1'} inline-flex max-w-full items-center gap-0 rounded-md border px-1 py-0.5 font-medium ${
+                      mapRoutePicker
+                        ? 'border-violet-200 bg-violet-50 text-violet-900'
+                        : 'border-indigo-100 bg-indigo-50 text-indigo-800'
+                    }`}
+                    title="Shipping route (from tags)"
+                  >
+                    <TruckIcon className="h-3 w-3 flex-shrink-0 opacity-80" strokeWidth={2} />
+                    <span className="min-w-0 flex-1 truncate">
+                      {shippingRouteDisplayName || 'Route'}
+                      {shippingRouteDisplayDate ? ` · ${shippingRouteDisplayDate}` : ''}
+                    </span>
+                    {mapRoutePicker && mapRemovableRouteIdForBadge ? (
+                      <button
+                        type="button"
+                        className="inline shrink-0 border-0 bg-transparent p-0 m-0 align-baseline text-[10px] font-normal leading-none text-violet-600 shadow-none outline-none ring-0 hover:bg-transparent hover:opacity-70 focus:outline-none"
+                        title="Remove from route"
+                        aria-label="Remove from route"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void (async () => {
+                            try {
+                              await mapRoutePicker.onRemoveFromRoute(mapRemovableRouteIdForBadge);
+                            } catch {
+                              /* panel already toasts */
+                            }
+                          })();
+                        }}
+                      >
+                        ×
+                      </button>
+                    ) : null}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -2139,11 +2223,106 @@ Could you kindly confirm if you'll be available to receive it during that time? 
           </div>
         </div>
 
+        {mapRoutePicker ? (
+          <div className="relative z-[1] mb-1 pb-1 space-y-1 border-b border-gray-100" onClick={(e) => e.stopPropagation()}>
+            {mapRoutePicker.removable.length === 0 && mapRoutePicker.addable.length > 0 ? (
+              <Popover className="relative">
+                {({ close }) => (
+                  <>
+                    <Popover.Button className="flex w-full items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-left text-sm font-medium text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500/30">
+                      <span>Add to route</span>
+                      <ChevronDownIcon className="h-4 w-4 shrink-0 text-gray-500" aria-hidden />
+                    </Popover.Button>
+                    <Transition
+                      as={React.Fragment}
+                      enter="transition ease-out duration-150"
+                      enterFrom="opacity-0 -translate-y-1"
+                      enterTo="opacity-100 translate-y-0"
+                      leave="transition ease-in duration-100"
+                      leaveFrom="opacity-100 translate-y-0"
+                      leaveTo="opacity-0 -translate-y-1"
+                    >
+                      <Popover.Panel className="absolute left-0 right-0 z-[10001] mt-1 max-h-48 overflow-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg ring-1 ring-black/5">
+                        {mapRoutePicker.addable.map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            className="flex w-full items-center px-3 py-2 text-left text-sm text-gray-800 hover:bg-gray-50"
+                            onClick={() => {
+                              void (async () => {
+                                try {
+                                  await mapRoutePicker.onAddToRoute(opt.id);
+                                  close();
+                                } catch {
+                                  /* panel already toasts */
+                                }
+                              })();
+                            }}
+                          >
+                            {opt.name}
+                          </button>
+                        ))}
+                      </Popover.Panel>
+                    </Transition>
+                  </>
+                )}
+              </Popover>
+            ) : mapRoutePicker.removable.length === 0 ? (
+              <p className="text-xs text-gray-500 text-center py-1">No routes in sidebar — add a route on the left.</p>
+            ) : null}
+          </div>
+        ) : null}
+
         {/* Compact Customer Info Section */}
-        <div className="mb-4 pb-3 border-b border-gray-100">
+        <div className={mapRoutePicker ? 'mb-1 pb-1 border-b border-gray-100' : 'mb-4 pb-3 border-b border-gray-100'}>
+          {mapRoutePicker ? (
+            <>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMapInfoExpanded((v) => !v);
+                }}
+                className="mb-0 flex w-full items-center justify-between gap-2 rounded-md border border-gray-200 bg-gray-50/90 px-2 py-1.5 text-left hover:bg-gray-100/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/40"
+                aria-expanded={mapInfoExpanded}
+              >
+                <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <PhoneIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
+                  {order.customer?.phone ? (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handlePhoneNumberClick(e);
+                      }}
+                      className={`min-w-0 truncate text-sm font-semibold tabular-nums ${
+                        phoneNumberCopied ? 'text-green-600' : 'text-gray-900'
+                      }`}
+                      title={phoneNumberCopied ? 'Copied!' : 'Click to copy phone number'}
+                    >
+                      {order.customer.phone}
+                      {phoneNumberCopied ? (
+                        <ClipboardDocumentIcon className="mb-0.5 ml-0.5 inline h-3.5 w-3.5 text-green-600" aria-hidden />
+                      ) : null}
+                    </span>
+                  ) : (
+                    <span className="text-sm font-medium text-gray-400">No phone</span>
+                  )}
+                </span>
+                <ChevronDownIcon
+                  className={`h-4 w-4 shrink-0 text-gray-500 transition-transform ${mapInfoExpanded ? 'rotate-180' : ''}`}
+                  aria-hidden
+                />
+              </button>
+            </>
+          ) : null}
+          <div
+            className={
+              mapRoutePicker ? (mapInfoExpanded ? 'mt-1 border-t border-gray-100 pt-1' : 'hidden') : undefined
+            }
+          >
           <div className="flex items-start justify-between gap-4">
             {/* Left Side: Phone and Address */}
-            <div className="flex-1 space-y-2">
+            <div className={mapRoutePicker ? 'flex-1 space-y-1' : 'flex-1 space-y-2'}>
               {order.customer?.phone && (
                 <div className="flex items-center gap-2 text-xs text-gray-600">
                   <Menu as="div" className="relative inline-block text-left">
@@ -2154,7 +2333,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                           onClick={(e) => e.stopPropagation()}
                           title="Phone actions"
                         >
-                          <PhoneIcon className="w-5 h-5 text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors" />
+                          <PhoneIcon className={`text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors ${mapRoutePicker ? 'h-4 w-4' : 'w-5 h-5'}`} />
                         </Menu.Button>
                     {open && (
                       <Menu.Items
@@ -2357,11 +2536,12 @@ Could you kindly confirm if you'll be available to receive it during that time? 
               </div>
             </div>
           </div>
+          </div>
         </div>
 
         {/* Warning boxes for different cancellation scenarios */}
         {isCancelledAfterShipping && (
-          <div className={`mb-4 p-4 rounded-lg border-2 shadow-sm ${
+          <div className={`${mapRoutePicker ? 'mb-1.5 p-2' : 'mb-4 p-4'} rounded-lg border-2 shadow-sm ${
             hasShippingCost 
               ? 'bg-red-50 border-red-400' 
               : 'bg-yellow-50 border-yellow-400'
@@ -2385,7 +2565,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
         
         {/* No Reply Cancelled */}
         {isNoReplyCancelled && (
-          <div className="mb-4 p-4 rounded-lg border-2 shadow-sm bg-orange-50 border-orange-400">
+          <div className={`${mapRoutePicker ? 'mb-1.5 p-2' : 'mb-4 p-4'} rounded-lg border-2 shadow-sm bg-orange-50 border-orange-400`}>
             <div className="flex items-center gap-3">
               <ClockIcon className="w-6 h-6 text-orange-600 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
@@ -2399,7 +2579,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
         
         {/* Manual Cancellation with Reason */}
         {isOrderCancelled && cancellationReasonText && !isCancelledAfterShipping && !isNoReplyCancelled && (
-          <div className="mb-4 p-4 rounded-lg border-2 shadow-sm bg-gray-50 border-gray-400">
+          <div className={`${mapRoutePicker ? 'mb-1.5 p-2' : 'mb-4 p-4'} rounded-lg border-2 shadow-sm bg-gray-50 border-gray-400`}>
             <div className="flex items-center gap-3">
               <XCircleIcon className="w-6 h-6 text-gray-600 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
@@ -2414,7 +2594,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
         {/* Order Notes - only show if not cancelled */}
         {!isOrderCancelled && order.note && order.note.trim() && (
           <div 
-            className="mb-4 p-3 bg-amber-50 rounded-md cursor-pointer hover:bg-amber-100 transition-colors"
+            className={mapRoutePicker ? 'mb-1 rounded-md bg-amber-50 p-2 cursor-pointer transition-colors hover:bg-amber-100' : 'mb-4 p-3 bg-amber-50 rounded-md cursor-pointer hover:bg-amber-100 transition-colors'}
             onClick={handleNoteIconClick}
           >
             <div className="flex gap-2">
@@ -2438,72 +2618,199 @@ Could you kindly confirm if you'll be available to receive it during that time? 
         )}
 
         {/* Priority 1: Items Section - Most Prominent */}
-        <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold text-gray-900">Items</h3>
-            <span className="text-xs text-gray-500">{regularLineItems.length} {regularLineItems.length === 1 ? 'item' : 'items'}</span>
-          </div>
-          <div className="space-y-2">
-            {(itemsExpanded ? regularLineItems : regularLineItems.slice(0, 3)).map((item: any, index: number) => (
-              <div key={index} className="flex items-start justify-between gap-2">
-                <span className={`text-sm flex-1 ${isOrderCancelled ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
-                  {item.title}
-                  {item.variant_title && (
-                    <span className="text-gray-600 ml-1">({item.variant_title})</span>
-                  )}
-                </span>
-                <span className={`px-2 py-0.5 rounded-md text-xs font-semibold flex-shrink-0 ${
-                  isOrderCancelled 
-                    ? 'bg-gray-200 text-gray-500' 
-                    : 'bg-blue-100 text-blue-700'
-                }`}>
-                  ×{item.quantity}
-                </span>
-              </div>
-            ))}
-            {regularLineItems.length > 3 && (
+        <div className={mapRoutePicker ? 'mb-1 rounded-lg border border-gray-200 bg-gray-50 p-2' : 'mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200'}>
+          {mapRoutePicker ? (
+            <>
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setItemsExpanded(!itemsExpanded);
+                  setItemsExpanded((v) => !v);
                 }}
-                className="text-xs text-blue-600 hover:text-blue-700 font-medium w-full text-center py-1"
+                className="flex w-full items-center justify-between gap-2 rounded-md py-0.5 -mx-0.5 px-0.5 text-left hover:bg-gray-100/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/40"
+                aria-expanded={itemsExpanded}
               >
-                {itemsExpanded ? 'Show less' : `+${regularLineItems.length - 3} more items`}
+                <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold text-gray-900">Items</h3>
+                  <span className="shrink-0 text-xs text-gray-500">
+                    {regularLineItems.length} {regularLineItems.length === 1 ? 'item' : 'items'}
+                  </span>
+                </div>
+                <ChevronDownIcon
+                  className={`h-4 w-4 shrink-0 text-gray-500 transition-transform ${itemsExpanded ? 'rotate-180' : ''}`}
+                  aria-hidden
+                />
               </button>
-            )}
-          </div>
-          
-          {/* Addon Line Items (Making Time Options) */}
-          {addonLineItems.length > 0 && (
-            <div className="mt-3 pt-3 border-t border-gray-300">
-              <div className="text-xs text-gray-600 font-medium mb-1.5">Making Time:</div>
-              <div className="space-y-1.5">
-                {addonLineItems.map((item: any, index: number) => (
-                  <div key={index} className="text-sm">
-                    <span className={`${isOrderCancelled ? 'text-gray-500 line-through' : 'text-blue-700 font-medium'}`}>
-                      {item.title}
-                      {item.properties && item.properties.length > 0 && (
-                        <span className="text-gray-600 ml-2 font-normal">
-                          {item.properties.map((prop: any, propIndex: number) => (
-                            <span key={propIndex}>
-                              {prop.name}: {prop.value}
-                              {propIndex < item.properties.length - 1 && ', '}
-                            </span>
-                          ))}
+              {itemsExpanded ? (
+                <>
+                  <div className="mt-1 space-y-1 border-t border-gray-200 pt-1">
+                    {regularLineItems.map((item: any, index: number) => (
+                      <div key={index} className="flex items-start justify-between gap-2">
+                        <span className={`text-sm flex-1 ${isOrderCancelled ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
+                          {item.title}
+                          {item.variant_title && (
+                            <span className="text-gray-600 ml-1">({item.variant_title})</span>
+                          )}
+                          {isPriorityMakingLineItem(item) &&
+                            priorityMakingAnalysis.hasPriorityMaking &&
+                            !priorityMakingAnalysis.quantitiesMatch && (
+                              <span className="mt-0.5 block text-xs font-medium text-red-600">
+                                Priority qty ({priorityMakingAnalysis.priorityQty}) ≠ plushie qty (
+                                {priorityMakingAnalysis.plushieQty})
+                              </span>
+                            )}
                         </span>
+                        <span
+                          className={`flex-shrink-0 rounded-md px-2 py-0.5 text-xs font-semibold ${
+                            isOrderCancelled ? 'bg-gray-200 text-gray-500' : 'bg-blue-100 text-blue-700'
+                          }`}
+                        >
+                          ×{item.quantity}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {addonLineItems.length > 0 && (
+                    <div className="mt-1.5 border-t border-gray-300 pt-1.5">
+                      <div className="mb-0.5 text-xs font-medium text-gray-600">Making Time:</div>
+                      <div className="space-y-1">
+                        {addonLineItems.map((item: any, index: number) => (
+                          <div key={index} className="text-sm">
+                            <span
+                              className={`${isOrderCancelled ? 'text-gray-500 line-through' : 'font-medium text-blue-700'}`}
+                            >
+                              {item.title}
+                              {item.properties && item.properties.length > 0 && (
+                                <span className="ml-2 font-normal text-gray-600">
+                                  {item.properties.map((prop: any, propIndex: number) => (
+                                    <span key={propIndex}>
+                                      {prop.name}: {prop.value}
+                                      {propIndex < item.properties.length - 1 && ', '}
+                                    </span>
+                                  ))}
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-gray-900">Items</h3>
+                <span className="text-xs text-gray-500">
+                  {regularLineItems.length} {regularLineItems.length === 1 ? 'item' : 'items'}
+                </span>
+              </div>
+              <div className="space-y-2">
+                {(itemsExpanded ? regularLineItems : regularLineItems.slice(0, 3)).map((item: any, index: number) => (
+                  <div key={index} className="flex items-start justify-between gap-2">
+                    <span className={`text-sm flex-1 ${isOrderCancelled ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
+                      {item.title}
+                      {item.variant_title && (
+                        <span className="text-gray-600 ml-1">({item.variant_title})</span>
                       )}
+                      {isPriorityMakingLineItem(item) &&
+                        priorityMakingAnalysis.hasPriorityMaking &&
+                        !priorityMakingAnalysis.quantitiesMatch && (
+                          <span className="mt-0.5 block text-xs font-medium text-red-600">
+                            Priority qty ({priorityMakingAnalysis.priorityQty}) ≠ plushie qty (
+                            {priorityMakingAnalysis.plushieQty})
+                          </span>
+                        )}
+                    </span>
+                    <span
+                      className={`flex-shrink-0 rounded-md px-2 py-0.5 text-xs font-semibold ${
+                        isOrderCancelled ? 'bg-gray-200 text-gray-500' : 'bg-blue-100 text-blue-700'
+                      }`}
+                    >
+                      ×{item.quantity}
                     </span>
                   </div>
                 ))}
+                {regularLineItems.length > 3 && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setItemsExpanded(!itemsExpanded);
+                    }}
+                    className="w-full py-1 text-center text-xs font-medium text-blue-600 hover:text-blue-700"
+                  >
+                    {itemsExpanded ? 'Show less' : `+${regularLineItems.length - 3} more items`}
+                  </button>
+                )}
               </div>
-            </div>
+
+              {addonLineItems.length > 0 && (
+                <div className="mt-3 border-t border-gray-300 pt-3">
+                  <div className="mb-1.5 text-xs font-medium text-gray-600">Making Time:</div>
+                  <div className="space-y-1.5">
+                    {addonLineItems.map((item: any, index: number) => (
+                      <div key={index} className="text-sm">
+                        <span
+                          className={`${isOrderCancelled ? 'text-gray-500 line-through' : 'font-medium text-blue-700'}`}
+                        >
+                          {item.title}
+                          {item.properties && item.properties.length > 0 && (
+                            <span className="ml-2 font-normal text-gray-600">
+                              {item.properties.map((prop: any, propIndex: number) => (
+                                <span key={propIndex}>
+                                  {prop.name}: {prop.value}
+                                  {propIndex < item.properties.length - 1 && ', '}
+                                </span>
+                              ))}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
         {/* Priority 2: Compact Info Row - Days Left + Dates */}
         {!isOrderCancelled && !trimmedTags.includes('paid') && !trimmedTags.includes('fulfilled') && (
-          <div className="mb-3 flex items-center justify-center gap-2 whitespace-nowrap overflow-hidden">
+          <div className={mapRoutePicker ? 'mb-1 border-b border-gray-100 pb-1' : undefined}>
+            {mapRoutePicker ? (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMapTimelineExpanded((v) => !v);
+                  }}
+                  className="mb-0 flex w-full items-center justify-between gap-2 rounded-md border border-gray-200 bg-gray-50/90 px-2 py-1.5 text-left hover:bg-gray-100/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/40"
+                  aria-expanded={mapTimelineExpanded}
+                >
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <ClockIcon className="h-3.5 w-3.5 shrink-0 text-gray-500" aria-hidden />
+                    <span className={`rounded-md border px-2 py-0.5 text-sm font-semibold ${getDaysLeftBadgeStyle()}`}>
+                      {getDaysLeftText()}
+                    </span>
+                  </span>
+                  <ChevronDownIcon
+                    className={`h-4 w-4 shrink-0 text-gray-500 transition-transform ${mapTimelineExpanded ? 'rotate-180' : ''}`}
+                    aria-hidden
+                  />
+                </button>
+              </>
+            ) : null}
+            {(!mapRoutePicker || mapTimelineExpanded) && (
+          <div
+            className={
+              mapRoutePicker
+                ? 'mt-1 flex max-w-full flex-wrap items-center justify-center gap-1.5 overflow-x-auto border-t border-gray-100 pt-1 whitespace-nowrap'
+                : 'mb-3 flex items-center justify-center gap-2 overflow-hidden whitespace-nowrap'
+            }
+          >
             {/* Days Left Badge */}
             <div className={`flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-md border min-w-[60px] ${getDaysLeftBadgeStyle()}`}>
               <ClockIcon className="w-4 h-4" />
@@ -2607,6 +2914,8 @@ Could you kindly confirm if you'll be available to receive it during that time? 
               popperPlacement="bottom-start"
               popperClassName="z-50"
             />
+          </div>
+            )}
           </div>
         )}
       </div>

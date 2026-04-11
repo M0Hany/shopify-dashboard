@@ -1,4 +1,7 @@
 import express from 'express';
+import axios from 'axios';
+import fs from 'fs/promises';
+import path from 'path';
 import { WhatsAppMonitor } from '../services/monitoring/WhatsAppMonitor';
 import { WhatsAppService } from '../services/whatsapp';
 import { MessageService } from '../services/messageService';
@@ -11,6 +14,73 @@ import { whatsappTemplateService } from '../services/whatsappTemplateService';
 const router = express.Router();
 const whatsappService = new WhatsAppService();
 const shopifyService = new ShopifyService();
+const WHATSAPP_GRAPH_API_VERSION = 'v18.0';
+const UPLOADS_DIR = path.resolve(process.cwd(), 'uploads', 'whatsapp-media');
+
+type MediaDownloadResult = {
+  publicUrl: string;
+  mimeType?: string;
+  sha256?: string;
+};
+
+function fileExtensionFromMime(mimeType?: string): string {
+  if (!mimeType) return 'jpg';
+  const mime = mimeType.toLowerCase();
+  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+  if (mime.includes('png')) return 'png';
+  if (mime.includes('webp')) return 'webp';
+  if (mime.includes('gif')) return 'gif';
+  if (mime.includes('heic')) return 'heic';
+  return 'jpg';
+}
+
+async function downloadIncomingMedia(mediaId: string, messageId: string): Promise<MediaDownloadResult | null> {
+  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+  if (!accessToken) return null;
+
+  try {
+    logger.info('Attempting WhatsApp media download', { mediaId, messageId });
+    const metaResponse = await axios.get(`https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${mediaId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+
+    const mediaUrl = metaResponse.data?.url as string | undefined;
+    const mimeType = metaResponse.data?.mime_type as string | undefined;
+    const sha256 = metaResponse.data?.sha256 as string | undefined;
+    if (!mediaUrl) return null;
+    logger.info('WhatsApp media metadata received', { mediaId, messageId, mimeType, hasUrl: !!mediaUrl });
+
+    const mediaBinary = await axios.get<ArrayBuffer>(mediaUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      responseType: 'arraybuffer'
+    });
+
+    const ext = fileExtensionFromMime(mimeType);
+    const safeMessageId = messageId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const filename = `${safeMessageId}.${ext}`;
+    await fs.mkdir(UPLOADS_DIR, { recursive: true });
+    await fs.writeFile(path.join(UPLOADS_DIR, filename), Buffer.from(mediaBinary.data));
+    logger.info('WhatsApp media stored locally', {
+      mediaId,
+      messageId,
+      filename,
+      bytes: Buffer.byteLength(Buffer.from(mediaBinary.data))
+    });
+
+    return {
+      publicUrl: `/uploads/whatsapp-media/${filename}`,
+      mimeType,
+      sha256
+    };
+  } catch (error) {
+    logger.error('Error downloading incoming WhatsApp media', {
+      mediaId,
+      messageId,
+      error: error instanceof Error ? error.message : error
+    });
+    return null;
+  }
+}
 
 // Helper function to format phone number consistently (same as WhatsAppService)
 function formatPhoneNumber(phone: string): string {
@@ -396,6 +466,57 @@ router.post('/send-text', async (req, res) => {
   }
 });
 
+// Proxy WhatsApp media by media ID so frontend can preview images even when local file is missing
+router.get('/media/:mediaId', async (req, res) => {
+  try {
+    const { mediaId } = req.params;
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+    logger.info('Media proxy request received', { mediaId });
+
+    if (!mediaId) {
+      return res.status(400).json({ error: 'mediaId is required' });
+    }
+
+    if (!accessToken) {
+      return res.status(500).json({ error: 'WHATSAPP_ACCESS_TOKEN is not configured' });
+    }
+
+    const metaResponse = await axios.get(`https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${mediaId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+
+    const mediaUrl = metaResponse.data?.url as string | undefined;
+    const mimeType = metaResponse.data?.mime_type as string | undefined;
+
+    if (!mediaUrl) {
+      logger.warn('Media proxy metadata has no URL', { mediaId });
+      return res.status(404).json({ error: 'Media URL not found for this mediaId' });
+    }
+
+    const mediaResponse = await axios.get<ArrayBuffer>(mediaUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      responseType: 'arraybuffer'
+    });
+    logger.info('Media proxy fetched media bytes', {
+      mediaId,
+      mimeType: mimeType || null,
+      bytes: Buffer.byteLength(Buffer.from(mediaResponse.data))
+    });
+
+    if (mimeType) {
+      res.setHeader('Content-Type', mimeType);
+    }
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    return res.status(200).send(Buffer.from(mediaResponse.data));
+  } catch (error) {
+    logger.error('Error proxying WhatsApp media', {
+      mediaId: req.params.mediaId,
+      error: error instanceof Error ? error.message : error
+    });
+    return res.status(500).json({ error: 'Failed to load media' });
+  }
+});
+
 // Get conversation history for a specific phone number
 router.get('/conversation/:phone', async (req, res) => {
   try {
@@ -596,13 +717,62 @@ router.post('/webhook', express.json(), async (req, res) => {
               // Button messages are automatically marked as read since they're not important to review
               const shouldMarkAsRead = message.type === 'button';
               
+              let normalizedTextPayload: Record<string, unknown> | undefined = message.text;
+
+              if (message.type === 'image' && message.image?.id) {
+                logger.info('Processing inbound image message payload', {
+                  messageId: message.id,
+                  mediaId: message.image?.id,
+                  mimeType: message.image?.mime_type || null,
+                  hasCaption: !!message.image?.caption
+                });
+                const downloaded = await downloadIncomingMedia(message.image.id, message.id);
+                normalizedTextPayload = {
+                  body: message.image?.caption || '',
+                  mediaUrl: downloaded?.publicUrl || null,
+                  mediaMimeType: downloaded?.mimeType || message.image?.mime_type || null,
+                  mediaSha256: downloaded?.sha256 || message.image?.sha256 || null,
+                  mediaId: message.image?.id || null
+                };
+                logger.info('Normalized image payload prepared', {
+                  messageId: message.id,
+                  mediaUrl: normalizedTextPayload.mediaUrl || null,
+                  mediaId: normalizedTextPayload.mediaId || null
+                });
+              } else if (!normalizedTextPayload && typeof message.text === 'string') {
+                normalizedTextPayload = { body: message.text };
+              }
+
+              // Safety net: never store image messages with null text payload.
+              // Even if download fails, keep media metadata so frontend can use proxy fallback.
+              if (message.type === 'image' && !normalizedTextPayload) {
+                normalizedTextPayload = {
+                  body: '',
+                  mediaUrl: null,
+                  mediaMimeType: message.image?.mime_type || null,
+                  mediaSha256: message.image?.sha256 || null,
+                  mediaId: message.image?.id || null
+                };
+                logger.warn('Image message missing payload; storing fallback text payload', {
+                  messageId: message.id,
+                  image: message.image || null
+                });
+              }
+
+              logger.info('Final normalized payload before store', {
+                messageId: message.id,
+                type: message.type,
+                hasTextPayload: !!normalizedTextPayload,
+                normalizedTextPayload
+              });
+
               await MessageService.storeMessage({
                 message_id: message.id,
                 phone: message.from,
                 from: message.from,
                 to: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
                 type: message.type,
-                text: message.text,
+                text: normalizedTextPayload as { body: string } | undefined,
                 timestamp: new Date(parseInt(message.timestamp) * 1000),
                 direction: 'inbound',
                 status: shouldMarkAsRead ? 'read' : 'sent'

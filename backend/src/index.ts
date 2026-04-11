@@ -24,7 +24,10 @@ const config = getConfig();
 app.set('trust proxy', 1);
 
 // Middleware
-app.use(helmet());
+// Allow frontend (different origin in dev) to embed uploaded images in <img> tags.
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
 app.use(morgan('dev'));
 
 // IMPORTANT: Register Discord interactions route BEFORE json() middleware
@@ -34,6 +37,7 @@ app.use('/api/discord', discordInteractions);
 // JSON parsing for all other routes
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
 
 // CORS configuration
 app.use(cors({

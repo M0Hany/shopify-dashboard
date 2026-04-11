@@ -173,6 +173,31 @@ button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
 
+/* Leaflet divIcon default is a white box; depot marker uses custom HTML */
+.route-depot-marker.leaflet-div-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* Order card on map — className is on .leaflet-popup (Leaflet Popup._initLayout) */
+.leaflet-popup.order-map-popup-panel .leaflet-popup-close-button {
+  display: none !important;
+}
+
+.leaflet-popup.order-map-popup-panel .leaflet-popup-content-wrapper {
+  overflow: visible;
+  padding: 0;
+}
+
+.leaflet-popup.order-map-popup-panel .leaflet-popup-content {
+  margin: 6px;
+  width: auto !important;
+  min-width: 260px;
+  max-width: min(100vw - 2rem, 26rem);
+  overflow-x: hidden;
+  overflow-y: visible;
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;

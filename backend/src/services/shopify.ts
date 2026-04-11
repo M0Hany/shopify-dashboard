@@ -30,6 +30,8 @@ export interface ShopifyOrder {
   payment_gateway_names?: string[]; // include payment methods used
   custom_due_date?: string;
   note?: string | null; // Order note from Shopify
+  /** Order-level checkout attributes (REST: note_attributes). */
+  custom_attributes?: Array<{ key: string; value: string }>;
   line_items: {
     title: string;
     quantity: number;
@@ -253,6 +255,10 @@ export class ShopifyService {
                   displayFulfillmentStatus
                   tags
                   note
+                  customAttributes {
+                    key
+                    value
+                  }
                   totalPriceSet {
                     shopMoney {
                       amount
@@ -473,6 +479,11 @@ export class ShopifyService {
             updated_at: node.updatedAt,
             payment_gateway_names: node.paymentGatewayNames || [],
             note: node.note || null, // Include note field
+            custom_attributes:
+              node.customAttributes?.map((attr: { key?: string; value?: string | null }) => ({
+                key: String(attr.key ?? ''),
+                value: String(attr.value ?? ''),
+              })) ?? [],
             line_items: lineItems,
             customer: customerId ? {
               id: customerId,

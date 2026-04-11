@@ -3,14 +3,21 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
+import { OrdersMapPanel } from '../components/OrdersMapPanel';
 import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, CheckIcon, ArrowPathIcon, ArrowUpCircleIcon, Squares2X2Icon, MapPinIcon, CalendarDaysIcon, TruckIcon, BoltIcon, ClockIcon, SparklesIcon, PauseCircleIcon, HandThumbUpIcon, PaperAirplaneIcon, CheckBadgeIcon, BanknotesIcon, XCircleIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Menu, Popover, Transition } from '@headlessui/react';
+import { Dialog, Menu, Popover, Transition } from '@headlessui/react';
 import FileUpload from '../components/FileUpload';
 import { format } from 'date-fns';
 import { toast } from 'react-hot-toast';
 import { calculateDaysRemaining } from '../utils/dateUtils';
+import {
+  analyzePriorityMakingLineItems,
+  isPriorityMakingLineItem,
+  mergeRushTypeWithPriorityMaking,
+} from '../utils/priorityMakingRush';
+import type { OrderForMapSummary } from '../utils/orderMapSummary';
 
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
@@ -146,6 +153,8 @@ interface Order {
   custom_start_date?: string;
   effective_created_at: string;
   note?: string;
+  /** Checkout note_attributes (GraphQL customAttributes on Order). */
+  custom_attributes?: Array<{ key: string; value: string }>;
   packageENStatus?: string;
   customer: {
     first_name: string;
@@ -185,6 +194,80 @@ interface Order {
       value: string;
     }>;
   }[];
+}
+
+const SHIPPING_ROUTE_TAG_PREFIX = 'shipping_route:';
+const SHIPPING_ROUTE_DATE_PREFIX = 'shipping_route_date:';
+
+function normalizeOrderTagsArray(tags: string[] | string | null | undefined): string[] {
+  if (Array.isArray(tags)) return tags.map((t) => String(t).trim()).filter(Boolean);
+  if (typeof tags === 'string') return tags.split(',').map((t) => t.trim()).filter(Boolean);
+  return [];
+}
+
+function stripShippingRouteTags(tags: string[]): string[] {
+  return tags.filter((t) => {
+    const low = t.toLowerCase();
+    return !low.startsWith(SHIPPING_ROUTE_TAG_PREFIX) && !low.startsWith(SHIPPING_ROUTE_DATE_PREFIX);
+  });
+}
+
+function sanitizeShippingRouteName(name: string): string {
+  return name.trim().replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function findOrderFromPastedLine(orders: Order[], line: string): Order | undefined {
+  const raw = line.trim();
+  if (!raw) return undefined;
+  if (/^\d+$/.test(raw)) {
+    const n = parseInt(raw, 10);
+    const byId = orders.find((o) => o.id === n);
+    if (byId) return byId;
+    return orders.find(
+      (o) =>
+        o.name.replace(/\s/g, '').toLowerCase() === `#${raw}`.toLowerCase() ||
+        o.name.replace(/\s/g, '').toLowerCase() === raw.toLowerCase()
+    );
+  }
+  const withHash = raw.startsWith('#') ? raw : `#${raw}`;
+  return orders.find(
+    (o) =>
+      o.name.trim().toLowerCase() === raw.trim().toLowerCase() ||
+      o.name.trim().toLowerCase() === withHash.toLowerCase()
+  );
+}
+
+/** Stable key for route name + creation date (both tags required). */
+const ROUTE_KEY_SEP = '\u001e';
+
+/** Quick filter: orders missing both shipping_route + shipping_route_date tags. */
+const SHIPPING_ROUTE_NONE_KEY = '__shipping_route_none__';
+
+function getOrderShippingRouteKey(order: Order): string | null {
+  const tags = normalizeOrderTagsArray(order.tags);
+  const routeTag = tags.find((t) => t.toLowerCase().startsWith(SHIPPING_ROUTE_TAG_PREFIX.toLowerCase()));
+  const dateTag = tags.find((t) => t.toLowerCase().startsWith(SHIPPING_ROUTE_DATE_PREFIX.toLowerCase()));
+  if (!routeTag || !dateTag) return null;
+  const name = routeTag.slice(SHIPPING_ROUTE_TAG_PREFIX.length).trim();
+  const dateStr = dateTag.slice(SHIPPING_ROUTE_DATE_PREFIX.length).trim();
+  if (!name || !dateStr) return null;
+  return `${dateStr}${ROUTE_KEY_SEP}${name}`;
+}
+
+function parseShippingRouteKey(key: string): { date: string; name: string } {
+  const i = key.indexOf(ROUTE_KEY_SEP);
+  if (i === -1) return { date: '', name: key };
+  return { date: key.slice(0, i), name: key.slice(i + ROUTE_KEY_SEP.length) };
+}
+
+function orderMatchesSelectedRoutes(order: Order, selected: Set<string>): boolean {
+  if (selected.size === 0) return true;
+  const routeKey = getOrderShippingRouteKey(order);
+  const hasNoRoute = routeKey === null;
+  return Array.from(selected).some((sel) => {
+    if (sel === SHIPPING_ROUTE_NONE_KEY) return hasNoRoute;
+    return routeKey !== null && routeKey === sel;
+  });
 }
 
 // Helper function to convert UTC to Cairo time
@@ -339,10 +422,17 @@ const Orders = () => {
   const [selectedSummaryItems, setSelectedSummaryItems] = useState<Set<string>>(new Set());
   const [showScrollToTop, setShowScrollToTop] = useState(false);
   const ordersRefreshTimerRef = useRef<number | null>(null);
-  
+
+  const [shippingRouteDialogOpen, setShippingRouteDialogOpen] = useState(false);
+  const [shippingRouteName, setShippingRouteName] = useState('');
+  const [shippingRouteOrderLines, setShippingRouteOrderLines] = useState('');
+  const [shippingRouteSaving, setShippingRouteSaving] = useState(false);
+  const [ordersViewMode, setOrdersViewMode] = useState<'list' | 'map'>('list');
+
   // Quick Filter state
-  const [activeQuickFilterTab, setActiveQuickFilterTab] = useState<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'fulfillment_status' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'>('production');
+  const [activeQuickFilterTab, setActiveQuickFilterTab] = useState<'production' | 'city' | 'routes' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'fulfillment_status' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'>('production');
   const [selectedProductionItems, setSelectedProductionItems] = useState<Set<string>>(new Set());
+  const [selectedRoutes, setSelectedRoutes] = useState<Set<string>>(new Set());
   const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
   const [selectedDayRanges, setSelectedDayRanges] = useState<Set<string>>(new Set());
   const [selectedShippingMethods, setSelectedShippingMethods] = useState<Set<string>>(new Set());
@@ -867,6 +957,11 @@ const Orders = () => {
       const province = order.shipping_address?.province || 'Unknown';
       if (!selectedCities.has(province)) return false;
     }
+
+    // Quick filter: Shipping routes (shipping_route + shipping_route_date tags, or "No route")
+    if (selectedRoutes.size > 0 && !orderMatchesSelectedRoutes(order, selectedRoutes)) {
+      return false;
+    }
     
     // Quick filter: Days left
     if (selectedDayRanges.size > 0) {
@@ -1041,6 +1136,9 @@ const Orders = () => {
     if (excludeTab !== 'city' && selectedCities.size > 0) {
       const province = order.shipping_address?.province || 'Unknown';
       if (!selectedCities.has(province)) return false;
+    }
+    if (excludeTab !== 'routes' && selectedRoutes.size > 0 && !orderMatchesSelectedRoutes(order, selectedRoutes)) {
+      return false;
     }
     if (excludeTab !== 'days' && selectedDayRanges.size > 0) {
       const daysLeft = calculateDaysLeft(order);
@@ -1390,17 +1488,17 @@ const Orders = () => {
     }) || false;
   };
 
-  // Helper function to detect making time from line items
-  const detectMakingTime = (lineItems: any[]): number | null => {
+  // Legacy making-time from titles/properties (per-item safe for rush classification)
+  const detectLegacyMakingTime = (lineItems: any[]): number | null => {
     if (!lineItems || lineItems.length === 0) return null;
     
     for (const item of lineItems) {
       const title = item.title || '';
       
-      // Check for "Rush My Order [3 days]" pattern in title
+      // Rush add-on: always 3-day making time (ignore number in brackets, e.g. [4 days])
       const rushMatch = title.match(/rush.*?\[(\d+)\s*days?\]/i);
       if (rushMatch) {
-        return parseInt(rushMatch[1], 10);
+        return 3;
       }
       
       // Check for "Handmade Timeline [7 days]" pattern in title
@@ -1418,7 +1516,7 @@ const Orders = () => {
           if (propName.includes('making time') || propName.includes('timeline') || propName.includes('rush')) {
             const rushPropMatch = propValue.match(/rush.*?\[(\d+)\s*days?\]/i);
             if (rushPropMatch) {
-              return parseInt(rushPropMatch[1], 10);
+              return 3;
             }
             const handmadePropMatch = propValue.match(/handmade.*?\[(\d+)\s*days?\]/i);
             if (handmadePropMatch) {
@@ -1426,7 +1524,7 @@ const Orders = () => {
             }
             const daysMatch = propValue.match(/(\d+)\s*days?/i);
             if (daysMatch && (propValue.toLowerCase().includes('rush') || propValue.toLowerCase().includes('3'))) {
-              return parseInt(daysMatch[1], 10);
+              return propValue.toLowerCase().includes('rush') ? 3 : parseInt(daysMatch[1], 10);
             }
             if (daysMatch && (propValue.toLowerCase().includes('handmade') || propValue.toLowerCase().includes('7'))) {
               return parseInt(daysMatch[1], 10);
@@ -1521,8 +1619,12 @@ const Orders = () => {
           }
         }
         
-        // Detect making time from line items
-        const makingTimeDays = detectMakingTime(order.line_items || []);
+        // Making time: valid Priority Making qty → 3 days; else legacy detection
+        const pm = analyzePriorityMakingLineItems(order.line_items || []);
+        const makingTimeDays =
+          pm.hasPriorityMaking && pm.quantitiesMatch
+            ? 3
+            : detectLegacyMakingTime(order.line_items || []);
         const daysToAdd = makingTimeDays || 7; // Default to 7 days if not detected
         
         // Calculate due date
@@ -1595,33 +1697,32 @@ const Orders = () => {
 
   const getRushTypeFromOrder = (order: Order): string => {
     const lineItems = order.line_items || [];
-    if (lineItems.length === 0) return 'Standard';
+    if (lineItems.length === 0) {
+      return mergeRushTypeWithPriorityMaking('Standard', analyzePriorityMakingLineItems(lineItems));
+    }
 
     let hasRushed = false;
     let hasStandard = false;
 
-    // Check each line item for making time
     for (const item of lineItems) {
-      const makingTimeDays = detectMakingTime([item]);
+      const makingTimeDays = detectLegacyMakingTime([item]);
       if (makingTimeDays === 3) {
         hasRushed = true;
       } else if (makingTimeDays === 7 || makingTimeDays === null) {
         hasStandard = true;
       }
     }
-    
-    // If order has both rushed and standard items, it's a Mix
+
+    let legacy: 'Rushed' | 'Standard' | 'Mix';
     if (hasRushed && hasStandard) {
-      return 'Mix';
+      legacy = 'Mix';
+    } else if (hasRushed) {
+      legacy = 'Rushed';
+    } else {
+      legacy = 'Standard';
     }
-    
-    // If only rushed items found
-    if (hasRushed) {
-      return 'Rushed';
-    }
-    
-    // Default to Standard
-    return 'Standard';
+
+    return mergeRushTypeWithPriorityMaking(legacy, analyzePriorityMakingLineItems(lineItems));
   };
 
   // First, decorate orders with their original index
@@ -1766,18 +1867,96 @@ const Orders = () => {
     updateTagsMutation.mutate({ orderId, newTags });
   };
 
+  const handleReplaceShippingRouteForOrder = useCallback(
+    async (orderId: number, routeName: string | null) => {
+      if (!orders?.length) throw new Error('map_route_no_orders');
+      const o = orders.find((x) => x.id === orderId);
+      if (!o) throw new Error('map_route_order_not_found');
+      const current = normalizeOrderTagsArray(o.tags);
+      const stripped = stripShippingRouteTags(current);
+      let next: string[];
+      if (routeName == null) {
+        next = stripped;
+      } else {
+        const name = sanitizeShippingRouteName(routeName);
+        if (!name) throw new Error('map_route_invalid_name');
+        const dateStr = format(new Date(), 'yyyy-MM-dd');
+        const routeTag = `${SHIPPING_ROUTE_TAG_PREFIX}${name}`;
+        const dateTag = `${SHIPPING_ROUTE_DATE_PREFIX}${dateStr}`;
+        next = [...stripped, routeTag, dateTag];
+      }
+      await updateTagsMutation.mutateAsync({ orderId, newTags: next });
+    },
+    [orders, updateTagsMutation]
+  );
 
+  const handleApplyShippingRoute = async () => {
+    const name = sanitizeShippingRouteName(shippingRouteName);
+    if (!name) {
+      toast.error('Enter a route name');
+      return;
+    }
+    if (!orders?.length) {
+      toast.error('No orders loaded');
+      return;
+    }
+    const lines = shippingRouteOrderLines.split(/\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) {
+      toast.error('Paste at least one order number or ID');
+      return;
+    }
+
+    const byId = new Map<number, Order>();
+    const unmatched: string[] = [];
+    for (const line of lines) {
+      const o = findOrderFromPastedLine(orders, line);
+      if (o) byId.set(o.id, o);
+      else unmatched.push(line);
+    }
+
+    const matched = [...byId.values()];
+    if (matched.length === 0) {
+      toast.error('No matching orders in the current list');
+      return;
+    }
+
+    const dateStr = format(new Date(), 'yyyy-MM-dd');
+    const routeTag = `${SHIPPING_ROUTE_TAG_PREFIX}${name}`;
+    const dateTag = `${SHIPPING_ROUTE_DATE_PREFIX}${dateStr}`;
+
+    setShippingRouteSaving(true);
+    try {
+      for (const o of matched) {
+        const current = normalizeOrderTagsArray(o.tags);
+        const next = [...stripShippingRouteTags(current), routeTag, dateTag];
+        await updateTagsMutation.mutateAsync({ orderId: o.id, newTags: next });
+      }
+      toast.success(`Route tags applied to ${matched.length} order${matched.length === 1 ? '' : 's'}`);
+      if (unmatched.length > 0) {
+        const preview = unmatched.slice(0, 6).join(', ');
+        toast.error(`${unmatched.length} line${unmatched.length === 1 ? '' : 's'} not matched: ${preview}${unmatched.length > 6 ? '…' : ''}`, { duration: 6000 });
+      }
+      setShippingRouteDialogOpen(false);
+      setShippingRouteName('');
+      setShippingRouteOrderLines('');
+    } catch {
+      toast.error('Could not update all orders');
+    } finally {
+      setShippingRouteSaving(false);
+    }
+  };
 
   // Get visible tabs based on current status filter
   // Order: production -> days -> city -> shipping -> fulfillment_status (shipped) -> rushed -> fulfillment_month -> paid_month -> cancelled_calendar -> cancelled_reason
-  const getVisibleTabs = (): Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'fulfillment_status' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'> => {
-    const tabs: Array<'production' | 'city' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'fulfillment_status' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'> = [];
+  const getVisibleTabs = (): Array<'production' | 'city' | 'routes' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'fulfillment_status' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'> => {
+    const tabs: Array<'production' | 'city' | 'routes' | 'days' | 'shipping' | 'rushed' | 'fulfillment_month' | 'fulfillment_status' | 'paid_month' | 'cancelled_calendar' | 'cancelled_reason'> = [];
     
     // For cancelled view, show calendar and reason tabs
     if (statusFilter === 'cancelled') {
       tabs.push('cancelled_calendar');
       tabs.push('cancelled_reason');
       tabs.push('city');
+      tabs.push('routes');
       tabs.push('shipping');
       tabs.push('rushed');
       return tabs;
@@ -1788,6 +1967,7 @@ const Orders = () => {
       tabs.push('production');
       tabs.push('days');
       tabs.push('city');
+      tabs.push('routes');
       tabs.push('shipping');
       tabs.push('rushed');
       return tabs;
@@ -1805,6 +1985,7 @@ const Orders = () => {
     
     // City tab (always visible)
     tabs.push('city');
+    tabs.push('routes');
     
     // Shipping tab
     if (['pending', 'order-ready', 'confirmed', 'ready-to-ship', 'shipped', 'fulfilled', 'all'].includes(statusFilter)) {
@@ -1844,6 +2025,7 @@ const Orders = () => {
     
     ordersToProcess.forEach(order => {
       order.line_items?.forEach(item => {
+        if (isPriorityMakingLineItem(item as { product_id?: unknown; title?: string })) return;
         const itemKey = item.variant_title ? `${item.title} - ${item.variant_title}` : item.title;
         itemCounts[itemKey] = (itemCounts[itemKey] || 0) + item.quantity;
       });
@@ -1979,6 +2161,52 @@ const Orders = () => {
     return typeOrder
       .filter(type => typeCounts[type] > 0)
       .map(type => ({ type, count: typeCounts[type] }));
+  };
+
+  // Shipping routes from tags (newest date first); requires both shipping_route: and shipping_route_date:
+  const getRoutesData = () => {
+    if (!orders) return [];
+
+    const ordersToProcess =
+      selectedOrders.length > 0
+        ? orders.filter((order) => selectedOrders.includes(order.id))
+        : orders.filter(
+            (order) => filterOrdersByStatus(order) && orderMatchesOtherQuickFilters(order, 'routes')
+          );
+
+    const counts = new Map<string, number>();
+    let noRouteCount = 0;
+    ordersToProcess.forEach((order) => {
+      const k = getOrderShippingRouteKey(order);
+      if (k) counts.set(k, (counts.get(k) || 0) + 1);
+      else noRouteCount += 1;
+    });
+
+    const pinnedRow = {
+      key: SHIPPING_ROUTE_NONE_KEY,
+      count: noRouteCount,
+      date: '',
+      name: '',
+      label: 'No route',
+    };
+
+    const rows = [...counts.entries()].map(([key, count]) => {
+      const { date, name } = parseShippingRouteKey(key);
+      return {
+        key,
+        count,
+        date,
+        name,
+        label: `${name} · ${date}`,
+      };
+    });
+
+    rows.sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date);
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+
+    return [pinnedRow, ...rows];
   };
 
   // Human-readable labels for fulfillment displayStatus (carrier status) — same as OrderCard
@@ -2314,6 +2542,8 @@ const Orders = () => {
           return getProductionData();
         case 'city':
           return getCityData();
+        case 'routes':
+          return getRoutesData();
         case 'days':
           return getDaysLeftData();
         case 'shipping':
@@ -2342,6 +2572,8 @@ const Orders = () => {
           return selectedProductionItems;
         case 'city':
           return selectedCities;
+        case 'routes':
+          return selectedRoutes;
         case 'days':
           return selectedDayRanges;
         case 'shipping':
@@ -2378,6 +2610,14 @@ const Orders = () => {
           break;
         case 'city':
           setSelectedCities(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(value)) newSet.delete(value);
+            else newSet.add(value);
+            return newSet;
+          });
+          break;
+        case 'routes':
+          setSelectedRoutes(prev => {
             const newSet = new Set(prev);
             if (newSet.has(value)) newSet.delete(value);
             else newSet.add(value);
@@ -2455,6 +2695,7 @@ const Orders = () => {
     const handleClearFilter = () => {
       setSelectedProductionItems(new Set());
       setSelectedCities(new Set());
+      setSelectedRoutes(new Set());
       setSelectedDayRanges(new Set());
       setSelectedShippingMethods(new Set());
       setSelectedRushTypes(new Set());
@@ -2473,6 +2714,7 @@ const Orders = () => {
     const hasAnyFilters = 
       selectedProductionItems.size > 0 ||
       selectedCities.size > 0 ||
+      selectedRoutes.size > 0 ||
       selectedDayRanges.size > 0 ||
       selectedShippingMethods.size > 0 ||
       selectedRushTypes.size > 0 ||
@@ -2517,6 +2759,8 @@ const Orders = () => {
           return "No fulfillment status data";
         case 'paid_month':
           return "Couldn't find paid_date tags";
+        case 'routes':
+          return 'No orders with shipping route tags in this view';
         default:
           return null;
       }
@@ -2530,6 +2774,7 @@ const Orders = () => {
     const tabConfig = {
       production: { icon: '🧶', label: 'Production', tooltip: 'Production' },
       city: { icon: '📍', label: 'City', tooltip: 'City' },
+      routes: { icon: '🛣️', label: 'Routes', tooltip: 'Shipping routes' },
       days: { icon: '📅', label: 'Days', tooltip: 'Days Left' },
       shipping: { icon: '🚚', label: 'Shipping', tooltip: 'Shipping Method' },
       rushed: { icon: '⚡', label: 'Rushed', tooltip: 'Rushed/Standard' },
@@ -2746,6 +2991,7 @@ const Orders = () => {
             displayedItems.map((item: any, index: number) => {
               const value = activeQuickFilterTab === 'production' ? item.title :
                            activeQuickFilterTab === 'city' ? item.city :
+                           activeQuickFilterTab === 'routes' ? item.key :
                            activeQuickFilterTab === 'days' ? item.range :
                            activeQuickFilterTab === 'shipping' ? item.method :
                            activeQuickFilterTab === 'fulfillment_status' ? item.status :
@@ -2754,8 +3000,13 @@ const Orders = () => {
                            activeQuickFilterTab === 'cancelled_calendar' ? item.month :
                            activeQuickFilterTab === 'cancelled_reason' ? item.reason :
                            item.type;
-              const displayLabel = activeQuickFilterTab === 'fulfillment_status' ? formatFulfillmentDisplayStatus(item.status) : value;
-              const count = item.quantity || item.count;
+              const displayLabel =
+                activeQuickFilterTab === 'fulfillment_status'
+                  ? formatFulfillmentDisplayStatus(item.status)
+                  : activeQuickFilterTab === 'routes'
+                    ? item.label
+                    : value;
+              const count = item.quantity ?? item.count;
               const isSelected = selectedItems.has(value);
               
               // Check if this is an "other-company" province (should be green)
@@ -2874,7 +3125,7 @@ const Orders = () => {
       {/* Compact Header - White Background */}
       <div className="bg-white border-b border-gray-200 shadow-sm">
         {/* Top Row: Search and Action Buttons */}
-        <div className="px-3 sm:px-4 py-2.5 flex items-center gap-2.5 bg-gray-50/50">
+        <div className="px-3 sm:px-4 py-2.5 flex items-center gap-2 bg-gray-50/50">
           {/* Search */}
           <div className="relative flex-1 min-w-0">
             <input
@@ -2897,6 +3148,47 @@ const Orders = () => {
               </button>
             )}
           </div>
+          <div
+            className="flex shrink-0 items-center rounded-xl border border-gray-200 bg-white p-0.5 shadow-sm"
+            role="group"
+            aria-label="Orders view"
+          >
+            <button
+              type="button"
+              onClick={() => setOrdersViewMode('list')}
+              className={`inline-flex items-center gap-1 rounded-lg px-2 sm:px-2.5 py-2 text-xs font-medium transition-colors ${
+                ordersViewMode === 'list'
+                  ? 'bg-gray-900 text-white'
+                  : 'text-gray-600 hover:bg-gray-50'
+              }`}
+              aria-pressed={ordersViewMode === 'list'}
+            >
+              <Squares2X2Icon className="h-5 w-5 shrink-0" aria-hidden />
+              <span className="hidden sm:inline">List</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setOrdersViewMode('map')}
+              className={`inline-flex items-center gap-1 rounded-lg px-2 sm:px-2.5 py-2 text-xs font-medium transition-colors ${
+                ordersViewMode === 'map'
+                  ? 'bg-gray-900 text-white'
+                  : 'text-gray-600 hover:bg-gray-50'
+              }`}
+              aria-pressed={ordersViewMode === 'map'}
+            >
+              <MapPinIcon className="h-5 w-5 shrink-0" aria-hidden />
+              <span className="hidden sm:inline">Map</span>
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShippingRouteDialogOpen(true)}
+            className="flex-shrink-0 inline-flex items-center justify-center min-w-[2.75rem] h-10 px-2 rounded-xl border-2 border-slate-300 bg-slate-100 text-slate-900 shadow-sm hover:bg-slate-200 hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 transition-colors"
+            title="Shipping route — tag orders"
+            aria-label="Shipping route — tag orders"
+          >
+            <TruckIcon className="w-6 h-6 text-slate-900 shrink-0" aria-hidden strokeWidth={2.25} />
+          </button>
         </div>
 
         {/* Filter Icons - One line, horizontal scroll if needed; box/icon sizes fixed; scrollbar hidden */}
@@ -3019,26 +3311,46 @@ const Orders = () => {
 
       </div>
 
-      {/* Order Grid */}
-      <div className="p-2 sm:p-8">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-          {/* Quick Filter Card - Shows in all views */}
-          <QuickFilterCard />
-          {sortedOrders?.map((order: any) => (
-            <OrderCard
-              key={order.id}
-              order={order}
-              isSelected={selectedOrders.includes(order.id)}
-              onSelect={handleOrderSelect}
-              onUpdateNote={handleUpdateNote}
-              onTogglePriority={handleTogglePriority}
-              onUpdateStatus={handleUpdateStatus}
-              onDeleteOrder={handleDeleteOrder}
-              onUpdateTags={handleUpdateTags}
-            />
-          ))}
+      {/* Order list or map (same filters / sortedOrders as list view) */}
+      {ordersViewMode === 'list' ? (
+        <div className="p-2 sm:p-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+            <QuickFilterCard />
+            {sortedOrders?.map((order: any) => (
+              <OrderCard
+                key={order.id}
+                order={order}
+                isSelected={selectedOrders.includes(order.id)}
+                onSelect={handleOrderSelect}
+                onUpdateNote={handleUpdateNote}
+                onTogglePriority={handleTogglePriority}
+                onUpdateStatus={handleUpdateStatus}
+                onDeleteOrder={handleDeleteOrder}
+                onUpdateTags={handleUpdateTags}
+              />
+            ))}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="p-2 sm:p-8 max-w-[1600px] mx-auto w-full space-y-3">
+          <div className="max-w-7xl mx-auto w-full">
+            <QuickFilterCard />
+          </div>
+          <OrdersMapPanel
+            orders={sortedOrders as unknown as OrderForMapSummary[]}
+            onReplaceShippingRouteForOrder={handleReplaceShippingRouteForOrder}
+            selectedOrderIds={selectedOrders}
+            mapOrderCardProps={{
+              onSelect: handleOrderSelect,
+              onUpdateNote: handleUpdateNote,
+              onTogglePriority: handleTogglePriority,
+              onUpdateStatus: handleUpdateStatus,
+              onDeleteOrder: handleDeleteOrder,
+              onUpdateTags: handleUpdateTags,
+            }}
+          />
+        </div>
+      )}
 
       {/* Scroll to Top Button */}
       {showScrollToTop && (
@@ -3050,6 +3362,87 @@ const Orders = () => {
           <ArrowUpIcon className="w-6 h-6 text-white" />
         </button>
       )}
+
+      <Dialog
+        open={shippingRouteDialogOpen}
+        onClose={() => {
+          if (!shippingRouteSaving) setShippingRouteDialogOpen(false);
+        }}
+        className="relative z-[70]"
+      >
+        <div className="fixed inset-0 bg-black/25 backdrop-blur-[1px]" aria-hidden="true" />
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <Dialog.Panel className="w-full max-w-md rounded-2xl bg-white shadow-xl border border-gray-100 overflow-hidden">
+            <div className="px-5 pt-5 pb-4 border-b border-gray-100 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-[15px] font-semibold text-gray-900 tracking-tight">Shipping route</h2>
+                <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
+                  Tags: <span className="font-mono text-[11px] text-gray-600">shipping_route:…</span> and{' '}
+                  <span className="font-mono text-[11px] text-gray-600">shipping_route_date:YYYY-MM-DD</span>
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={shippingRouteSaving}
+                onClick={() => setShippingRouteDialogOpen(false)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Close"
+              >
+                <XMarkIcon className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-4">
+              <div>
+                <label htmlFor="shipping-route-name" className="block text-xs font-medium text-gray-600 mb-1.5">
+                  Route name
+                </label>
+                <input
+                  id="shipping-route-name"
+                  type="text"
+                  value={shippingRouteName}
+                  onChange={(e) => setShippingRouteName(e.target.value)}
+                  placeholder="e.g. Maadi morning"
+                  disabled={shippingRouteSaving}
+                  className="w-full px-3 py-2 text-sm text-gray-900 bg-gray-50/80 border border-gray-200 rounded-xl placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-300 disabled:opacity-50"
+                />
+              </div>
+              <div>
+                <label htmlFor="shipping-route-orders" className="block text-xs font-medium text-gray-600 mb-1.5">
+                  Orders
+                </label>
+                <textarea
+                  id="shipping-route-orders"
+                  value={shippingRouteOrderLines}
+                  onChange={(e) => setShippingRouteOrderLines(e.target.value)}
+                  placeholder={'#1042\n#1043\n6284512345678'}
+                  disabled={shippingRouteSaving}
+                  rows={9}
+                  className="w-full px-3 py-2.5 text-sm font-mono text-gray-900 bg-gray-50/80 border border-gray-200 rounded-xl placeholder:text-gray-400 placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-300 resize-y min-h-[140px] disabled:opacity-50"
+                />
+                <p className="text-[11px] text-gray-400 mt-1.5">One order per line · #number or numeric Shopify ID · matches loaded orders only</p>
+              </div>
+            </div>
+            <div className="px-5 py-3.5 bg-gray-50/80 border-t border-gray-100 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={shippingRouteSaving}
+                onClick={() => setShippingRouteDialogOpen(false)}
+                className="px-3.5 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 rounded-lg hover:bg-gray-100 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={shippingRouteSaving}
+                onClick={() => void handleApplyShippingRoute()}
+                className="px-4 py-2 text-sm font-medium text-white bg-gray-900 rounded-lg hover:bg-gray-800 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900"
+              >
+                {shippingRouteSaving ? 'Applying…' : 'Apply tags'}
+              </button>
+            </div>
+          </Dialog.Panel>
+        </div>
+      </Dialog>
     </div>
   );
 };
