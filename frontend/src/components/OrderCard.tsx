@@ -4,7 +4,7 @@ import whatsappLogo from '../assets/whatsapp.png';
 import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon, EllipsisHorizontalIcon, DocumentTextIcon, ClockIcon, SparklesIcon, CheckBadgeIcon, PaperAirplaneIcon, XCircleIcon, BanknotesIcon, BoltIcon, HandRaisedIcon, HandThumbUpIcon, PauseCircleIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid, PhoneArrowUpRightIcon } from '@heroicons/react/24/solid';
 import { convertToCairoTime, calculateDaysRemaining } from '../utils/dateUtils';
-import { Menu, Dialog, Popover, Transition } from '@headlessui/react';
+import { Menu, Dialog } from '@headlessui/react';
 import { format } from 'date-fns';
 import LocationDialog, { Zone, SubZone } from './ui/LocationDialog';
 import { locationData } from '../data/locations';
@@ -18,6 +18,8 @@ import {
   mergeRushTypeWithPriorityMaking,
   shouldHidePriorityMakingLine,
 } from '../utils/priorityMakingRush';
+import { normalizeOrderTagsArray, stripShippingRouteTags } from '../utils/shippingRouteTags';
+import { getOrderLatLng } from '../utils/orderGeolocation';
 
 interface LocationSelections {
   cityId: string | null;
@@ -162,11 +164,7 @@ const ShippingStatus: React.FC<{
   const handleMarkAsCancelled = () => {
     if (!onUpdateTags || !onUpdateStatus) return;
     
-    const currentTags: string[] = Array.isArray(orderTags) 
-      ? orderTags 
-      : typeof orderTags === 'string'
-        ? orderTags.split(',').map((t: string) => t.trim())
-        : [];
+    const currentTags: string[] = Array.isArray(orderTags) ? orderTags : [];
     
     // Remove existing status tags
     const statusTags = ['order_ready', 'on_hold', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
@@ -243,6 +241,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const [whatsAppMessage, setWhatsAppMessage] = useState('');
   const [tempLocationSelections, setTempLocationSelections] = useState<LocationSelections | null>(null);
   const [showLocationDialog, setShowLocationDialog] = useState(false);
+  const [showPinDialog, setShowPinDialog] = useState(false);
+  const [pinInput, setPinInput] = useState('');
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [isShippedModalOpen, setIsShippedModalOpen] = useState(false);
@@ -265,6 +265,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const [itemsExpanded, setItemsExpanded] = useState(false);
   const [mapInfoExpanded, setMapInfoExpanded] = useState(false);
   const [mapTimelineExpanded, setMapTimelineExpanded] = useState(false);
+  const [mapAddRouteExpanded, setMapAddRouteExpanded] = useState(false);
   const [orderNumberCopied, setOrderNumberCopied] = useState(false);
   const [phoneNumberCopied, setPhoneNumberCopied] = useState(false);
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
@@ -283,14 +284,15 @@ const OrderCard: React.FC<OrderCardProps> = ({
   
   // Ensure all tags are trimmed before searching
   const trimmedTags = tags.map((tag: string) => tag.trim());
+  const latLng = getOrderLatLng(order);
+  const locationText = latLng ? `${latLng.lat},${latLng.lng}` : null;
+  const googleMapsUrl = latLng ? `https://www.google.com/maps?q=${latLng.lat},${latLng.lng}` : null;
+  const hasPinTag = trimmedTags.some((tag: string) => tag.toLowerCase().startsWith('pin:'));
+  const hasExistingLocation = Boolean(latLng) || hasPinTag;
 
   const shippingRouteTagEntry = trimmedTags.find((t: string) => t.toLowerCase().startsWith('shipping_route:'));
-  const shippingRouteDateEntry = trimmedTags.find((t: string) => t.toLowerCase().startsWith('shipping_route_date:'));
   const shippingRouteDisplayName = shippingRouteTagEntry
     ? shippingRouteTagEntry.slice('shipping_route:'.length)
-    : null;
-  const shippingRouteDisplayDate = shippingRouteDateEntry
-    ? shippingRouteDateEntry.slice('shipping_route_date:'.length)
     : null;
 
   const mapRemovableRouteIdForBadge = useMemo(() => {
@@ -1500,15 +1502,45 @@ Could you kindly confirm if you'll be available to receive it during that time? 
     setTempLocationSelections(null);
   };
 
-  // Function to start location editing
-  const startLocationEdit = () => {
-    // Initialize temporary selections with current values
-    setTempLocationSelections({
-      cityId: locationIds.cityId !== "null" ? locationIds.cityId : null,
-      neighborhoodId: locationIds.neighborhoodId !== "null" ? locationIds.neighborhoodId : null,
-      subzoneId: locationIds.subZoneId !== "null" ? locationIds.subZoneId : null
+  const parseLatLngInput = (value: string): { lat: string; lng: string } | null => {
+    const match = value.trim().match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+    if (!match) return null;
+    const lat = Number(match[1]);
+    const lng = Number(match[2]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    return { lat: String(lat), lng: String(lng) };
+  };
+
+  const handleOpenPinDialog = () => {
+    setPinInput(locationText ?? '');
+    setShowPinDialog(true);
+  };
+
+  const handleSavePinTag = () => {
+    if (!onUpdateTags) {
+      toast.error('Tag update is not available');
+      return;
+    }
+    const parsed = parseLatLngInput(pinInput);
+    if (!parsed) {
+      toast.error('Use lat,long format (example: 29.9942847,31.4339147)');
+      return;
+    }
+
+    const baseTags = getCurrentTags().filter((tag: string) => {
+      const lower = tag.toLowerCase();
+      return (
+        !lower.startsWith('pin:') &&
+        !lower.startsWith('mylerz_city_id:') &&
+        !lower.startsWith('mylerz_neighborhood_id:') &&
+        !lower.startsWith('mylerz_subzone_id:')
+      );
     });
-    setIsCityDialogOpen(true);
+
+    onUpdateTags(order.id, [...baseTags, `pin:${parsed.lat};${parsed.lng}`]);
+    setShowPinDialog(false);
+    toast.success(hasExistingLocation ? 'Location updated' : 'Location added');
   };
 
   // Function to cancel location editing
@@ -1906,7 +1938,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                 >
                   {order.name} • <span className={rushType === 'Rushed' ? 'text-red-600 font-medium' : rushType === 'Mix' ? 'text-orange-600 font-medium' : 'text-gray-600'}>{rushType}</span> {orderNumberCopied && <ClipboardDocumentIcon className="w-3 h-3 text-green-600 inline-block ml-1" />}
                 </span>
-                {(shippingRouteDisplayName || shippingRouteDisplayDate) && (
+                {shippingRouteDisplayName && (
                   <span
                     className={`text-[10px] ${mapRoutePicker ? 'mt-0.5' : 'mt-1'} inline-flex max-w-full items-center gap-0 rounded-md border px-1 py-0.5 font-medium ${
                       mapRoutePicker
@@ -1917,22 +1949,28 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                   >
                     <TruckIcon className="h-3 w-3 flex-shrink-0 opacity-80" strokeWidth={2} />
                     <span className="min-w-0 flex-1 truncate">
-                      {shippingRouteDisplayName || 'Route'}
-                      {shippingRouteDisplayDate ? ` · ${shippingRouteDisplayDate}` : ''}
+                      {shippingRouteDisplayName}
                     </span>
-                    {mapRoutePicker && mapRemovableRouteIdForBadge ? (
+                    {((mapRoutePicker && mapRemovableRouteIdForBadge) || (!mapRoutePicker && onUpdateTags)) ? (
                       <button
                         type="button"
-                        className="inline shrink-0 border-0 bg-transparent p-0 m-0 align-baseline text-[10px] font-normal leading-none text-violet-600 shadow-none outline-none ring-0 hover:bg-transparent hover:opacity-70 focus:outline-none"
+                        className={`inline m-0 shrink-0 border-0 bg-transparent p-0 align-baseline text-[10px] font-normal leading-none shadow-none outline-none ring-0 hover:bg-transparent hover:opacity-70 focus:outline-none ${
+                          mapRoutePicker ? 'text-violet-600' : 'text-indigo-600'
+                        }`}
                         title="Remove from route"
                         aria-label="Remove from route"
                         onClick={(e) => {
                           e.stopPropagation();
                           void (async () => {
                             try {
-                              await mapRoutePicker.onRemoveFromRoute(mapRemovableRouteIdForBadge);
+                              if (mapRoutePicker && mapRemovableRouteIdForBadge) {
+                                await mapRoutePicker.onRemoveFromRoute(mapRemovableRouteIdForBadge);
+                              } else if (onUpdateTags) {
+                                const next = stripShippingRouteTags(normalizeOrderTagsArray(order.tags));
+                                onUpdateTags(order.id, next);
+                              }
                             } catch {
-                              /* panel already toasts */
+                              /* map panel already toasts */
                             }
                           })();
                         }}
@@ -2226,47 +2264,49 @@ Could you kindly confirm if you'll be available to receive it during that time? 
         {mapRoutePicker ? (
           <div className="relative z-[1] mb-1 pb-1 space-y-1 border-b border-gray-100" onClick={(e) => e.stopPropagation()}>
             {mapRoutePicker.removable.length === 0 && mapRoutePicker.addable.length > 0 ? (
-              <Popover className="relative">
-                {({ close }) => (
-                  <>
-                    <Popover.Button className="flex w-full items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-left text-sm font-medium text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500/30">
-                      <span>Add to route</span>
-                      <ChevronDownIcon className="h-4 w-4 shrink-0 text-gray-500" aria-hidden />
-                    </Popover.Button>
-                    <Transition
-                      as={React.Fragment}
-                      enter="transition ease-out duration-150"
-                      enterFrom="opacity-0 -translate-y-1"
-                      enterTo="opacity-100 translate-y-0"
-                      leave="transition ease-in duration-100"
-                      leaveFrom="opacity-100 translate-y-0"
-                      leaveTo="opacity-0 -translate-y-1"
-                    >
-                      <Popover.Panel className="absolute left-0 right-0 z-[10001] mt-1 max-h-48 overflow-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg ring-1 ring-black/5">
-                        {mapRoutePicker.addable.map((opt) => (
-                          <button
-                            key={opt.id}
-                            type="button"
-                            className="flex w-full items-center px-3 py-2 text-left text-sm text-gray-800 hover:bg-gray-50"
-                            onClick={() => {
-                              void (async () => {
-                                try {
-                                  await mapRoutePicker.onAddToRoute(opt.id);
-                                  close();
-                                } catch {
-                                  /* panel already toasts */
-                                }
-                              })();
-                            }}
-                          >
-                            {opt.name}
-                          </button>
-                        ))}
-                      </Popover.Panel>
-                    </Transition>
-                  </>
-                )}
-              </Popover>
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMapAddRouteExpanded((v) => !v);
+                  }}
+                  className="flex w-full items-center justify-between gap-2 rounded-md border border-gray-200 bg-gray-50/90 px-2 py-1.5 text-left hover:bg-gray-100/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/40"
+                  aria-expanded={mapAddRouteExpanded}
+                >
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <PlusIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
+                    <span className="truncate text-sm font-medium text-gray-900">Add to route</span>
+                  </span>
+                  <ChevronDownIcon
+                    className={`h-4 w-4 shrink-0 text-gray-500 transition-transform ${mapAddRouteExpanded ? 'rotate-180' : ''}`}
+                    aria-hidden
+                  />
+                </button>
+                {mapAddRouteExpanded ? (
+                  <div className="mt-1 space-y-1 border-t border-gray-100 pt-1">
+                    {mapRoutePicker.addable.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        className="flex w-full items-center rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-left text-sm text-gray-800 shadow-sm hover:bg-gray-50"
+                        onClick={() => {
+                          void (async () => {
+                            try {
+                              await mapRoutePicker.onAddToRoute(opt.id);
+                              setMapAddRouteExpanded(false);
+                            } catch {
+                              /* panel already toasts */
+                            }
+                          })();
+                        }}
+                      >
+                        {opt.name}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </>
             ) : mapRoutePicker.removable.length === 0 ? (
               <p className="text-xs text-gray-500 text-center py-1">No routes in sidebar — add a route on the left.</p>
             ) : null}
@@ -2407,16 +2447,101 @@ Could you kindly confirm if you'll be available to receive it during that time? 
             )}
             {order.shipping_address && (
               <div className="flex items-center gap-2">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    startLocationEdit();
-                  }}
-                  className="p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors"
-                  title={canEditLocation ? 'Edit Location' : 'View Address'}
-                >
-                  <MapPinIcon className="w-5 h-5 text-gray-400 hover:text-gray-500 transition-colors" />
-                </button>
+                <Menu as="div" className="relative inline-block text-left">
+                  {({ open }) => (
+                    <>
+                      <Menu.Button
+                        onClick={(e) => e.stopPropagation()}
+                        className="p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors"
+                        title="Location actions"
+                      >
+                        <MapPinIcon className="w-5 h-5 text-gray-400 hover:text-gray-500 transition-colors" />
+                      </Menu.Button>
+                      {open && (
+                        <Menu.Items
+                          static
+                          className="absolute left-0 z-50 mt-1 w-44 origin-top-left rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="py-1">
+                            <Menu.Item>
+                              {({ active }) => (
+                                <button
+                                  onClick={() => setShowLocationDialog(true)}
+                                  className={`${active ? 'bg-gray-100' : ''} w-full px-4 py-2 text-left text-sm text-gray-700`}
+                                >
+                                  View address
+                                </button>
+                              )}
+                            </Menu.Item>
+                            <Menu.Item>
+                              {({ active }) => (
+                                <button
+                                  onClick={handleOpenPinDialog}
+                                  className={`${active ? 'bg-gray-100' : ''} w-full px-4 py-2 text-left text-sm text-gray-700`}
+                                >
+                                  {hasExistingLocation ? 'Change location' : 'Add location'}
+                                </button>
+                              )}
+                            </Menu.Item>
+                            <Menu.Item>
+                              {({ active }) => (
+                                <button
+                                  disabled={!locationText}
+                                  onClick={async () => {
+                                    if (!locationText) return;
+                                    try {
+                                      await navigator.clipboard.writeText(locationText);
+                                      toast.success('Location copied');
+                                    } catch {
+                                      toast.error('Failed to copy location');
+                                    }
+                                  }}
+                                  className={`${active ? 'bg-gray-100' : ''} w-full px-4 py-2 text-left text-sm text-gray-700 disabled:opacity-40`}
+                                >
+                                  Copy location
+                                </button>
+                              )}
+                            </Menu.Item>
+                            <Menu.Item>
+                              {({ active }) => (
+                                <button
+                                  disabled={!googleMapsUrl}
+                                  onClick={async () => {
+                                    if (!googleMapsUrl) return;
+                                    try {
+                                      await navigator.clipboard.writeText(googleMapsUrl);
+                                      toast.success('Google Maps URL copied');
+                                    } catch {
+                                      toast.error('Failed to copy URL');
+                                    }
+                                  }}
+                                  className={`${active ? 'bg-gray-100' : ''} w-full px-4 py-2 text-left text-sm text-gray-700 disabled:opacity-40`}
+                                >
+                                  Copy URL
+                                </button>
+                              )}
+                            </Menu.Item>
+                            <Menu.Item>
+                              {({ active }) => (
+                                <button
+                                  disabled={!googleMapsUrl}
+                                  onClick={() => {
+                                    if (!googleMapsUrl) return;
+                                    window.open(googleMapsUrl, '_blank', 'noopener,noreferrer');
+                                  }}
+                                  className={`${active ? 'bg-gray-100' : ''} w-full px-4 py-2 text-left text-sm text-gray-700 disabled:opacity-40`}
+                                >
+                                  Open location
+                                </button>
+                              )}
+                            </Menu.Item>
+                          </div>
+                        </Menu.Items>
+                      )}
+                    </>
+                  )}
+                </Menu>
               {locationIds.cityId && locationIds.cityId !== "null" ? (
                 <div className="flex items-center gap-2 w-full">
                   <span className="text-xs text-gray-700">
@@ -3066,6 +3191,49 @@ Could you kindly confirm if you'll be available to receive it during that time? 
         )}
 
         {/* Location Dialogs */}
+        <LocationDialog<any>
+          isOpen={showLocationDialog}
+          onClose={() => setShowLocationDialog(false)}
+          title="View Address"
+          locations={[]}
+          onSelect={() => undefined}
+          shippingAddress={order.shipping_address}
+          readOnly
+        />
+        <Dialog open={showPinDialog} onClose={() => setShowPinDialog(false)} className="relative z-50">
+          <div className="fixed inset-0 bg-black/40" aria-hidden="true" />
+          <div className="fixed inset-0 flex items-center justify-center p-4">
+            <Dialog.Panel className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <Dialog.Title className="text-base font-semibold text-gray-900">
+                {hasExistingLocation ? 'Change location' : 'Add location'}
+              </Dialog.Title>
+              <p className="mt-1 text-sm text-gray-600">Paste coordinates as lat,long</p>
+              <input
+                type="text"
+                value={pinInput}
+                onChange={(event) => setPinInput(event.target.value)}
+                placeholder="29.9942847,31.4339147"
+                className="mt-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              />
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPinDialog(false)}
+                  className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSavePinTag}
+                  className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+                >
+                  Save
+                </button>
+              </div>
+            </Dialog.Panel>
+          </div>
+        </Dialog>
         {/* City Dialog */}
         <LocationDialog<any>
           isOpen={isCityDialogOpen}

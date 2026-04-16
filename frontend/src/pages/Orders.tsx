@@ -18,6 +18,8 @@ import {
   mergeRushTypeWithPriorityMaking,
 } from '../utils/priorityMakingRush';
 import type { OrderForMapSummary } from '../utils/orderMapSummary';
+import { COURIER_ASSIGNED_TAG, stripShippingRouteTags } from '../utils/shippingRouteTags';
+import { generateShippingSlipsPdf } from '../utils/shippingSlipsPdf';
 
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
@@ -197,7 +199,6 @@ interface Order {
 }
 
 const SHIPPING_ROUTE_TAG_PREFIX = 'shipping_route:';
-const SHIPPING_ROUTE_DATE_PREFIX = 'shipping_route_date:';
 
 function normalizeOrderTagsArray(tags: string[] | string | null | undefined): string[] {
   if (Array.isArray(tags)) return tags.map((t) => String(t).trim()).filter(Boolean);
@@ -205,59 +206,20 @@ function normalizeOrderTagsArray(tags: string[] | string | null | undefined): st
   return [];
 }
 
-function stripShippingRouteTags(tags: string[]): string[] {
-  return tags.filter((t) => {
-    const low = t.toLowerCase();
-    return !low.startsWith(SHIPPING_ROUTE_TAG_PREFIX) && !low.startsWith(SHIPPING_ROUTE_DATE_PREFIX);
-  });
-}
-
 function sanitizeShippingRouteName(name: string): string {
   return name.trim().replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function findOrderFromPastedLine(orders: Order[], line: string): Order | undefined {
-  const raw = line.trim();
-  if (!raw) return undefined;
-  if (/^\d+$/.test(raw)) {
-    const n = parseInt(raw, 10);
-    const byId = orders.find((o) => o.id === n);
-    if (byId) return byId;
-    return orders.find(
-      (o) =>
-        o.name.replace(/\s/g, '').toLowerCase() === `#${raw}`.toLowerCase() ||
-        o.name.replace(/\s/g, '').toLowerCase() === raw.toLowerCase()
-    );
-  }
-  const withHash = raw.startsWith('#') ? raw : `#${raw}`;
-  return orders.find(
-    (o) =>
-      o.name.trim().toLowerCase() === raw.trim().toLowerCase() ||
-      o.name.trim().toLowerCase() === withHash.toLowerCase()
-  );
-}
-
-/** Stable key for route name + creation date (both tags required). */
-const ROUTE_KEY_SEP = '\u001e';
-
-/** Quick filter: orders missing both shipping_route + shipping_route_date tags. */
+/** Quick filter: orders missing shipping_route tags. */
 const SHIPPING_ROUTE_NONE_KEY = '__shipping_route_none__';
 
 function getOrderShippingRouteKey(order: Order): string | null {
   const tags = normalizeOrderTagsArray(order.tags);
   const routeTag = tags.find((t) => t.toLowerCase().startsWith(SHIPPING_ROUTE_TAG_PREFIX.toLowerCase()));
-  const dateTag = tags.find((t) => t.toLowerCase().startsWith(SHIPPING_ROUTE_DATE_PREFIX.toLowerCase()));
-  if (!routeTag || !dateTag) return null;
+  if (!routeTag) return null;
   const name = routeTag.slice(SHIPPING_ROUTE_TAG_PREFIX.length).trim();
-  const dateStr = dateTag.slice(SHIPPING_ROUTE_DATE_PREFIX.length).trim();
-  if (!name || !dateStr) return null;
-  return `${dateStr}${ROUTE_KEY_SEP}${name}`;
-}
-
-function parseShippingRouteKey(key: string): { date: string; name: string } {
-  const i = key.indexOf(ROUTE_KEY_SEP);
-  if (i === -1) return { date: '', name: key };
-  return { date: key.slice(0, i), name: key.slice(i + ROUTE_KEY_SEP.length) };
+  if (!name) return null;
+  return name;
 }
 
 function orderMatchesSelectedRoutes(order: Order, selected: Set<string>): boolean {
@@ -423,10 +385,6 @@ const Orders = () => {
   const [showScrollToTop, setShowScrollToTop] = useState(false);
   const ordersRefreshTimerRef = useRef<number | null>(null);
 
-  const [shippingRouteDialogOpen, setShippingRouteDialogOpen] = useState(false);
-  const [shippingRouteName, setShippingRouteName] = useState('');
-  const [shippingRouteOrderLines, setShippingRouteOrderLines] = useState('');
-  const [shippingRouteSaving, setShippingRouteSaving] = useState(false);
   const [ordersViewMode, setOrdersViewMode] = useState<'list' | 'map'>('list');
 
   // Quick Filter state
@@ -958,7 +916,7 @@ const Orders = () => {
       if (!selectedCities.has(province)) return false;
     }
 
-    // Quick filter: Shipping routes (shipping_route + shipping_route_date tags, or "No route")
+    // Quick filter: Shipping routes (shipping_route tags, or "No route")
     if (selectedRoutes.size > 0 && !orderMatchesSelectedRoutes(order, selectedRoutes)) {
       return false;
     }
@@ -1880,71 +1838,48 @@ const Orders = () => {
       } else {
         const name = sanitizeShippingRouteName(routeName);
         if (!name) throw new Error('map_route_invalid_name');
-        const dateStr = format(new Date(), 'yyyy-MM-dd');
         const routeTag = `${SHIPPING_ROUTE_TAG_PREFIX}${name}`;
-        const dateTag = `${SHIPPING_ROUTE_DATE_PREFIX}${dateStr}`;
-        next = [...stripped, routeTag, dateTag];
+        next = [...stripped, routeTag];
       }
       await updateTagsMutation.mutateAsync({ orderId, newTags: next });
     },
     [orders, updateTagsMutation]
   );
 
-  const handleApplyShippingRoute = async () => {
-    const name = sanitizeShippingRouteName(shippingRouteName);
-    if (!name) {
-      toast.error('Enter a route name');
-      return;
-    }
-    if (!orders?.length) {
-      toast.error('No orders loaded');
-      return;
-    }
-    const lines = shippingRouteOrderLines.split(/\n/).map((l) => l.trim()).filter(Boolean);
-    if (lines.length === 0) {
-      toast.error('Paste at least one order number or ID');
-      return;
-    }
-
-    const byId = new Map<number, Order>();
-    const unmatched: string[] = [];
-    for (const line of lines) {
-      const o = findOrderFromPastedLine(orders, line);
-      if (o) byId.set(o.id, o);
-      else unmatched.push(line);
-    }
-
-    const matched = [...byId.values()];
-    if (matched.length === 0) {
-      toast.error('No matching orders in the current list');
-      return;
-    }
-
-    const dateStr = format(new Date(), 'yyyy-MM-dd');
-    const routeTag = `${SHIPPING_ROUTE_TAG_PREFIX}${name}`;
-    const dateTag = `${SHIPPING_ROUTE_DATE_PREFIX}${dateStr}`;
-
-    setShippingRouteSaving(true);
-    try {
-      for (const o of matched) {
-        const current = normalizeOrderTagsArray(o.tags);
-        const next = [...stripShippingRouteTags(current), routeTag, dateTag];
-        await updateTagsMutation.mutateAsync({ orderId: o.id, newTags: next });
+  const handleToggleCourierAssignmentRoute = useCallback(
+    async (route: { orderIds: number[] }, assign: boolean) => {
+      if (!orders?.length) {
+        toast.error('No orders loaded');
+        return;
       }
-      toast.success(`Route tags applied to ${matched.length} order${matched.length === 1 ? '' : 's'}`);
-      if (unmatched.length > 0) {
-        const preview = unmatched.slice(0, 6).join(', ');
-        toast.error(`${unmatched.length} line${unmatched.length === 1 ? '' : 's'} not matched: ${preview}${unmatched.length > 6 ? '…' : ''}`, { duration: 6000 });
+
+      const routeOrders = route.orderIds
+        .map((orderId) => orders.find((order) => order.id === orderId))
+        .filter((order): order is Order => !!order);
+
+      if (routeOrders.length === 0) {
+        toast.error('No orders found in this route');
+        return;
       }
-      setShippingRouteDialogOpen(false);
-      setShippingRouteName('');
-      setShippingRouteOrderLines('');
-    } catch {
-      toast.error('Could not update all orders');
-    } finally {
-      setShippingRouteSaving(false);
-    }
-  };
+
+      try {
+        for (const order of routeOrders) {
+          const currentTags = normalizeOrderTagsArray(order.tags);
+          const nextTags = assign
+            ? currentTags.includes(COURIER_ASSIGNED_TAG)
+              ? currentTags
+              : [...currentTags, COURIER_ASSIGNED_TAG]
+            : currentTags.filter((tag) => tag.trim().toLowerCase() !== COURIER_ASSIGNED_TAG);
+          await updateTagsMutation.mutateAsync({ orderId: order.id, newTags: nextTags });
+        }
+        toast.success(assign ? 'Route assigned to courier' : 'Route removed from courier view');
+      } catch (error) {
+        console.error('Failed to toggle courier assignment for route:', error);
+        toast.error('Failed to update courier assignment');
+      }
+    },
+    [orders, updateTagsMutation]
+  );
 
   // Get visible tabs based on current status filter
   // Order: production -> days -> city -> shipping -> fulfillment_status (shipped) -> rushed -> fulfillment_month -> paid_month -> cancelled_calendar -> cancelled_reason
@@ -2163,7 +2098,7 @@ const Orders = () => {
       .map(type => ({ type, count: typeCounts[type] }));
   };
 
-  // Shipping routes from tags (newest date first); requires both shipping_route: and shipping_route_date:
+  // Shipping routes from tags using route name only.
   const getRoutesData = () => {
     if (!orders) return [];
 
@@ -2185,26 +2120,20 @@ const Orders = () => {
     const pinnedRow = {
       key: SHIPPING_ROUTE_NONE_KEY,
       count: noRouteCount,
-      date: '',
       name: '',
       label: 'No route',
     };
 
     const rows = [...counts.entries()].map(([key, count]) => {
-      const { date, name } = parseShippingRouteKey(key);
       return {
         key,
         count,
-        date,
-        name,
-        label: `${name} · ${date}`,
+        name: key,
+        label: key,
       };
     });
 
-    rows.sort((a, b) => {
-      if (a.date !== b.date) return b.date.localeCompare(a.date);
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-    });
+    rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
     return [pinnedRow, ...rows];
   };
@@ -2800,6 +2729,28 @@ const Orders = () => {
         .reduce((sum, order) => sum + parseFloat(order.total_price || '0'), 0);
     }, [orders, matchesAllFilters]);
 
+    const shippingSlipOrders = useMemo(() => {
+      if (!orders) return [];
+      if (selectedOrders.length > 0) {
+        return orders.filter((order) => selectedOrders.includes(order.id));
+      }
+      return orders.filter((order) => matchesAllFilters(order));
+    }, [orders, selectedOrders, matchesAllFilters]);
+
+    const handleGenerateShippingSlipsPdf = useCallback(async () => {
+      if (shippingSlipOrders.length === 0) {
+        toast.error('No orders available for shipping slips');
+        return;
+      }
+      try {
+        const dateStamp = format(new Date(), 'yyyy-MM-dd');
+        await generateShippingSlipsPdf(shippingSlipOrders, `shipping-slips-${dateStamp}.pdf`);
+      } catch (error) {
+        console.error('Failed to generate shipping slips PDF:', error);
+        toast.error('Failed to generate shipping slips PDF');
+      }
+    }, [shippingSlipOrders]);
+
     const getBulkStatusColor = (status: string) => {
       switch (status) {
         case 'pending': return 'bg-yellow-100 text-yellow-800';
@@ -2833,6 +2784,14 @@ const Orders = () => {
           </div>
           {/* Right: Select all + Refresh — icon only */}
           <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button
+              onClick={handleGenerateShippingSlipsPdf}
+              disabled={shippingSlipOrders.length === 0}
+              className="inline-flex items-center justify-center rounded-lg px-2.5 py-1.5 bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 text-xs font-medium"
+              title={selectedOrders.length > 0 ? 'Generate PDF for selected orders' : 'Generate PDF for visible orders'}
+            >
+              Slips PDF
+            </button>
             <button
               onClick={handleSelectAll}
               className={`
@@ -3180,15 +3139,6 @@ const Orders = () => {
               <span className="hidden sm:inline">Map</span>
             </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setShippingRouteDialogOpen(true)}
-            className="flex-shrink-0 inline-flex items-center justify-center min-w-[2.75rem] h-10 px-2 rounded-xl border-2 border-slate-300 bg-slate-100 text-slate-900 shadow-sm hover:bg-slate-200 hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 transition-colors"
-            title="Shipping route — tag orders"
-            aria-label="Shipping route — tag orders"
-          >
-            <TruckIcon className="w-6 h-6 text-slate-900 shrink-0" aria-hidden strokeWidth={2.25} />
-          </button>
         </div>
 
         {/* Filter Icons - One line, horizontal scroll if needed; box/icon sizes fixed; scrollbar hidden */}
@@ -3340,6 +3290,7 @@ const Orders = () => {
             orders={sortedOrders as unknown as OrderForMapSummary[]}
             onReplaceShippingRouteForOrder={handleReplaceShippingRouteForOrder}
             selectedOrderIds={selectedOrders}
+            onToggleCourierAssignmentRoute={handleToggleCourierAssignmentRoute}
             mapOrderCardProps={{
               onSelect: handleOrderSelect,
               onUpdateNote: handleUpdateNote,
@@ -3363,86 +3314,6 @@ const Orders = () => {
         </button>
       )}
 
-      <Dialog
-        open={shippingRouteDialogOpen}
-        onClose={() => {
-          if (!shippingRouteSaving) setShippingRouteDialogOpen(false);
-        }}
-        className="relative z-[70]"
-      >
-        <div className="fixed inset-0 bg-black/25 backdrop-blur-[1px]" aria-hidden="true" />
-        <div className="fixed inset-0 flex items-center justify-center p-4">
-          <Dialog.Panel className="w-full max-w-md rounded-2xl bg-white shadow-xl border border-gray-100 overflow-hidden">
-            <div className="px-5 pt-5 pb-4 border-b border-gray-100 flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-[15px] font-semibold text-gray-900 tracking-tight">Shipping route</h2>
-                <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
-                  Tags: <span className="font-mono text-[11px] text-gray-600">shipping_route:…</span> and{' '}
-                  <span className="font-mono text-[11px] text-gray-600">shipping_route_date:YYYY-MM-DD</span>
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={shippingRouteSaving}
-                onClick={() => setShippingRouteDialogOpen(false)}
-                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 disabled:opacity-40"
-                aria-label="Close"
-              >
-                <XMarkIcon className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="px-5 py-4 space-y-4">
-              <div>
-                <label htmlFor="shipping-route-name" className="block text-xs font-medium text-gray-600 mb-1.5">
-                  Route name
-                </label>
-                <input
-                  id="shipping-route-name"
-                  type="text"
-                  value={shippingRouteName}
-                  onChange={(e) => setShippingRouteName(e.target.value)}
-                  placeholder="e.g. Maadi morning"
-                  disabled={shippingRouteSaving}
-                  className="w-full px-3 py-2 text-sm text-gray-900 bg-gray-50/80 border border-gray-200 rounded-xl placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-300 disabled:opacity-50"
-                />
-              </div>
-              <div>
-                <label htmlFor="shipping-route-orders" className="block text-xs font-medium text-gray-600 mb-1.5">
-                  Orders
-                </label>
-                <textarea
-                  id="shipping-route-orders"
-                  value={shippingRouteOrderLines}
-                  onChange={(e) => setShippingRouteOrderLines(e.target.value)}
-                  placeholder={'#1042\n#1043\n6284512345678'}
-                  disabled={shippingRouteSaving}
-                  rows={9}
-                  className="w-full px-3 py-2.5 text-sm font-mono text-gray-900 bg-gray-50/80 border border-gray-200 rounded-xl placeholder:text-gray-400 placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-300 resize-y min-h-[140px] disabled:opacity-50"
-                />
-                <p className="text-[11px] text-gray-400 mt-1.5">One order per line · #number or numeric Shopify ID · matches loaded orders only</p>
-              </div>
-            </div>
-            <div className="px-5 py-3.5 bg-gray-50/80 border-t border-gray-100 flex justify-end gap-2">
-              <button
-                type="button"
-                disabled={shippingRouteSaving}
-                onClick={() => setShippingRouteDialogOpen(false)}
-                className="px-3.5 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 rounded-lg hover:bg-gray-100 disabled:opacity-40"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={shippingRouteSaving}
-                onClick={() => void handleApplyShippingRoute()}
-                className="px-4 py-2 text-sm font-medium text-white bg-gray-900 rounded-lg hover:bg-gray-800 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900"
-              >
-                {shippingRouteSaving ? 'Applying…' : 'Apply tags'}
-              </button>
-            </div>
-          </Dialog.Panel>
-        </div>
-      </Dialog>
     </div>
   );
 };

@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import Orders from './pages/Orders';
+import CourierMap from './pages/CourierMap';
 import Finance from './pages/Finance';
 import WhatsAppInbox from './pages/WhatsAppInbox';
 import WhatsAppTemplates from './pages/WhatsAppTemplates';
@@ -62,6 +63,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/orders" replace />} />
             <Route path="/orders" element={<Orders />} />
+            <Route path="/courier-map" element={<CourierMap />} />
             <Route path="/finance" element={<Finance />} />
             <Route path="/whatsapp" element={<WhatsAppInbox />} />
             <Route path="/whatsapp/templates" element={<WhatsAppTemplates />} />

@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { toast } from 'react-hot-toast';
+import { Dialog } from '@headlessui/react';
 import {
-  ArrowPathIcon,
+  BanknotesIcon,
   ChevronDownIcon,
-  ChevronUpIcon,
+  DocumentArrowDownIcon,
+  MapIcon,
   MapPinIcon,
   PlusIcon,
   TrashIcon,
@@ -14,10 +16,14 @@ import {
 import { getOrderLatLng } from '../utils/orderGeolocation';
 import {
   buildDraftRoutesFromShippingTags,
+  COURIER_ASSIGNED_TAG,
+  normalizeOrderTagsArray,
   shippingTagRoutesFingerprint,
 } from '../utils/shippingRouteTags';
 import type { OrderForMapSummary } from '../utils/orderMapSummary';
-import OrderCard, { type OrderCardProps } from './OrderCard';
+import { generateShippingSlipsPdf } from '../utils/shippingSlipsPdf';
+import { type OrderCardProps } from './OrderCard';
+import MapOrderCard from './MapOrderCard';
 import { reoptimizeStopOrder, routeRowStats } from '../utils/routeGeoUtils';
 
 import iconRetina from 'leaflet/dist/images/marker-icon-2x.png';
@@ -42,12 +48,24 @@ export const ROUTE_DEPOT = {
   mapsUrl: 'https://maps.app.goo.gl/zmr5zwZ6fJj8sWH36',
 } as const;
 
-const ROUTE_LINE_COLORS = ['#2563eb', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#c026d3'];
+const INITIAL_ROUTE_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#9333ea'];
 
 function routeColorIndex(id: string): number {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  return Math.abs(h) % ROUTE_LINE_COLORS.length;
+  return Math.abs(h);
+}
+
+function routeColor(routeId: string, routeIndex: number): string {
+  if (routeIndex < INITIAL_ROUTE_COLORS.length) {
+    return INITIAL_ROUTE_COLORS[routeIndex];
+  }
+
+  const seed = routeColorIndex(routeId);
+  const hue = seed % 360;
+  const saturation = 65 + (seed % 12);
+  const lightness = 42 + (seed % 10);
+  return `hsl(${hue} ${saturation}% ${lightness}%)`;
 }
 
 type DraftRoute = {
@@ -74,6 +92,18 @@ function formatRouteEgp(n: number): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(n);
+}
+
+function sameOrderIds(a: number[], b: number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function toLatLngParam(lat: number, lng: number): string {
+  return `${lat},${lng}`;
 }
 
 /**
@@ -142,6 +172,9 @@ export interface OrdersMapPanelProps {
   /** Same handlers as list view — map pin popups render full OrderCard. */
   mapOrderCardProps: OrdersMapOrderCardProps;
   selectedOrderIds: number[];
+  readOnly?: boolean;
+  currentLocation?: { lat: number; lng: number } | null;
+  onToggleCourierAssignmentRoute?: (route: { id: string; name: string; orderIds: number[] }, assign: boolean) => void | Promise<void>;
 }
 
 export function OrdersMapPanel({
@@ -149,6 +182,9 @@ export function OrdersMapPanel({
   onReplaceShippingRouteForOrder,
   mapOrderCardProps,
   selectedOrderIds,
+  readOnly = false,
+  currentLocation = null,
+  onToggleCourierAssignmentRoute,
 }: OrdersMapPanelProps) {
   const [localRoutes, setLocalRoutes] = useState<DraftRoute[]>([]);
   /** Stop order overrides for routes rebuilt from Shopify tags (cleared when tag set changes). */
@@ -157,6 +193,11 @@ export function OrdersMapPanel({
   /** Which route’s stop list is expanded in the sidebar (collapsed by default). */
   const [stopsExpandedRouteId, setStopsExpandedRouteId] = useState<string | null>(null);
   const [newRouteName, setNewRouteName] = useState('');
+  const [mapInstance, setMapInstance] = useState<L.Map | null>(null);
+  const markerRefs = useRef<Record<number, L.Marker>>({});
+  const [scooterCostDialogRouteId, setScooterCostDialogRouteId] = useState<string | null>(null);
+  const [scooterCostInput, setScooterCostInput] = useState('');
+  const [bulkPaying, setBulkPaying] = useState(false);
 
   const tagFingerprint = useMemo(() => shippingTagRoutesFingerprint(orders), [orders]);
 
@@ -214,21 +255,25 @@ export function OrdersMapPanel({
 
   const boundsPoints = useMemo((): [number, number][] => {
     const pts: [number, number][] = [[ROUTE_DEPOT.lat, ROUTE_DEPOT.lng]];
+    if (currentLocation) pts.push([currentLocation.lat, currentLocation.lng]);
     for (const g of geocoded) pts.push([g.lat, g.lng]);
     return pts;
-  }, [geocoded]);
+  }, [geocoded, currentLocation]);
 
   const fitBoundsKey = useMemo(() => {
     const depot = `${ROUTE_DEPOT.lat.toFixed(6)},${ROUTE_DEPOT.lng.toFixed(6)}`;
+    const current = currentLocation ? `|me:${currentLocation.lat.toFixed(6)},${currentLocation.lng.toFixed(6)}` : '';
     const stops = [...geocoded]
       .sort((a, b) => a.order.id - b.order.id)
       .map((g) => `${g.order.id}:${g.lat.toFixed(6)}:${g.lng.toFixed(6)}`);
-    return `${depot}|${stops.join(';')}`;
-  }, [geocoded]);
+    return `${depot}${current}|${stops.join(';')}`;
+  }, [geocoded, currentLocation]);
 
   const activeRoute = routes.find((r) => r.id === activeRouteId) ?? null;
+  const scooterCostDialogRoute = routes.find((r) => r.id === scooterCostDialogRouteId) ?? null;
 
   const addRoute = useCallback(() => {
+    if (readOnly) return;
     const name = newRouteName.trim();
     if (!name) {
       toast.error('Enter a route name');
@@ -238,19 +283,21 @@ export function OrdersMapPanel({
     setLocalRoutes((prev) => [...prev, { id, name, orderIds: [], fromTags: false }]);
     setActiveRouteId(id);
     setNewRouteName('');
-  }, [newRouteName]);
+  }, [newRouteName, readOnly]);
 
   const removeRoute = useCallback((id: string) => {
+    if (readOnly) return;
     if (id.startsWith('sr:')) {
-      toast.error('This route comes from Shopify tags. Remove shipping_route / shipping_route_date tags on those orders to clear it.');
+      toast.error('This route comes from Shopify tags. Remove the shipping_route tag on those orders to clear it.');
       return;
     }
     setLocalRoutes((prev) => prev.filter((r) => r.id !== id));
     setActiveRouteId((cur) => (cur === id ? null : cur));
-  }, []);
+  }, [readOnly]);
 
   const addOrderToRoute = useCallback(
     async (routeId: string, orderId: number) => {
+      if (readOnly) return;
       const r = routes.find((x) => x.id === routeId);
       if (!r || r.orderIds.includes(orderId)) return;
       try {
@@ -273,22 +320,21 @@ export function OrdersMapPanel({
         setLocalRoutes((prev) => prev.filter((x) => x.id !== routeId));
       }
     },
-    [routes, onReplaceShippingRouteForOrder]
+    [routes, onReplaceShippingRouteForOrder, readOnly]
   );
 
-  const reoptimizeAllRoutes = useCallback(() => {
+  const reoptimizeAllRoutes = useCallback((showToast: boolean) => {
     const tagUpdates: Record<string, number[]> = {};
     const localById = new Map<string, number[]>();
     for (const r of routes) {
       if (r.orderIds.length < 2) continue;
       const next = reoptimizeStopOrder(r.orderIds, byId, ROUTE_DEPOT);
+      if (sameOrderIds(next, r.orderIds)) continue;
       if (r.id.startsWith('sr:')) tagUpdates[r.id] = next;
       else localById.set(r.id, next);
     }
-    if (Object.keys(tagUpdates).length === 0 && localById.size === 0) {
-      toast.error('No route has at least two stops');
-      return;
-    }
+    const hasUpdates = Object.keys(tagUpdates).length > 0 || localById.size > 0;
+    if (!hasUpdates) return false;
     if (Object.keys(tagUpdates).length > 0) {
       setTagRouteOverrides((prev) => ({ ...prev, ...tagUpdates }));
     }
@@ -297,38 +343,164 @@ export function OrdersMapPanel({
         prev.map((x) => (localById.has(x.id) ? { ...x, orderIds: localById.get(x.id)! } : x))
       );
     }
-    toast.success('Reoptimized all routes with 2+ stops (shortest path, approx.)');
+    if (showToast) {
+      toast.success('Reoptimized all routes with 2+ stops (shortest path, approx.)');
+    }
+    return true;
   }, [routes, byId]);
 
-  const moveStop = useCallback(
-    (routeId: string, index: number, dir: -1 | 1) => {
-      if (routeId.startsWith('sr:')) {
-        setTagRouteOverrides((prev) => {
-          const base = routesFromTags.find((r) => r.id === routeId)?.orderIds ?? [];
-          const current = [...(prev[routeId] ?? base)];
-          const j = index + dir;
-          if (j < 0 || j >= current.length) return prev;
-          [current[index], current[j]] = [current[j], current[index]];
-          return { ...prev, [routeId]: current };
-        });
+  const routeOptimizationKey = useMemo(() => {
+    return routes
+      .map((r) => {
+        const geokey = r.orderIds
+          .map((oid) => {
+            const o = byId.get(oid);
+            const ll = o ? getOrderLatLng(o) : null;
+            return ll ? `${oid}:${ll.lat.toFixed(6)},${ll.lng.toFixed(6)}` : `${oid}:na`;
+          })
+          .join('|');
+        return `${r.id}=>${geokey}`;
+      })
+      .join('||');
+  }, [routes, byId]);
+
+  useEffect(() => {
+    void reoptimizeAllRoutes(false);
+  }, [routeOptimizationKey, reoptimizeAllRoutes]);
+
+  const openRouteDirections = useCallback(
+    (route: DraftRoute) => {
+      const stopCoords = route.orderIds
+        .map((oid) => {
+          const order = byId.get(oid);
+          return order ? getOrderLatLng(order) : null;
+        })
+        .filter((coord): coord is { lat: number; lng: number } => !!coord);
+
+      if (stopCoords.length === 0) {
+        toast.error('This route has no mappable stops');
         return;
       }
-      setLocalRoutes((prev) =>
-        prev.map((r) => {
-          if (r.id !== routeId) return r;
-          const j = index + dir;
-          if (j < 0 || j >= r.orderIds.length) return r;
-          const next = [...r.orderIds];
-          [next[index], next[j]] = [next[j], next[index]];
-          return { ...r, orderIds: next };
-        })
+
+      const origin = toLatLngParam(ROUTE_DEPOT.lat, ROUTE_DEPOT.lng);
+      const destination = toLatLngParam(
+        stopCoords[stopCoords.length - 1].lat,
+        stopCoords[stopCoords.length - 1].lng
       );
+      const waypointCoords = stopCoords.slice(0, -1);
+
+      const params = new URLSearchParams({
+        api: '1',
+        origin,
+        destination,
+        travelmode: 'driving',
+      });
+
+      if (waypointCoords.length > 0) {
+        params.set(
+          'waypoints',
+          waypointCoords.map((coord) => toLatLngParam(coord.lat, coord.lng)).join('|')
+        );
+      }
+
+      window.open(`https://www.google.com/maps/dir/?${params.toString()}`, '_blank', 'noopener,noreferrer');
     },
-    [routesFromTags]
+    [byId]
+  );
+
+  const downloadRouteSlipsPdf = useCallback(
+    async (route: DraftRoute) => {
+      const routeOrders = route.orderIds
+        .map((oid) => byId.get(oid))
+        .filter((order): order is OrderForMapSummary => !!order);
+
+      if (routeOrders.length === 0) {
+        toast.error('This route has no orders');
+        return;
+      }
+      try {
+        const routeSlug = route.name.trim().replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'route';
+        const dateStamp = new Date().toISOString().slice(0, 10);
+        await generateShippingSlipsPdf(routeOrders, `shipping-slips-${routeSlug}-${dateStamp}.pdf`);
+      } catch (error) {
+        console.error('Failed to generate route shipping slips PDF:', error);
+        toast.error('Failed to generate route shipping slips PDF');
+      }
+    },
+    [byId]
+  );
+
+  const focusOrderOnMap = useCallback(
+    (orderId: number) => {
+      const order = byId.get(orderId);
+      const ll = order ? getOrderLatLng(order) : null;
+      if (!ll) {
+        toast.error('This order has no map coordinates');
+        return;
+      }
+      if (mapInstance) {
+        mapInstance.flyTo([ll.lat, ll.lng], Math.max(mapInstance.getZoom(), 16), { animate: true, duration: 0.6 });
+      }
+      markerRefs.current[orderId]?.openPopup();
+    },
+    [byId, mapInstance]
+  );
+
+  const applyBulkScooterPaid = useCallback(
+    async (route: DraftRoute, totalCostRaw: string) => {
+      if (readOnly) return;
+      if (!mapOrderCardProps.onUpdateTags || !mapOrderCardProps.onUpdateStatus) {
+        toast.error('Bulk payment action is not available');
+        return;
+      }
+
+      const totalCost = Number(totalCostRaw);
+      if (!Number.isFinite(totalCost) || totalCost <= 0) {
+        toast.error('Enter a valid scooter total cost');
+        return;
+      }
+
+      const routeOrders = route.orderIds
+        .map((id) => byId.get(id))
+        .filter((order): order is OrderForMapSummary => !!order);
+
+      if (routeOrders.length === 0) {
+        toast.error('No orders found in this route');
+        return;
+      }
+
+      const perOrderCost = Number((totalCost / routeOrders.length).toFixed(2));
+      const paidDate = new Date().toISOString().split('T')[0];
+
+      setBulkPaying(true);
+      try {
+        for (const order of routeOrders) {
+          const currentTags = normalizeOrderTagsArray(order.tags);
+          const cleaned = currentTags.filter((tag) => {
+            const low = tag.trim().toLowerCase();
+            return !low.startsWith('scooter_shipping_cost:') && !low.startsWith('paid_date:');
+          });
+
+          const nextTags = [...cleaned, `scooter_shipping_cost:${perOrderCost}`, `paid_date:${paidDate}`];
+          mapOrderCardProps.onUpdateTags(order.id, nextTags);
+          mapOrderCardProps.onUpdateStatus(order.id, 'paid');
+        }
+
+        toast.success(`Marked ${routeOrders.length} order(s) as paid (${perOrderCost} each)`);
+        setScooterCostDialogRouteId(null);
+        setScooterCostInput('');
+      } catch {
+        toast.error('Failed to apply scooter payment in bulk');
+      } finally {
+        setBulkPaying(false);
+      }
+    },
+    [byId, mapOrderCardProps, readOnly]
   );
 
   const removeStop = useCallback(
     async (routeId: string, orderId: number) => {
+      if (readOnly) return;
       try {
         await onReplaceShippingRouteForOrder(orderId, null);
       } catch (e) {
@@ -353,40 +525,45 @@ export function OrdersMapPanel({
         });
       }
     },
-    [onReplaceShippingRouteForOrder]
+    [onReplaceShippingRouteForOrder, readOnly]
+  );
+
+  const isRouteAssignedToCourier = useCallback(
+    (route: DraftRoute) => {
+      if (route.orderIds.length === 0) return false;
+      return route.orderIds.every((id) => {
+        const order = byId.get(id);
+        if (!order) return false;
+        return normalizeOrderTagsArray(order.tags).some((tag) => tag.trim().toLowerCase() === COURIER_ASSIGNED_TAG);
+      });
+    },
+    [byId]
   );
 
   return (
     <div className="flex flex-col md:flex-row gap-3 min-h-0">
       <aside className="order-2 md:order-1 w-full md:w-[min(100%,20rem)] shrink-0 flex flex-col gap-3 md:max-h-[min(80vh,720px)] md:overflow-y-auto pr-0.5">
-        <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={newRouteName}
-              onChange={(e) => setNewRouteName(e.target.value)}
-              placeholder="Route name"
-              className="flex-1 min-w-0 rounded-lg border border-gray-200 px-2.5 py-1.5 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
-            />
-            <button
-              type="button"
-              onClick={addRoute}
-              className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-gray-900 px-2.5 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
-            >
-              <PlusIcon className="h-4 w-4" aria-hidden />
-              Add
-            </button>
+        {!readOnly ? (
+          <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newRouteName}
+                onChange={(e) => setNewRouteName(e.target.value)}
+                placeholder="Route name"
+                className="flex-1 min-w-0 rounded-lg border border-gray-200 px-2.5 py-1.5 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              />
+              <button
+                type="button"
+                onClick={addRoute}
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-gray-900 px-2.5 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+              >
+                <PlusIcon className="h-4 w-4" aria-hidden />
+                Add
+              </button>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={reoptimizeAllRoutes}
-            disabled={routes.length === 0}
-            className="mt-2 w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-sm font-medium text-gray-800 shadow-sm hover:bg-gray-50 disabled:opacity-40"
-          >
-            <ArrowPathIcon className="h-4 w-4 shrink-0" aria-hidden />
-            Reoptimize all routes
-          </button>
-        </div>
+        ) : null}
 
         <div className="rounded-xl border border-gray-200 bg-white divide-y divide-gray-100 shadow-sm overflow-hidden">
           {routes.length === 0 ? (
@@ -394,10 +571,11 @@ export function OrdersMapPanel({
               No routes in this view. Add tags like <span className="font-mono text-[11px]">shipping_route:Name</span> on orders, or create a new route with Add.
             </p>
           ) : (
-            routes.map((r) => {
-              const color = ROUTE_LINE_COLORS[routeColorIndex(r.id)];
+            routes.map((r, routeIndex) => {
+              const color = routeColor(r.id, routeIndex);
               const isActive = r.id === activeRouteId;
               const stats = routeStats.get(r.id);
+              const isCourierAssigned = isRouteAssignedToCourier(r);
               return (
                 <div key={r.id} className={isActive ? 'bg-blue-50/50' : ''}>
                   <div
@@ -419,11 +597,62 @@ export function OrdersMapPanel({
                         aria-hidden
                       />
                       <span className="flex-1 min-w-0 truncate text-sm font-medium text-gray-900">{r.name}</span>
-                      {r.fromTags && (
-                        <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
-                          Tags
-                        </span>
-                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openRouteDirections(r);
+                        }}
+                        className="shrink-0 rounded-md border border-blue-200 bg-blue-50 p-1 text-blue-700 hover:bg-blue-100"
+                        title="Open route directions in Google Maps"
+                      >
+                        <MapIcon className="h-3.5 w-3.5" />
+                      </button>
+                      {!readOnly ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setScooterCostDialogRouteId(r.id);
+                            setScooterCostInput('');
+                          }}
+                          className="shrink-0 rounded-md border border-amber-200 bg-amber-50 p-1 text-amber-700 hover:bg-amber-100"
+                          title="Set bulk scooter payment and mark route paid"
+                        >
+                          <BanknotesIcon className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          downloadRouteSlipsPdf(r);
+                        }}
+                        className="shrink-0 rounded-md border border-emerald-200 bg-emerald-50 p-1 text-emerald-700 hover:bg-emerald-100"
+                        title="Download shipping slips PDF for this route"
+                      >
+                        <DocumentArrowDownIcon className="h-3.5 w-3.5" />
+                      </button>
+                      {!readOnly && onToggleCourierAssignmentRoute ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void onToggleCourierAssignmentRoute(
+                              { id: r.id, name: r.name, orderIds: r.orderIds },
+                              !isCourierAssigned
+                            );
+                          }}
+                          className={`shrink-0 rounded-md border px-2 py-1 text-[11px] font-medium ${
+                            isCourierAssigned
+                              ? 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100'
+                              : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                          }`}
+                          title={isCourierAssigned ? 'Remove this route from courier view' : 'Assign this route to courier view'}
+                        >
+                          {isCourierAssigned ? 'Courier' : 'Assign'}
+                        </button>
+                      ) : null}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-gray-600">
                       <span className="font-medium text-gray-800">
@@ -465,44 +694,40 @@ export function OrdersMapPanel({
                             return (
                               <li
                                 key={`${r.id}-${oid}-${idx}`}
-                                className="flex items-center gap-1 rounded-md bg-white/90 border border-gray-100 px-1.5 py-1 text-xs"
+                                className="flex items-center gap-1 rounded-md border border-gray-100 bg-white/90 px-1.5 py-1 text-xs"
                               >
-                                <span className="text-gray-400 w-4 shrink-0">{idx + 1}</span>
-                                <span className="truncate flex-1 font-medium text-gray-800">{o?.name ?? oid}</span>
-                                <span className="flex shrink-0 items-center gap-0.5">
-                                  <button
-                                    type="button"
-                                    className="p-0.5 rounded text-gray-500 hover:bg-gray-100"
-                                    onClick={() => moveStop(r.id, idx, -1)}
-                                    disabled={idx === 0}
-                                    aria-label="Move stop up"
-                                  >
-                                    <ChevronUpIcon className="h-4 w-4" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="p-0.5 rounded text-gray-500 hover:bg-gray-100"
-                                    onClick={() => moveStop(r.id, idx, 1)}
-                                    disabled={idx === r.orderIds.length - 1}
-                                    aria-label="Move stop down"
-                                  >
-                                    <ChevronDownIcon className="h-4 w-4" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="p-0.5 rounded text-red-600 hover:bg-red-50"
-                                    onClick={() => void removeStop(r.id, oid)}
-                                    aria-label="Remove stop"
-                                  >
-                                    <TrashIcon className="h-4 w-4" />
-                                  </button>
-                                </span>
+                                <button
+                                  type="button"
+                                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-0.5 text-left hover:bg-blue-50"
+                                  onClick={() => focusOrderOnMap(oid)}
+                                  title="Focus this order on map"
+                                >
+                                  <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded bg-blue-100 px-1 text-[10px] font-semibold text-blue-700">
+                                    {idx + 1}
+                                  </span>
+                                  <span className="inline-flex rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-700">
+                                    #{oid}
+                                  </span>
+                                  <span className="truncate text-[11px] font-medium text-gray-800">{o?.name ?? 'Order'}</span>
+                                </button>
+                                {!readOnly ? (
+                                  <span className="flex shrink-0 items-center">
+                                    <button
+                                      type="button"
+                                      className="rounded p-0.5 text-red-600 hover:bg-red-50"
+                                      onClick={() => void removeStop(r.id, oid)}
+                                      aria-label="Remove stop"
+                                    >
+                                      <TrashIcon className="h-4 w-4" />
+                                    </button>
+                                  </span>
+                                ) : null}
                               </li>
                             );
                           })}
                         </ol>
                       )}
-                      {!r.fromTags && (
+                      {!readOnly && !r.fromTags && (
                         <div className="pt-1">
                           <button
                             type="button"
@@ -543,13 +768,15 @@ export function OrdersMapPanel({
         </details>
       </aside>
 
-      <div className="order-1 md:order-2 flex-1 min-h-[220px] h-[42dvh] sm:h-[48dvh] md:h-[min(80vh,720px)] rounded-xl overflow-hidden border border-gray-200 shadow-sm z-0">
+      <div className="order-1 md:order-2 w-full flex-none min-h-[320px] h-[55vh] sm:h-[48vh] md:flex-1 md:h-[min(80vh,720px)] rounded-xl overflow-hidden border border-gray-200 shadow-sm z-0 bg-white">
         <MapContainer
           center={[ROUTE_DEPOT.lat, ROUTE_DEPOT.lng]}
           zoom={12}
           className="h-full w-full"
+          style={{ height: '100%', width: '100%' }}
           scrollWheelZoom
           maxZoom={19}
+          whenReady={(event) => setMapInstance(event.target)}
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -574,23 +801,70 @@ export function OrdersMapPanel({
             </Popup>
           </Marker>
 
+          {currentLocation ? (
+            <Marker
+              position={[currentLocation.lat, currentLocation.lng]}
+              icon={L.divIcon({
+                className: 'courier-current-location-marker',
+                html: `<div style="width:18px;height:18px;border-radius:50%;background:#2563eb;border:3px solid #bfdbfe;box-shadow:0 0 0 6px rgba(37,99,235,.16);" title="Current location"></div>`,
+                iconSize: [18, 18],
+                iconAnchor: [9, 9],
+                popupAnchor: [0, -10],
+              })}
+            >
+              <Popup>
+                <div className="text-sm font-medium text-gray-900">Current location</div>
+              </Popup>
+            </Marker>
+          ) : null}
+
           {geocoded.map(({ order, lat, lng }) => {
             const inAnyRoute = routes.some((rt) => rt.orderIds.includes(order.id));
             const { addable, removable } = routePickerLists(routes, order.id);
             return (
-              <Marker key={order.id} position={[lat, lng]} opacity={inAnyRoute ? 1 : 0.88}>
+              <Marker
+                key={order.id}
+                ref={(instance) => {
+                  if (instance) markerRefs.current[order.id] = instance;
+                  else delete markerRefs.current[order.id];
+                }}
+                position={[lat, lng]}
+                opacity={inAnyRoute ? 1 : 0.88}
+              >
                 <Popup minWidth={280} closeButton={false} className="order-map-popup-panel">
-                  <div className="max-h-[min(75vh,640px)] overflow-y-auto overflow-x-hidden p-0 m-0">
-                    <OrderCard
-                      order={order as any}
-                      {...mapOrderCardProps}
-                      isSelected={selectedOrderIds.includes(order.id)}
-                      mapRoutePicker={{
-                        addable,
-                        removable,
-                        onAddToRoute: (routeId) => addOrderToRoute(routeId, order.id),
-                        onRemoveFromRoute: (routeId) => removeStop(routeId, order.id),
-                      }}
+                  <div className="overflow-visible p-0 m-0">
+                    <MapOrderCard
+                      order={order as OrderForMapSummary}
+                      onUpdateStatus={mapOrderCardProps.onUpdateStatus}
+                      onDeleteOrder={mapOrderCardProps.onDeleteOrder}
+                      onUpdateNote={mapOrderCardProps.onUpdateNote}
+                      onTogglePriority={mapOrderCardProps.onTogglePriority}
+                      onUpdateTags={mapOrderCardProps.onUpdateTags}
+                      mapRoutePicker={
+                        readOnly
+                          ? undefined
+                          : {
+                              addable,
+                              removable,
+                              onAddToRoute: (routeId) => addOrderToRoute(routeId, order.id),
+                              onRemoveFromRoute: (routeId) => removeStop(routeId, order.id),
+                            }
+                      }
+                      readOnly={readOnly}
+                      onCourierMarkDelivered={mapOrderCardProps.onUpdateTags ? async (orderId) => {
+                        const currentOrder = byId.get(orderId);
+                        if (!currentOrder) {
+                          toast.error('Order not found');
+                          return;
+                        }
+                        const currentTags = normalizeOrderTagsArray(currentOrder.tags);
+                        if (currentTags.some((tag) => tag.trim().toLowerCase() === 'mark')) {
+                          toast.success('Order already marked');
+                          return;
+                        }
+                        mapOrderCardProps.onUpdateTags?.(orderId, [...currentTags, 'mark']);
+                        toast.success('Order marked as delivered');
+                      } : undefined}
                     />
                   </div>
                 </Popup>
@@ -598,7 +872,7 @@ export function OrdersMapPanel({
             );
           })}
 
-          {routes.map((r) => {
+          {routes.map((r, routeIndex) => {
             const pts: [number, number][] = [[ROUTE_DEPOT.lat, ROUTE_DEPOT.lng]];
             for (const oid of r.orderIds) {
               const o = byId.get(oid);
@@ -611,7 +885,7 @@ export function OrdersMapPanel({
                 key={`line-${r.id}`}
                 positions={pts}
                 pathOptions={{
-                  color: ROUTE_LINE_COLORS[routeColorIndex(r.id)],
+                  color: routeColor(r.id, routeIndex),
                   weight: 4,
                   opacity: 0.88,
                 }}
@@ -620,6 +894,57 @@ export function OrdersMapPanel({
           })}
         </MapContainer>
       </div>
+
+      <Dialog open={!readOnly && !!scooterCostDialogRoute} onClose={() => !bulkPaying && setScooterCostDialogRouteId(null)} className="relative z-50">
+        <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <Dialog.Panel className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-4 shadow-xl">
+            <Dialog.Title className="text-base font-semibold text-gray-900">
+              Bulk scooter payment
+            </Dialog.Title>
+            <p className="mt-1 text-sm text-gray-600">
+              {scooterCostDialogRoute
+                ? `Route: ${scooterCostDialogRoute.name} (${scooterCostDialogRoute.orderIds.length} orders)`
+                : ''}
+            </p>
+            <label className="mt-3 block text-sm font-medium text-gray-700">
+              Total paid to scooter
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={scooterCostInput}
+              onChange={(e) => setScooterCostInput(e.target.value)}
+              placeholder="e.g. 280"
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              disabled={bulkPaying}
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setScooterCostDialogRouteId(null)}
+                disabled={bulkPaying}
+                className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (scooterCostDialogRoute) {
+                    void applyBulkScooterPaid(scooterCostDialogRoute, scooterCostInput);
+                  }
+                }}
+                disabled={bulkPaying}
+                className="rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+              >
+                {bulkPaying ? 'Applying...' : 'Apply'}
+              </button>
+            </div>
+          </Dialog.Panel>
+        </div>
+      </Dialog>
     </div>
   );
 }

@@ -13,7 +13,7 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = () => {
-  const { logout } = useAuth();
+  const { logout, role } = useAuth();
   const location = useLocation();
   
   // Check for unread WhatsApp messages
@@ -37,7 +37,15 @@ export const Header: React.FC<HeaderProps> = () => {
     window.location.href = '/shopify-dashboard/';
   };
 
-  const navigation = [
+  const navigation = role === 'courier'
+    ? [
+        {
+          name: 'Courier Map',
+          href: '/courier-map',
+          icon: ShoppingBagIcon,
+        },
+      ]
+    : [
     { 
       name: 'Orders', 
       href: '/orders',
@@ -63,7 +71,9 @@ export const Header: React.FC<HeaderProps> = () => {
         <div className="container mx-auto px-4">
           <div className="flex justify-between items-center h-14">
             <div className="flex items-center gap-2">
-              <h1 className="text-lg font-semibold text-gray-900">OCD Crochet</h1>
+              <h1 className="text-lg font-semibold text-gray-900">
+                OCD Crochet {role === 'courier' ? 'Courier' : ''}
+              </h1>
             </div>
             
             <nav className="flex items-center gap-1">

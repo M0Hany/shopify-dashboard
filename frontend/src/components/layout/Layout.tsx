@@ -11,7 +11,7 @@ interface LayoutProps {
 }
 
 export const Layout: React.FC<LayoutProps> = ({ children, hideHeader }) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, role } = useAuth();
   const location = useLocation();
 
   useEffect(() => {
@@ -20,11 +20,18 @@ export const Layout: React.FC<LayoutProps> = ({ children, hideHeader }) => {
   }, []);
 
   if (!isAuthenticated) {
-    // If user is not logged in and trying to access a restricted route
     if (location.pathname !== '/') {
       return <Navigate to="/" replace />;
     }
     return <LoginForm />;
+  }
+
+  if (role === 'courier' && location.pathname !== '/courier-map') {
+    return <Navigate to="/courier-map" replace />;
+  }
+
+  if (role === 'admin' && location.pathname === '/') {
+    return <Navigate to="/orders" replace />;
   }
 
   return (

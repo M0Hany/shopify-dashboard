@@ -11,9 +11,11 @@ import {
   ChatBubbleLeftRightIcon as ChatBubbleLeftRightIconSolid 
 } from '@heroicons/react/24/solid';
 import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '../../contexts/AuthContext';
 
 const BottomNavigation: React.FC = () => {
   const location = useLocation();
+  const { role } = useAuth();
   
   // Check for unread WhatsApp messages
   const { data: unreadCount = 0 } = useQuery({
@@ -31,7 +33,16 @@ const BottomNavigation: React.FC = () => {
     refetchInterval: 30000, // Refetch every 30 seconds
   });
 
-  const navigation = [
+  const navigation = role === 'courier'
+    ? [
+        {
+          name: 'Courier',
+          href: '/courier-map',
+          icon: ShoppingBagIcon,
+          iconSolid: ShoppingBagIconSolid,
+        },
+      ]
+    : [
     { 
       name: 'Orders', 
       href: '/orders',
