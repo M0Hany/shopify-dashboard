@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
 import { OrdersMapPanel } from '../components/OrdersMapPanel';
-import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, CheckIcon, ArrowPathIcon, ArrowUpCircleIcon, Squares2X2Icon, MapPinIcon, CalendarDaysIcon, TruckIcon, BoltIcon, ClockIcon, SparklesIcon, PauseCircleIcon, HandThumbUpIcon, PaperAirplaneIcon, CheckBadgeIcon, BanknotesIcon, XCircleIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, CheckIcon, ArrowPathIcon, ArrowUpCircleIcon, Squares2X2Icon, MapPinIcon, CalendarDaysIcon, TruckIcon, BoltIcon, ClockIcon, SparklesIcon, PauseCircleIcon, HandThumbUpIcon, PaperAirplaneIcon, CheckBadgeIcon, BanknotesIcon, XCircleIcon, DocumentArrowDownIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Dialog, Menu, Popover, Transition } from '@headlessui/react';
@@ -19,8 +19,6 @@ import {
 } from '../utils/priorityMakingRush';
 import type { OrderForMapSummary } from '../utils/orderMapSummary';
 import { COURIER_ASSIGNED_TAG, stripShippingRouteTags } from '../utils/shippingRouteTags';
-import { generateShippingSlipsPdf } from '../utils/shippingSlipsPdf';
-
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
   'Cairo': 'القاهرة',
@@ -2729,27 +2727,81 @@ const Orders = () => {
         .reduce((sum, order) => sum + parseFloat(order.total_price || '0'), 0);
     }, [orders, matchesAllFilters]);
 
-    const shippingSlipOrders = useMemo(() => {
-      if (!orders) return [];
-      if (selectedOrders.length > 0) {
-        return orders.filter((order) => selectedOrders.includes(order.id));
-      }
-      return orders.filter((order) => matchesAllFilters(order));
-    }, [orders, selectedOrders, matchesAllFilters]);
+    const selectedOrdersForExport = useMemo(() => {
+      if (!orders || selectedOrders.length === 0) return [];
+      return orders.filter((order) => selectedOrders.includes(order.id));
+    }, [orders, selectedOrders]);
 
-    const handleGenerateShippingSlipsPdf = useCallback(async () => {
-      if (shippingSlipOrders.length === 0) {
-        toast.error('No orders available for shipping slips');
+    const handleExportSelectedOrdersExcel = useCallback(() => {
+      if (selectedOrdersForExport.length === 0) {
+        toast.error('Select at least one order to export');
         return;
       }
+
       try {
+        const rows = selectedOrdersForExport.map((order) => {
+          const customerName = [order.customer?.first_name, order.customer?.last_name]
+            .map((value) => String(value || '').trim())
+            .filter(Boolean)
+            .join(' ');
+
+          const fullAddress = [
+            order.shipping_address?.address1,
+            order.shipping_address?.city,
+            order.shipping_address?.province,
+          ]
+            .map((value) => String(value || '').trim())
+            .filter(Boolean)
+            .join(', ');
+
+          const itemsOrdered = (order.line_items || [])
+            .map((item) => {
+              const title = String(item.title || '').trim();
+              const variantTitle = String(item.variant_title || '').trim();
+              const label = variantTitle ? `${title} (${variantTitle})` : title;
+              const quantity = Number(item.quantity || 0);
+              return label ? `${label} x${quantity}` : '';
+            })
+            .filter(Boolean)
+            .join(' - ');
+
+          const totalQuantity = (order.line_items || []).reduce(
+            (sum, item) => sum + Number(item.quantity || 0),
+            0
+          );
+
+          return {
+            'Order Name': order.name || '',
+            'Customer Name': customerName,
+            'Phone Number': String(order.customer?.phone || '').trim(),
+            'Adress': fullAddress,
+            'Items ordered': itemsOrdered,
+            'Quantity': totalQuantity,
+            'Total order amount': Number(order.total_price || 0),
+          };
+        });
+
+        const worksheet = XLSX.utils.json_to_sheet(rows);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Selected Orders');
+
+        worksheet['!cols'] = [
+          { wch: 18 },
+          { wch: 24 },
+          { wch: 18 },
+          { wch: 42 },
+          { wch: 60 },
+          { wch: 12 },
+          { wch: 18 },
+        ];
+
         const dateStamp = format(new Date(), 'yyyy-MM-dd');
-        await generateShippingSlipsPdf(shippingSlipOrders, `shipping-slips-${dateStamp}.pdf`);
+        XLSX.writeFile(workbook, `selected-orders-${dateStamp}.xlsx`);
       } catch (error) {
-        console.error('Failed to generate shipping slips PDF:', error);
-        toast.error('Failed to generate shipping slips PDF');
+        console.error('Failed to export selected orders Excel:', error);
+        toast.error('Failed to export selected orders Excel');
       }
-    }, [shippingSlipOrders]);
+    }, [selectedOrdersForExport]);
 
     const getBulkStatusColor = (status: string) => {
       switch (status) {
@@ -2784,14 +2836,15 @@ const Orders = () => {
           </div>
           {/* Right: Select all + Refresh — icon only */}
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            <button
-              onClick={handleGenerateShippingSlipsPdf}
-              disabled={shippingSlipOrders.length === 0}
-              className="inline-flex items-center justify-center rounded-lg px-2.5 py-1.5 bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 text-xs font-medium"
-              title={selectedOrders.length > 0 ? 'Generate PDF for selected orders' : 'Generate PDF for visible orders'}
-            >
-              Slips PDF
-            </button>
+            {selectedOrders.length > 0 && (
+              <button
+                onClick={handleExportSelectedOrdersExcel}
+                className="inline-flex items-center justify-center rounded-lg p-1.5 bg-white text-green-700 border border-green-200 hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-green-500 transition-all duration-200"
+                title="Download selected orders as Excel"
+              >
+                <DocumentArrowDownIcon className="w-5 h-5" />
+              </button>
+            )}
             <button
               onClick={handleSelectAll}
               className={`

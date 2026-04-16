@@ -18,9 +18,10 @@ COPY . .
 
 # Set environment to production
 ENV NODE_ENV=production
+ENV DOCKER_BUILD_LIGHT=true
 
 # Build the project
-RUN npm run build
+RUN npm run build:docker
 
 # Create a non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup

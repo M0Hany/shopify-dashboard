@@ -19,7 +19,7 @@ import {
   shouldHidePriorityMakingLine,
 } from '../utils/priorityMakingRush';
 import { normalizeOrderTagsArray, stripShippingRouteTags } from '../utils/shippingRouteTags';
-import { getOrderLatLng } from '../utils/orderGeolocation';
+import { getOrderLatLng, tryParseLatLngFromMapsUrl } from '../utils/orderGeolocation';
 
 interface LocationSelections {
   cityId: string | null;
@@ -284,11 +284,40 @@ const OrderCard: React.FC<OrderCardProps> = ({
   
   // Ensure all tags are trimmed before searching
   const trimmedTags = tags.map((tag: string) => tag.trim());
+  const customAttributes = Array.isArray(order.custom_attributes) ? order.custom_attributes : [];
+  const customAttrMap = customAttributes.reduce<Record<string, string>>((acc, attr) => {
+    const key = String(attr?.key || '').trim().toLowerCase();
+    if (!key) return acc;
+    acc[key] = String(attr?.value || '').trim();
+    return acc;
+  }, {});
+  const hasLocationFromCustomAttributes = (() => {
+    const lat = Number.parseFloat(customAttrMap.latitude ?? customAttrMap.lat ?? '');
+    const lng = Number.parseFloat(
+      customAttrMap.longitude ?? customAttrMap.lng ?? customAttrMap.long ?? customAttrMap.lon ?? ''
+    );
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return true;
+
+    const urlKeys = ['google maps', 'google_maps', 'googlemaps', 'map', 'maps', 'map url', 'location url'];
+    const hasParsableUrlByKey = urlKeys.some((key) => {
+      const value = customAttrMap[key];
+      return Boolean(value && tryParseLatLngFromMapsUrl(value));
+    });
+    if (hasParsableUrlByKey) return true;
+
+    return Object.values(customAttrMap).some(
+      (value) =>
+        value.includes('google.') &&
+        (value.includes('/maps') || value.includes('maps?')) &&
+        Boolean(tryParseLatLngFromMapsUrl(value))
+    );
+  })();
   const latLng = getOrderLatLng(order);
   const locationText = latLng ? `${latLng.lat},${latLng.lng}` : null;
   const googleMapsUrl = latLng ? `https://www.google.com/maps?q=${latLng.lat},${latLng.lng}` : null;
   const hasPinTag = trimmedTags.some((tag: string) => tag.toLowerCase().startsWith('pin:'));
   const hasExistingLocation = Boolean(latLng) || hasPinTag;
+  const hasLocationFromTags = Boolean(latLng) && !hasLocationFromCustomAttributes;
 
   const shippingRouteTagEntry = trimmedTags.find((t: string) => t.toLowerCase().startsWith('shipping_route:'));
   const shippingRouteDisplayName = shippingRouteTagEntry
@@ -1936,7 +1965,14 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                   }`}
                   title={orderNumberCopied ? "Copied!" : "Click to copy order number"}
                 >
-                  {order.name} • <span className={rushType === 'Rushed' ? 'text-red-600 font-medium' : rushType === 'Mix' ? 'text-orange-600 font-medium' : 'text-gray-600'}>{rushType}</span> {orderNumberCopied && <ClipboardDocumentIcon className="w-3 h-3 text-green-600 inline-block ml-1" />}
+                  {order.name} • <span className={rushType === 'Rushed' ? 'text-red-600 font-medium' : rushType === 'Mix' ? 'text-orange-600 font-medium' : 'text-gray-600'}>{rushType}</span>
+                  {hasLocationFromCustomAttributes && (
+                    <MapPinIcon className="w-3 h-3 text-blue-600 inline-block ml-1" title="Location added from cart additional details" />
+                  )}
+                  {!hasLocationFromCustomAttributes && hasLocationFromTags && (
+                    <TagIcon className="w-3 h-3 text-violet-600 inline-block ml-1" title="Location added from order tags" />
+                  )}{' '}
+                  {orderNumberCopied && <ClipboardDocumentIcon className="w-3 h-3 text-green-600 inline-block ml-1" />}
                 </span>
                 {shippingRouteDisplayName && (
                   <span
