@@ -5,8 +5,6 @@ WORKDIR /app
 # Skip Puppeteer Chrome download to save space (we use WhatsApp Business API, not whatsapp-web.js)
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
-# Reduce memory use during install (helps on small DO droplets; adjust if you have more RAM)
-ENV NODE_OPTIONS=--max-old-space-size=512
 # Show npm progress so build doesn't appear frozen
 ENV NPM_CONFIG_LOGLEVEL=info
 # Fewer parallel network requests = less memory spike
@@ -25,9 +23,6 @@ RUN npm run build
 
 # Create a non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-
-# Set correct ownership
-RUN chown -R appuser:appgroup /app
 
 # Switch to non-root user
 USER appuser

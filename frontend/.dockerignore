@@ -1,12 +1,14 @@
 node_modules
 npm-debug.log
 .git
+.vite
 .env
 .env.local
 .env.docker
 !.env.example
 !.env.production
 dist
+frontend
 *.md
 coverage
 *.log
