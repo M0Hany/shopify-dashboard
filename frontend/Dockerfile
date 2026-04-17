@@ -24,6 +24,9 @@ RUN npm run build:docker
 # Create a non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
+# Allow the runtime user to write Vite temp files in /app.
+RUN chown -R appuser:appgroup /app
+
 # Switch to non-root user
 USER appuser
 
@@ -31,4 +34,4 @@ USER appuser
 EXPOSE 5173
 
 # Start the preview server
-CMD ["npm", "run", "preview", "--", "--host", "--port", "5173"] 
+CMD ["npm", "run", "preview"]
