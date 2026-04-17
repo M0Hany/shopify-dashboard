@@ -15,13 +15,12 @@ services:
       retries: 5
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/m0hany/shopify-dashboard-backend:latest
+    pull_policy: always
     ports:
       - "3000:3000"
     env_file:
-      - ./backend/.env
+      - ${BACKEND_ENV_FILE:-./backend/.env}
     environment:
       - NODE_ENV=production
       - REDIS_HOST=redis
@@ -40,13 +39,12 @@ services:
       start_period: 40s
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ghcr.io/m0hany/shopify-dashboard-frontend:latest
+    pull_policy: always
     ports:
       - "5173:5173"
     env_file:
-      - ./frontend/.env.production
+      - ${FRONTEND_ENV_FILE:-./frontend/.env.production}
     environment:
       - NODE_ENV=production
     depends_on:
