@@ -1,6 +1,7 @@
 # Deploy without building on droplet
 
 This setup builds Docker images on GitHub Actions and runs them on the droplet with `pull + up`.
+This file includes the current production deployment steps for this repository.
 
 ## One-time setup on droplet
 
