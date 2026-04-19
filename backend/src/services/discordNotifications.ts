@@ -27,6 +27,12 @@ interface WhatsAppNotification {
   timestamp: Date;
 }
 
+interface OrderMarkedDeliveredNotification {
+  orderId: number;
+  orderName: string;
+  customerName: string;
+}
+
 export class DiscordNotificationService {
   private webhookUrl: string | null;
   private whatsappWebhookUrl: string | null;
@@ -275,6 +281,65 @@ export class DiscordNotificationService {
         orderCount
       });
       // Don't throw - notifications shouldn't break the main flow
+    }
+  }
+
+  /**
+   * Send a notification when courier marks an order as delivered from map view.
+   */
+  async notifyOrderMarkedDelivered(notification: OrderMarkedDeliveredNotification): Promise<void> {
+    if (!this.webhookUrl) {
+      return;
+    }
+
+    const { orderId, orderName, customerName } = notification;
+
+    try {
+      const embed = {
+        title: '✅ Order Marked Delivered',
+        description: 'Order was marked as delivered by courier map view',
+        color: 0x10b981, // Emerald
+        fields: [
+          {
+            name: 'Order',
+            value: `**${orderName}**`,
+            inline: true
+          },
+          {
+            name: 'Customer',
+            value: customerName || 'N/A',
+            inline: true
+          },
+          {
+            name: 'Delivery',
+            value: '`Marked as delivered`',
+            inline: false
+          }
+        ],
+        timestamp: new Date().toISOString(),
+        footer: {
+          text: `Order ID: ${orderId}`
+        }
+      };
+
+      await axios.post(this.webhookUrl, {
+        embeds: [embed]
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      logger.info('Discord notification sent for marked delivered order', {
+        orderId,
+        orderName
+      });
+    } catch (error) {
+      logger.error('Failed to send marked delivered Discord notification', {
+        error,
+        orderId,
+        orderName
+      });
     }
   }
 

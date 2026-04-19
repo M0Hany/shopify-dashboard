@@ -80,6 +80,19 @@ function getCurrentStatusFromTags(tags: string[] | string | null | undefined): s
   return 'pending';
 }
 
+function hasDeliveredMarkTag(tags: string[] | string | null | undefined): boolean {
+  if (!tags) return false;
+  const tagArray = Array.isArray(tags)
+    ? tags
+    : typeof tags === 'string'
+      ? tags.split(',')
+      : [];
+  return tagArray.some((tag) => {
+    const normalized = String(tag || '').trim().toLowerCase();
+    return normalized === 'mark' || normalized === 'marked';
+  });
+}
+
 // Bulk update order status
 router.put('/bulk/status', async (req: Request, res: Response) => {
   try {
@@ -451,6 +464,7 @@ router.post('/bulk-add-address-tags', async (req, res) => {
 router.put('/:id/tags', async (req: Request, res: Response) => {
   try {
     const orderId = req.params.id;
+    const orderIdNum = Number(orderId);
     const newTags = req.body.tags;
 
     logger.info('Received tag update request:', {
@@ -465,12 +479,26 @@ router.put('/:id/tags', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Tags must be an array' });
     }
 
+    const orderBefore = await shopifyServiceInstance.getOrder(orderIdNum);
+    const wasMarkedBefore = hasDeliveredMarkTag(orderBefore.tags);
+    const isMarkedAfter = hasDeliveredMarkTag(newTags);
+
     await shopifyServiceInstance.updateOrderTags(orderId, newTags);
     
     logger.info('Tags update successful:', {
       orderId,
       newTags
     });
+
+    if (!wasMarkedBefore && isMarkedAfter) {
+      discordNotificationService.notifyOrderMarkedDelivered({
+        orderId: orderBefore.id,
+        orderName: orderBefore.name,
+        customerName: `${orderBefore.customer?.first_name || ''} ${orderBefore.customer?.last_name || ''}`.trim() || 'N/A'
+      }).catch((err) => {
+        logger.error('Failed to send marked-delivered Discord notification', err);
+      });
+    }
 
     res.json({ success: true });
   } catch (error) {

@@ -82,7 +82,10 @@ export default function CourierMap() {
       .filter((order) => {
         const tags = normalizeOrderTagsArray(order.tags);
         const hasCourierTag = tags.some((tag) => tag.trim().toLowerCase() === COURIER_ASSIGNED_TAG);
-        const isMarked = tags.some((tag) => tag.trim().toLowerCase() === 'mark');
+        const isMarked = tags.some((tag) => {
+          const normalized = tag.trim().toLowerCase();
+          return normalized === 'mark' || normalized === 'marked';
+        });
         return hasCourierTag && !isMarked && !!getMapShippingRouteGroupKey(order);
       })
       .sort((a, b) => a.id - b.id);

@@ -198,6 +198,11 @@ button:focus-visible {
   overflow-y: visible;
 }
 
+/* Leaflet default: .leaflet-popup-content p { margin: 1.3em 0; } — removes extra gap in order cards */
+.leaflet-popup.order-map-popup-panel .leaflet-popup-content p {
+  margin: 0;
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;

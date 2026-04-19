@@ -163,6 +163,14 @@ const depotMarkerIcon = L.divIcon({
   popupAnchor: [0, -32],
 });
 
+const markedOrderMarkerIcon = L.divIcon({
+  className: 'marked-order-marker',
+  html: `<div style="width:16px;height:16px;border-radius:50%;background:#f97316;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35);" title="Marked delivered"></div>`,
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
+  popupAnchor: [0, -10],
+});
+
 export type OrdersMapOrderCardProps = Omit<OrderCardProps, 'order' | 'mapRoutePicker' | 'isSelected'>;
 
 export interface OrdersMapPanelProps {
@@ -540,6 +548,13 @@ export function OrdersMapPanel({
     [byId]
   );
 
+  const isOrderMarkedDelivered = useCallback((order: OrderForMapSummary): boolean => {
+    return normalizeOrderTagsArray(order.tags).some((tag) => {
+      const normalized = tag.trim().toLowerCase();
+      return normalized === 'mark' || normalized === 'marked';
+    });
+  }, []);
+
   return (
     <div className="flex flex-col md:flex-row gap-3 min-h-0">
       <aside className="order-2 md:order-1 w-full md:w-[min(100%,20rem)] shrink-0 flex flex-col gap-3 md:max-h-[min(80vh,720px)] md:overflow-y-auto pr-0.5">
@@ -821,6 +836,8 @@ export function OrdersMapPanel({
           {geocoded.map(({ order, lat, lng }) => {
             const inAnyRoute = routes.some((rt) => rt.orderIds.includes(order.id));
             const { addable, removable } = routePickerLists(routes, order.id);
+            const isMarkedDelivered = isOrderMarkedDelivered(order);
+            const markerIcon = isMarkedDelivered ? markedOrderMarkerIcon : DefaultIcon;
             return (
               <Marker
                 key={order.id}
@@ -830,6 +847,7 @@ export function OrdersMapPanel({
                 }}
                 position={[lat, lng]}
                 opacity={inAnyRoute ? 1 : 0.88}
+                icon={markerIcon}
               >
                 <Popup minWidth={280} closeButton={false} className="order-map-popup-panel">
                   <div className="overflow-visible p-0 m-0">
@@ -858,11 +876,14 @@ export function OrdersMapPanel({
                           return;
                         }
                         const currentTags = normalizeOrderTagsArray(currentOrder.tags);
-                        if (currentTags.some((tag) => tag.trim().toLowerCase() === 'mark')) {
+                        if (currentTags.some((tag) => {
+                          const normalized = tag.trim().toLowerCase();
+                          return normalized === 'mark' || normalized === 'marked';
+                        })) {
                           toast.success('Order already marked');
                           return;
                         }
-                        mapOrderCardProps.onUpdateTags?.(orderId, [...currentTags, 'mark']);
+                        mapOrderCardProps.onUpdateTags?.(orderId, [...currentTags, 'marked']);
                         toast.success('Order marked as delivered');
                       } : undefined}
                     />

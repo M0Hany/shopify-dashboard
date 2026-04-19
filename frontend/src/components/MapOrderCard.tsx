@@ -560,6 +560,16 @@ export default function MapOrderCard({
           </div>
         ) : null}
 
+        {/* Courier / read-only map: show order note like OrderCard (no edit) */}
+        {readOnly && !isOrderCancelled && order.note?.trim() ? (
+          <div className="mb-2 rounded-md bg-amber-50 p-2">
+            <div className="flex gap-2">
+              <DocumentTextIcon className="h-5 w-5 shrink-0 text-amber-600" aria-hidden />
+              <p className="min-w-0 break-words text-sm font-medium text-amber-700">{order.note}</p>
+            </div>
+          </div>
+        ) : null}
+
         <div className="mb-2 grid grid-cols-4 gap-1.5">
           <div className="relative">
             <button
