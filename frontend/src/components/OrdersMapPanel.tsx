@@ -486,7 +486,11 @@ export function OrdersMapPanel({
           const currentTags = normalizeOrderTagsArray(order.tags);
           const cleaned = currentTags.filter((tag) => {
             const low = tag.trim().toLowerCase();
-            return !low.startsWith('scooter_shipping_cost:') && !low.startsWith('paid_date:');
+            return (
+              !low.startsWith('scooter_shipping_cost:') &&
+              !low.startsWith('paid_date:') &&
+              low !== COURIER_ASSIGNED_TAG
+            );
           });
 
           const nextTags = [...cleaned, `scooter_shipping_cost:${perOrderCost}`, `paid_date:${paidDate}`];

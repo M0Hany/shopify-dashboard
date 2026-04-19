@@ -1832,7 +1832,7 @@ const Orders = () => {
       const stripped = stripShippingRouteTags(current);
       let next: string[];
       if (routeName == null) {
-        next = stripped;
+        next = stripped.filter((tag) => tag.trim().toLowerCase() !== COURIER_ASSIGNED_TAG);
       } else {
         const name = sanitizeShippingRouteName(routeName);
         if (!name) throw new Error('map_route_invalid_name');

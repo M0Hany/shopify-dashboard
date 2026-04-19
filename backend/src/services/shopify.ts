@@ -170,6 +170,10 @@ export class ShopifyService {
     created_at_min?: string;
     created_at_max?: string;
     excluded_tags?: string;
+    /** When set, used as the full Shopify Admin `orders(query:)` string (dates still appended below). */
+    ordersQuery?: string;
+    /** Max line items per order in GraphQL (default 250). Use a small value for lightweight views. */
+    lineItemsFirst?: number;
   }): Promise<ShopifyOrder[]> {
     try {
       const allOrders: ShopifyOrder[] = [];
@@ -181,32 +185,39 @@ export class ShopifyService {
 
       logger.info(`[getOrders GraphQL] Starting to fetch orders. Has limit: ${!!params.limit}, limit value: ${params.limit}`);
 
-      // Build query string for filtering
-      let queryString = 'status:any';
-      if (params.status && params.status !== 'any') {
-        const statusToTag: Record<string, string> = {
-          'pending': 'customer_confirmed',
-          'confirmed': 'customer_confirmed',
-          'ready-to-ship': 'ready_to_ship',
-          'shipped': 'shipped',
-          'fulfilled': 'fulfilled',
-          'cancelled': 'cancelled',
-          'paid': 'paid'
-        };
-        const tag = statusToTag[params.status.trim()];
-        if (tag) {
-          queryString = `tag:${tag}`;
-        }
-      }
+      const lineItemsFirst = Math.min(250, Math.max(1, params.lineItemsFirst ?? 250));
 
-      if (params.excluded_tags) {
-        const excludedTagsList = params.excluded_tags
-          .split(',')
-          .map(tag => tag.trim())
-          .filter(tag => tag);
-        if (excludedTagsList.length > 0) {
-          const tagFilter = excludedTagsList.map(tag => `NOT tag:${tag}`).join(' AND ');
-          queryString = queryString !== 'status:any' ? `${queryString} AND ${tagFilter}` : tagFilter;
+      // Build query string for filtering
+      let queryString: string;
+      if (params.ordersQuery?.trim()) {
+        queryString = params.ordersQuery.trim();
+      } else {
+        queryString = 'status:any';
+        if (params.status && params.status !== 'any') {
+          const statusToTag: Record<string, string> = {
+            'pending': 'customer_confirmed',
+            'confirmed': 'customer_confirmed',
+            'ready-to-ship': 'ready_to_ship',
+            'shipped': 'shipped',
+            'fulfilled': 'fulfilled',
+            'cancelled': 'cancelled',
+            'paid': 'paid'
+          };
+          const tag = statusToTag[params.status.trim()];
+          if (tag) {
+            queryString = `tag:${tag}`;
+          }
+        }
+
+        if (params.excluded_tags) {
+          const excludedTagsList = params.excluded_tags
+            .split(',')
+            .map(tag => tag.trim())
+            .filter(tag => tag);
+          if (excludedTagsList.length > 0) {
+            const tagFilter = excludedTagsList.map(tag => `NOT tag:${tag}`).join(' AND ');
+            queryString = queryString !== 'status:any' ? `${queryString} AND ${tagFilter}` : tagFilter;
+          }
         }
       }
 
@@ -282,7 +293,7 @@ export class ShopifyService {
                     }
                   }
                   paymentGatewayNames
-                  lineItems(first: 250) {
+                  lineItems(first: ${lineItemsFirst}) {
                     edges {
                       node {
                         title

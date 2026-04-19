@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import multer from 'multer';
 import xlsx from 'xlsx';
-import { ShopifyService } from '../services/shopify';
+import { ShopifyOrder, ShopifyService } from '../services/shopify';
 import { logger } from '../utils/logger';
 // REMOVED: Mylerz-specific location tags import (no longer used)
 // import { addLocationTags } from '../services/shopify';
@@ -17,6 +17,14 @@ const orderConfirmationService = OrderConfirmationService.getInstance();
 
 // Configure multer for file upload
 const upload = multer({ storage: multer.memoryStorage() });
+
+/** Courier map: small result set; cache on single droplet to cut Shopify load. */
+const COURIER_MAP_CACHE_TTL_MS = 90_000;
+let courierMapCache: { orders: ShopifyOrder[]; expiresAt: number } | null = null;
+
+function invalidateCourierMapCache(): void {
+  courierMapCache = null;
+}
 
 // Get all orders with optional filters
 router.get('/', async (req: Request, res: Response) => {
@@ -44,6 +52,37 @@ router.get('/', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Error fetching orders:', error);
     res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
+// Courier map: only orders tagged for courier, excluding delivered marks; slim payload + short cache
+router.get('/courier-map', async (req: Request, res: Response) => {
+  try {
+    if (req.query.refresh === '1') {
+      invalidateCourierMapCache();
+    }
+
+    const now = Date.now();
+    if (courierMapCache && courierMapCache.expiresAt > now) {
+      res.set({ 'Cache-Control': 'private, max-age=45' });
+      res.json(courierMapCache.orders);
+      return;
+    }
+
+    logger.info('[GET /api/orders/courier-map] Fetching from Shopify');
+    const orders = await shopifyServiceInstance.getOrders({
+      ordersQuery: 'tag:courier_assigned NOT tag:marked NOT tag:mark',
+      limit: 55,
+      lineItemsFirst: 25,
+    });
+    courierMapCache = { orders, expiresAt: now + COURIER_MAP_CACHE_TTL_MS };
+    logger.info(`[GET /api/orders/courier-map] Returning ${orders.length} orders (cached ${COURIER_MAP_CACHE_TTL_MS}ms)`);
+
+    res.set({ 'Cache-Control': 'private, max-age=60' });
+    res.json(orders);
+  } catch (error) {
+    logger.error('Error fetching courier map orders:', error);
+    res.status(500).json({ error: 'Failed to fetch courier map orders' });
   }
 });
 
@@ -484,7 +523,8 @@ router.put('/:id/tags', async (req: Request, res: Response) => {
     const isMarkedAfter = hasDeliveredMarkTag(newTags);
 
     await shopifyServiceInstance.updateOrderTags(orderId, newTags);
-    
+    invalidateCourierMapCache();
+
     logger.info('Tags update successful:', {
       orderId,
       newTags

@@ -6,24 +6,22 @@ import { COURIER_ASSIGNED_TAG, getMapShippingRouteGroupKey, normalizeOrderTagsAr
 
 type CourierOrder = OrderForMapSummary;
 
+const courierMapQueryKey = ['orders', 'courier-map'] as const;
+
 export default function CourierMap() {
   const queryClient = useQueryClient();
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
 
   const { data: orders = [], isLoading, error } = useQuery<CourierOrder[]>({
-    queryKey: ['orders'],
+    queryKey: courierMapQueryKey,
     queryFn: async (): Promise<CourierOrder[]> => {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`, {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' },
-      });
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/courier-map`);
       if (!response.ok) {
         throw new Error('Failed to fetch orders');
       }
       return response.json();
     },
-    staleTime: 0,
-    refetchOnMount: 'always',
+    staleTime: 60_000,
     gcTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
@@ -64,16 +62,19 @@ export default function CourierMap() {
       return response.json();
     },
     onMutate: async ({ orderId, newTags }) => {
-      await queryClient.cancelQueries({ queryKey: ['orders'] });
-      const previous = queryClient.getQueryData<CourierOrder[]>(['orders']);
-      queryClient.setQueryData<CourierOrder[] | undefined>(['orders'], (current) => {
+      await queryClient.cancelQueries({ queryKey: courierMapQueryKey });
+      const previous = queryClient.getQueryData<CourierOrder[]>(courierMapQueryKey);
+      queryClient.setQueryData<CourierOrder[] | undefined>(courierMapQueryKey, (current) => {
         if (!current) return current;
         return current.map((order) => (order.id === orderId ? { ...order, tags: newTags } : order));
       });
       return { previous };
     },
     onError: (_err, _vars, context) => {
-      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+      if (context?.previous) queryClient.setQueryData(courierMapQueryKey, context.previous);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: courierMapQueryKey });
     },
   });
 
