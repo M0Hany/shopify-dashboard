@@ -1959,6 +1959,9 @@ const Orders = () => {
     ordersToProcess.forEach(order => {
       order.line_items?.forEach(item => {
         if (isPriorityMakingLineItem(item as { product_id?: unknown; title?: string })) return;
+        const title = (item.title || '').toLowerCase();
+        const variantTitle = (item.variant_title || '').toLowerCase();
+        if (!title.includes('plushie') && !variantTitle.includes('plushie')) return;
         const itemKey = item.variant_title ? `${item.title} - ${item.variant_title}` : item.title;
         itemCounts[itemKey] = (itemCounts[itemKey] || 0) + item.quantity;
       });
@@ -3336,14 +3339,12 @@ const Orders = () => {
         </div>
       ) : (
         <div className="p-2 sm:p-8 max-w-[1600px] mx-auto w-full space-y-3">
-          <div className="max-w-7xl mx-auto w-full">
-            <QuickFilterCard />
-          </div>
           <OrdersMapPanel
             orders={sortedOrders as unknown as OrderForMapSummary[]}
             onReplaceShippingRouteForOrder={handleReplaceShippingRouteForOrder}
             selectedOrderIds={selectedOrders}
             onToggleCourierAssignmentRoute={handleToggleCourierAssignmentRoute}
+            leftColumnTopContent={<QuickFilterCard />}
             mapOrderCardProps={{
               onSelect: handleOrderSelect,
               onUpdateNote: handleUpdateNote,

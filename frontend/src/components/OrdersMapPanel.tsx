@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -183,6 +183,7 @@ export interface OrdersMapPanelProps {
   readOnly?: boolean;
   currentLocation?: { lat: number; lng: number } | null;
   onToggleCourierAssignmentRoute?: (route: { id: string; name: string; orderIds: number[] }, assign: boolean) => void | Promise<void>;
+  leftColumnTopContent?: ReactNode;
 }
 
 export function OrdersMapPanel({
@@ -193,6 +194,7 @@ export function OrdersMapPanel({
   readOnly = false,
   currentLocation = null,
   onToggleCourierAssignmentRoute,
+  leftColumnTopContent,
 }: OrdersMapPanelProps) {
   const [localRoutes, setLocalRoutes] = useState<DraftRoute[]>([]);
   /** Stop order overrides for routes rebuilt from Shopify tags (cleared when tag set changes). */
@@ -562,6 +564,8 @@ export function OrdersMapPanel({
   return (
     <div className="flex flex-col md:flex-row gap-3 min-h-0">
       <aside className="order-2 md:order-1 w-full md:w-[min(100%,20rem)] shrink-0 flex flex-col gap-3 md:max-h-[min(80vh,720px)] md:overflow-y-auto pr-0.5">
+        {leftColumnTopContent ? leftColumnTopContent : null}
+
         {!readOnly ? (
           <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
             <div className="flex gap-2">

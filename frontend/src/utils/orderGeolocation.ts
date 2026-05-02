@@ -21,7 +21,7 @@ export type OrderWithLocationAttrs = {
  *
  * **Maps URL in a tag:** any tag whose text is a Google Maps link with `?q=lat,lng` or `@lat,lng`
  *
- * Checkout custom attributes (Latitude / Longitude / Google Maps) still take priority over tags.
+ * Tag location values (pin/geo/delivery_lat+delivery_lng/maps tag) take priority over checkout custom attributes.
  */
 export const TAG_LOCATION_FORMAT = 'pin:30.119117;31.352819  or  delivery_lat:30.119117 + delivery_lng:31.352819';
 
@@ -147,10 +147,14 @@ function tryLatLngFromTags(tags: string[] | string | null | undefined): { lat: n
 }
 
 /**
- * Reads Latitude / Longitude attributes (case-insensitive) or a Google Maps URL attribute.
- * If missing, reads location from order tags: `pin:lat,lng`, `geo:lat,lng`, `delivery_lat:` / `delivery_lng:`, or a maps URL in a tag.
+ * Resolves order location with this precedence:
+ * 1) Tags (`pin:lat,lng`, `geo:lat,lng`, `delivery_lat:`/`delivery_lng:`, or a maps URL in a tag)
+ * 2) Checkout custom attributes (`latitude`/`longitude`, or a maps URL attribute)
  */
 export function getOrderLatLng(order: OrderWithLocationAttrs): { lat: number; lng: number } | null {
+  const fromTags = tryLatLngFromTags(order.tags);
+  if (fromTags) return fromTags;
+
   const m = normalizeAttrMap(order.custom_attributes);
   let lat = parseNumberLoose(m['latitude'] ?? m['lat'] ?? '');
   let lng = parseNumberLoose(m['longitude'] ?? m['lng'] ?? m['long'] ?? m['lon'] ?? '');
@@ -181,11 +185,6 @@ export function getOrderLatLng(order: OrderWithLocationAttrs): { lat: number; ln
         }
       }
     }
-  }
-
-  if (lat === null || lng === null) {
-    const fromTags = tryLatLngFromTags(order.tags);
-    if (fromTags) return fromTags;
   }
 
   if (lat === null || lng === null) return null;
