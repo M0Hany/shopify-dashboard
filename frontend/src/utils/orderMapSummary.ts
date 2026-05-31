@@ -3,6 +3,8 @@ import {
   analyzePriorityMakingLineItems,
   mergeRushTypeWithPriorityMaking,
 } from './priorityMakingRush';
+import { getPaidOrderPriceLabel } from './orderPayment';
+import { getShippingMethodFromTags } from './shippingMethod';
 import { SHIPPING_ROUTE_TAG_PREFIX, normalizeOrderTagsArray } from './shippingRouteTags';
 
 /** Fields required to build the map marker summary (matches Orders `Order` subset). */
@@ -178,15 +180,7 @@ function workflowStatus(order: OrderForMapSummary): { label: string; chipClass: 
 }
 
 function shippingMethodFromTags(order: OrderForMapSummary): string {
-  const tags = normalizeOrderTagsArray(order.tags);
-  const shippingMethodTag = tags.find((tag: string) => tag.trim().toLowerCase().startsWith('shipping_method:'));
-  if (shippingMethodTag) {
-    const method = shippingMethodTag.split(':')[1]?.trim().toLowerCase();
-    if (method === 'scooter') return 'Scooter';
-    if (method === 'pickup') return 'Pickup';
-    if (method === 'other-company' || method === 'other_company') return 'Other company';
-  }
-  return 'Shipblu';
+  return getShippingMethodFromTags(normalizeOrderTagsArray(order.tags));
 }
 
 function shippingRouteNameFromTags(order: OrderForMapSummary): string | null {
@@ -280,7 +274,10 @@ export type OrderMapSummary = {
   extraItemCount: number;
 };
 
-export function buildOrderMapSummary(order: OrderForMapSummary): OrderMapSummary {
+export function buildOrderMapSummary(
+  order: OrderForMapSummary,
+  options?: { showPaidPriceLabel?: boolean }
+): OrderMapSummary {
   const customerLine = [order.customer?.first_name, order.customer?.last_name].filter(Boolean).join(' ').trim() || '—';
   const phone = (order.customer?.phone || '').trim();
   const addr = order.shipping_address;
@@ -302,12 +299,16 @@ export function buildOrderMapSummary(order: OrderForMapSummary): OrderMapSummary
   const wf = workflowStatus(order);
   const fulfillmentLine = fulfillmentDisplayLine(order);
 
+  const paidLabel = options?.showPaidPriceLabel
+    ? getPaidOrderPriceLabel(order.tags, order.financial_status)
+    : null;
+
   return {
     orderName: order.name || `#${order.id}`,
     customerLine,
     phone,
     addressLine,
-    totalFormatted: formatMoneyEgp(order.total_price),
+    totalFormatted: paidLabel ?? formatMoneyEgp(order.total_price),
     financialLine: formatFinancialStatus(order.financial_status || ''),
     workflow: wf,
     daysLine: daysLeftLabel(days),

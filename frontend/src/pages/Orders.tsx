@@ -4,7 +4,8 @@ import * as XLSX from 'xlsx';
 import OrderTimeline from '../components/OrderTimeline';
 import OrderCard from '../components/OrderCard';
 import { OrdersMapPanel } from '../components/OrdersMapPanel';
-import { MagnifyingGlassIcon, ViewColumnsIcon, ArrowUpIcon, ChevronDownIcon, XMarkIcon, CheckIcon, ArrowPathIcon, ArrowUpCircleIcon, Squares2X2Icon, MapPinIcon, CalendarDaysIcon, TruckIcon, BoltIcon, ClockIcon, SparklesIcon, PauseCircleIcon, HandThumbUpIcon, PaperAirplaneIcon, CheckBadgeIcon, BanknotesIcon, XCircleIcon, DocumentArrowDownIcon } from '@heroicons/react/24/outline';
+import OrdersSearchBar from '../components/OrdersSearchBar';
+import { ViewColumnsIcon, ArrowUpIcon, ChevronDownIcon, CheckIcon, ArrowPathIcon, ArrowUpCircleIcon, Squares2X2Icon, MapPinIcon, CalendarDaysIcon, TruckIcon, BoltIcon, ClockIcon, SparklesIcon, PauseCircleIcon, HandThumbUpIcon, PaperAirplaneIcon, CheckBadgeIcon, BanknotesIcon, XCircleIcon, DocumentArrowDownIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Dialog, Menu, Popover, Transition } from '@headlessui/react';
@@ -18,7 +19,16 @@ import {
   mergeRushTypeWithPriorityMaking,
 } from '../utils/priorityMakingRush';
 import type { OrderForMapSummary } from '../utils/orderMapSummary';
+import { getOrderTotalAmountForExport } from '../utils/orderPayment';
+import {
+  ordersApiUrl,
+  resolveOrdersFetchScope,
+  type OrdersFetchScope,
+} from '../utils/ordersFetchScope';
+import { getShippingMethodFromTags, SHIPPING_METHOD_ORDER } from '../utils/shippingMethod';
 import { COURIER_ASSIGNED_TAG, stripShippingRouteTags } from '../utils/shippingRouteTags';
+import BulkShippingCostImportDialog from '../components/finance/BulkShippingCostImportDialog';
+import { financialService } from '../services/financialService';
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
   'Cairo': 'القاهرة',
@@ -370,10 +380,12 @@ const findOldestShippedOrderDate = (orders: Order[]): Date => {
 
 const Orders = () => {
   const [selectedOrders, setSelectedOrders] = useState<number[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [searchSeed, setSearchSeed] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('pending');
   const [previousStatusFilter, setPreviousStatusFilter] = useState('pending');
+  /** All tab only: when true, fetches every order including fulfilled/cancelled/deleted. */
+  const [loadAllOrders, setLoadAllOrders] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
@@ -399,6 +411,7 @@ const Orders = () => {
   const [selectedCancelledMonths, setSelectedCancelledMonths] = useState<Set<string>>(new Set());
   const [selectedCancelledReasons, setSelectedCancelledReasons] = useState<Set<string>>(new Set());
   const [isQuickFilterExpanded, setIsQuickFilterExpanded] = useState(false);
+  const [isBulkShippingImportOpen, setIsBulkShippingImportOpen] = useState(false);
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
@@ -445,38 +458,48 @@ const Orders = () => {
   useEffect(() => {
     const searchParam = searchParams.get('search');
     if (searchParam) {
-      setSearchQuery(searchParam);
-      // Clear the URL param after reading it
+      setSearchSeed(searchParam);
+      setDebouncedSearchQuery(searchParam);
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams]);
 
-  // Debounce search query to reduce unnecessary filtering
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearchQuery(searchQuery);
-    }, 500); // 500ms delay to improve typing performance
+  const handleDebouncedSearchChange = useCallback((query: string) => {
+    setDebouncedSearchQuery(query);
+  }, []);
 
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  // Handle search query changes
+  // Switch to All tab only after debounced search (not on every keystroke)
   useEffect(() => {
-    if (searchQuery.trim()) {
-      // When searching, save current filter and switch to all orders
+    if (debouncedSearchQuery.trim()) {
       if (statusFilter !== 'all') {
         setPreviousStatusFilter(statusFilter);
         setStatusFilter('all');
         setIsSearchOverridingFilter(true);
       }
     } else {
-      // When search is cleared, restore previous filter
       if (isSearchOverridingFilter && previousStatusFilter !== 'all') {
         setStatusFilter(previousStatusFilter);
       }
       setIsSearchOverridingFilter(false);
     }
-  }, [searchQuery, statusFilter, previousStatusFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to debounced search, not tab changes mid-typing
+  }, [debouncedSearchQuery]);
+
+  const ordersFetchScope = useMemo(
+    (): OrdersFetchScope => resolveOrdersFetchScope(statusFilter, loadAllOrders),
+    [statusFilter, loadAllOrders]
+  );
+
+  const ordersQueryKey = useMemo(
+    () => ['orders', ordersFetchScope] as const,
+    [ordersFetchScope]
+  );
+
+  useEffect(() => {
+    if (statusFilter !== 'all') {
+      setLoadAllOrders(false);
+    }
+  }, [statusFilter]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -484,26 +507,23 @@ const Orders = () => {
     }
   }, [isAuthenticated, navigate]);
 
-  const { data: orders, isLoading: ordersLoading, error, refetch } = useQuery<Order[]>({
-    queryKey: ['orders'],
+  const { data: orders, isLoading: ordersLoading, error, refetch, isFetching: ordersFetching } = useQuery<Order[]>({
+    queryKey: ordersQueryKey,
     queryFn: async (): Promise<Order[]> => {
-      // Fetch orders
-      const ordersResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`, {
+      const ordersResponse = await fetch(ordersApiUrl(ordersFetchScope), {
         cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' }
+        headers: { 'Cache-Control': 'no-cache' },
       });
       if (!ordersResponse.ok) {
         throw new Error('Failed to fetch orders');
       }
-      const ordersData = await ordersResponse.json();
-      return ordersData;
+      return ordersResponse.json();
     },
-    // Specific caching options for orders
-    staleTime: 0,
+    staleTime: ordersFetchScope === 'active' ? 60_000 : 0,
     refetchOnMount: 'always',
-    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
-    refetchOnWindowFocus: false, // Don't refetch when window regains focus
-    refetchOnReconnect: true, // Only refetch when reconnecting to network
+    gcTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
   });
 
   // Debounced background refresh to reconcile local state with server
@@ -518,11 +538,11 @@ const Orders = () => {
 
   // Helper to update a specific order optimistically in the cache
   const updateOrderInCache = useCallback((orderId: number, mutate: (o: Order) => Order) => {
-    queryClient.setQueryData<Order[] | undefined>(['orders'], (current) => {
+    queryClient.setQueryData<Order[] | undefined>(ordersQueryKey, (current) => {
       if (!current) return current;
       return current.map((o) => (o.id === orderId ? mutate(o) : o));
     });
-  }, [queryClient]);
+  }, [queryClient, ordersQueryKey]);
 
   // Manual refresh function
   const handleManualRefresh = useCallback(async () => {
@@ -575,12 +595,12 @@ const Orders = () => {
     },
     onMutate: async ({ orderId, dueDate }) => {
       await queryClient.cancelQueries({ queryKey: ['orders'] });
-      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      const previous = queryClient.getQueryData<Order[]>(ordersQueryKey);
       updateOrderInCache(orderId, (o) => ({ ...o, custom_due_date: dueDate }));
       return { previous };
     },
     onError: (_err, _vars, context) => {
-      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+      if (context?.previous) queryClient.setQueryData(ordersQueryKey, context.previous);
     },
     // Intentionally no background refresh to avoid fetching after each single update
   });
@@ -602,12 +622,12 @@ const Orders = () => {
     },
     onMutate: async ({ orderId, startDate }) => {
       await queryClient.cancelQueries({ queryKey: ['orders'] });
-      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      const previous = queryClient.getQueryData<Order[]>(ordersQueryKey);
       updateOrderInCache(orderId, (o) => ({ ...o, custom_start_date: startDate }));
       return { previous };
     },
     onError: (_err, _vars, context) => {
-      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+      if (context?.previous) queryClient.setQueryData(ordersQueryKey, context.previous);
     },
     // Intentionally no background refresh to avoid fetching after each single update
   });
@@ -628,12 +648,12 @@ const Orders = () => {
     },
     onMutate: async ({ orderId, note }) => {
       await queryClient.cancelQueries({ queryKey: ['orders'] });
-      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      const previous = queryClient.getQueryData<Order[]>(ordersQueryKey);
       updateOrderInCache(orderId, (o) => ({ ...o, note }));
       return { previous };
     },
     onError: (_err, _vars, context) => {
-      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+      if (context?.previous) queryClient.setQueryData(ordersQueryKey, context.previous);
     },
     // Intentionally no background refresh to avoid fetching after each single update
   });
@@ -654,7 +674,7 @@ const Orders = () => {
     },
     onMutate: async ({ orderId, isPriority }) => {
       await queryClient.cancelQueries({ queryKey: ['orders'] });
-      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      const previous = queryClient.getQueryData<Order[]>(ordersQueryKey);
       updateOrderInCache(orderId, (o) => {
         const currentTags = Array.isArray(o.tags)
           ? o.tags.map((t) => t.trim())
@@ -669,7 +689,7 @@ const Orders = () => {
       return { previous };
     },
     onError: (_err, _vars, context) => {
-      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+      if (context?.previous) queryClient.setQueryData(ordersQueryKey, context.previous);
     },
     // Intentionally no background refresh to avoid fetching after each single update
   });
@@ -695,7 +715,7 @@ const Orders = () => {
     },
     onMutate: async ({ orderId, status }) => {
       await queryClient.cancelQueries({ queryKey: ['orders'] });
-      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      const previous = queryClient.getQueryData<Order[]>(ordersQueryKey);
       updateOrderInCache(orderId, (o) => {
         const currentTags = Array.isArray(o.tags)
           ? o.tags
@@ -729,7 +749,7 @@ const Orders = () => {
       return { previous };
     },
     onError: (error, _vars, context) => {
-      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+      if (context?.previous) queryClient.setQueryData(ordersQueryKey, context.previous);
       console.error('Error updating order status:', error);
     },
     // Intentionally no background refresh to avoid fetching after each single update
@@ -758,7 +778,7 @@ const Orders = () => {
     },
     onMutate: async ({ orderIds, status }) => {
       await queryClient.cancelQueries({ queryKey: ['orders'] });
-      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      const previous = queryClient.getQueryData<Order[]>(ordersQueryKey);
       
       // Parse status: may be "fulfilled,fulfillment_date:YYYY-MM-DD" → add as separate tags
       const statusParts = status.split(',').map((s: string) => s.trim());
@@ -796,7 +816,7 @@ const Orders = () => {
       return { previous };
     },
     onError: (error, _vars, context) => {
-      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+      if (context?.previous) queryClient.setQueryData(ordersQueryKey, context.previous);
       console.error('Error bulk updating order status:', error);
     },
     onSettled: () => {
@@ -827,7 +847,7 @@ const Orders = () => {
     },
     onMutate: async (orderId: number) => {
       await queryClient.cancelQueries({ queryKey: ['orders'] });
-      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      const previous = queryClient.getQueryData<Order[]>(ordersQueryKey);
       updateOrderInCache(orderId, (o) => {
         const currentTags = Array.isArray(o.tags)
           ? o.tags
@@ -840,7 +860,7 @@ const Orders = () => {
       return { previous };
     },
     onError: (error: any, _orderId, context) => {
-      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+      if (context?.previous) queryClient.setQueryData(ordersQueryKey, context.previous);
       console.error('Error fulfilling order:', {
         message: error.message,
         error
@@ -863,7 +883,7 @@ const Orders = () => {
     },
     onMutate: async (orderId: number) => {
       await queryClient.cancelQueries({ queryKey: ['orders'] });
-      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      const previous = queryClient.getQueryData<Order[]>(ordersQueryKey);
       updateOrderInCache(orderId, (o) => {
         const currentTags = Array.isArray(o.tags)
           ? o.tags
@@ -875,7 +895,7 @@ const Orders = () => {
       return { previous };
     },
     onError: (_err, _orderId, context) => {
-      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+      if (context?.previous) queryClient.setQueryData(ordersQueryKey, context.previous);
     },
     // Intentionally no background refresh to avoid fetching after each single update
   });
@@ -1174,19 +1194,6 @@ const Orders = () => {
     return matchesSummaryItems;
   };
 
-  const handleSelectAll = () => {
-    if (orders) {
-      // Get only the orders that are currently visible based on all filters (status + quick filters + search)
-      const visibleOrders = orders.filter(matchesAllFilters);
-      
-      if (selectedOrders.length === visibleOrders.length) {
-        setSelectedOrders([]);
-      } else {
-        setSelectedOrders(visibleOrders.map(order => order.id));
-      }
-    }
-  };
-
   const handleBulkStatusUpdate = (status: string) => {
     if (selectedOrders.length === 0) return;
     
@@ -1406,22 +1413,6 @@ const Orders = () => {
     return 10; // pending orders should be first
   };
 
-  // Update search query handler
-  const handleSearchChange = (value: string) => {
-    setSearchQuery(value);
-  };
-
-  // Clear search handler
-  const handleClearSearch = () => {
-    handleSearchChange('');
-    // Restore previous filter when clearing search
-    if (statusFilter === 'all' && previousStatusFilter !== 'all') {
-      setStatusFilter(previousStatusFilter);
-    }
-  };
-
-
-  // Get shipping date from tags
   const getShippingDate = (order: Order) => {
     const tags = Array.isArray(order.tags) ? order.tags : 
                 typeof order.tags === 'string' ? order.tags.split(',').map(t => t.trim()) :
@@ -1620,21 +1611,8 @@ const Orders = () => {
   };
 
   // Helper function to get shipping method from order
-  const getShippingMethodFromOrder = (order: Order): string => {
-    const tags = Array.isArray(order.tags) ? order.tags : 
-                typeof order.tags === 'string' ? order.tags.split(',').map(t => t.trim()) :
-                [];
-    const shippingMethodTag = tags.find((tag: string) => 
-      tag.trim().toLowerCase().startsWith('shipping_method:')
-    );
-    if (shippingMethodTag) {
-      const method = shippingMethodTag.split(':')[1]?.trim().toLowerCase();
-      if (method === 'scooter') return 'Scooter';
-      if (method === 'pickup') return 'Pickup';
-      if (method === 'other-company' || method === 'other_company') return 'Other Company';
-    }
-    return 'Shipblu'; // Default
-  };
+  const getShippingMethodFromOrder = (order: Order): string =>
+    getShippingMethodFromTags(order.tags);
 
   // Helper function to get rush type from order
   // Get fulfillment displayStatus from order (most recent fulfillment with displayStatus — same as OrderCard)
@@ -1681,15 +1659,15 @@ const Orders = () => {
     return mergeRushTypeWithPriorityMaking(legacy, analyzePriorityMakingLineItems(lineItems));
   };
 
-  // First, decorate orders with their original index
-  const sortedOrders = (orders || [])?.map((order: Order, idx: number) => ({
-    ...order,
-    originalIndex: idx
-  }))
-  // Then filter using the same logic as handleSelectAll
-  .filter((order: Order & { originalIndex: number }) => matchesAllFilters(order))
-  // Sort with different rules based on status filter
-  .sort((a: Order & { originalIndex: number }, b: Order & { originalIndex: number }) => {
+  // Filter + sort pipeline (memoized — skips work while typing in OrdersSearchBar)
+  const sortedOrders = useMemo(() => {
+    return (orders || [])
+      .map((order: Order, idx: number) => ({
+        ...order,
+        originalIndex: idx,
+      }))
+      .filter((order: Order & { originalIndex: number }) => matchesAllFilters(order))
+      .sort((a: Order & { originalIndex: number }, b: Order & { originalIndex: number }) => {
     // For fulfilled orders, pin priority orders first, then sort by order ID
     if (statusFilter === 'fulfilled') {
       // Helper to check if order has priority tag (case-insensitive with trimming)
@@ -1755,6 +1733,47 @@ const Orders = () => {
     // Final stable sort tiebreaker using original index
     return a.originalIndex - b.originalIndex;
   });
+  }, [
+    orders,
+    debouncedSearchQuery,
+    statusFilter,
+    selectedProductionItems,
+    selectedCities,
+    selectedRoutes,
+    selectedDayRanges,
+    selectedShippingMethods,
+    selectedRushTypes,
+    selectedFulfillmentStatuses,
+    selectedFulfillmentMonths,
+    selectedPaidMonths,
+    selectedCancelledMonths,
+    selectedCancelledReasons,
+    selectedSummaryItems,
+  ]);
+
+  const handleSelectAll = useCallback(() => {
+    const visibleCount = sortedOrders?.length ?? 0;
+    if (visibleCount === 0) return;
+    if (selectedOrders.length === visibleCount) {
+      setSelectedOrders([]);
+    } else {
+      setSelectedOrders(sortedOrders.map((order) => order.id));
+    }
+  }, [sortedOrders, selectedOrders.length]);
+
+  const visibleOrdersRevenue = useMemo(() => {
+    return (sortedOrders ?? []).reduce((sum, order) => {
+      const tags = Array.isArray(order.tags)
+        ? order.tags
+        : typeof order.tags === 'string'
+          ? order.tags.split(',').map((t: string) => t.trim())
+          : [];
+      if (tags.some((tag: string) => tag.trim().toLowerCase() === 'cancelled')) {
+        return sum;
+      }
+      return sum + parseFloat(order.total_price || '0');
+    }, 0);
+  }, [sortedOrders]);
 
   // Clear temporary status update tags after a delay
   useEffect(() => {
@@ -1784,12 +1803,12 @@ const Orders = () => {
             tags: tags.filter((t: string) => t !== '__status_just_updated')
           };
         });
-        queryClient.setQueryData(['orders'], updatedOrders);
+        queryClient.setQueryData(ordersQueryKey, updatedOrders);
       }, 3000);
       
       return () => clearTimeout(timeoutId);
     }
-  }, [orders, queryClient]);
+  }, [orders, queryClient, ordersQueryKey]);
 
 
   // Mutation for updating tags
@@ -1809,12 +1828,12 @@ const Orders = () => {
     },
     onMutate: async ({ orderId, newTags }: { orderId: number; newTags: string[] }) => {
       await queryClient.cancelQueries({ queryKey: ['orders'] });
-      const previous = queryClient.getQueryData<Order[]>(['orders']);
+      const previous = queryClient.getQueryData<Order[]>(ordersQueryKey);
       updateOrderInCache(orderId, (o) => ({ ...o, tags: newTags }));
       return { previous };
     },
     onError: (_err, _vars, context) => {
-      if (context?.previous) queryClient.setQueryData(['orders'], context.previous);
+      if (context?.previous) queryClient.setQueryData(ordersQueryKey, context.previous);
     },
     // Intentionally no background refresh to avoid fetching after each single update
   });
@@ -2067,7 +2086,7 @@ const Orders = () => {
       methodCounts[method] = (methodCounts[method] || 0) + 1;
     });
     
-    const methodOrder = ['Shipblu', 'Other Company', 'Scooter', 'Pickup'];
+    const methodOrder = SHIPPING_METHOD_ORDER;
     return methodOrder
       .filter(method => methodCounts[method] > 0)
       .map(method => ({ method, count: methodCounts[method] }));
@@ -2437,6 +2456,24 @@ const Orders = () => {
     }
   }, [selectedOrders]);
 
+  const handleBulkShippingCostImport = useCallback(
+    async (
+      entries: Array<{ orderNumber: string; cost: number }>,
+      transactionDate: string,
+      orderIdMappings?: { [key: string]: number }
+    ) => {
+      const result = await financialService.bulkImportShippingCosts(entries, transactionDate, orderIdMappings);
+      if (result.summary.failed > 0) {
+        toast.error(`${result.summary.successful} succeeded, ${result.summary.failed} failed. Check console for details.`);
+        console.log('Failed entries:', result.results.failed);
+      } else {
+        toast.success(`Successfully imported ${result.summary.successful} shipping costs`);
+      }
+      await queryClient.invalidateQueries({ queryKey: ['orders'] });
+    },
+    [queryClient]
+  );
+
   // Quick Filter Card Component
   const QuickFilterCard = () => {
     const visibleTabs = getVisibleTabs();
@@ -2715,20 +2752,8 @@ const Orders = () => {
       cancelled_reason: { icon: '❌', label: 'Reason', tooltip: 'Cancellation Reason' },
     };
 
-    const visibleOrderCount = orders?.filter(matchesAllFilters).length ?? 0;
-    const allVisibleSelected = orders && selectedOrders.length === visibleOrderCount && visibleOrderCount > 0;
-
-    // Revenue of visible (filtered) orders, excluding cancelled — always available for display
-    const visibleOrdersRevenue = useMemo(() => {
-      if (!orders) return 0;
-      return orders
-        .filter(o => matchesAllFilters(o))
-        .filter(order => {
-          const tags = Array.isArray(order.tags) ? order.tags : typeof order.tags === 'string' ? order.tags.split(',').map((t: string) => t.trim()) : [];
-          return !tags.some((tag: string) => tag.trim().toLowerCase() === 'cancelled');
-        })
-        .reduce((sum, order) => sum + parseFloat(order.total_price || '0'), 0);
-    }, [orders, matchesAllFilters]);
+    const visibleOrderCount = sortedOrders?.length ?? 0;
+    const allVisibleSelected = visibleOrderCount > 0 && selectedOrders.length === visibleOrderCount;
 
     const selectedOrdersForExport = useMemo(() => {
       if (!orders || selectedOrders.length === 0) return [];
@@ -2780,7 +2805,11 @@ const Orders = () => {
             'Adress': fullAddress,
             'Items ordered': itemsOrdered,
             'Quantity': totalQuantity,
-            'Total order amount': Number(order.total_price || 0),
+            'Total order amount': getOrderTotalAmountForExport(
+              order.total_price,
+              order.tags,
+              order.financial_status
+            ),
           };
         });
 
@@ -2998,6 +3027,24 @@ const Orders = () => {
 
         {/* Content Area */}
         <div className="space-y-2">
+          {activeQuickFilterTab === 'shipping' && (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-gray-200 bg-white px-3 py-2">
+              <p className="text-xs text-gray-600 min-w-0 leading-snug">
+                Paste shipping company costs to mark orders paid and fulfilled
+              </p>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsBulkShippingImportOpen(true);
+                }}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <DocumentArrowDownIcon className="h-4 w-4" aria-hidden />
+                Import costs
+              </button>
+            </div>
+          )}
           {currentData.length === 0 && emptyMessage ? (
             <div className="text-center py-8">
               <p className="text-sm text-gray-600">{emptyMessage}</p>
@@ -3142,27 +3189,10 @@ const Orders = () => {
         {/* Top Row: Search and Action Buttons */}
         <div className="px-3 sm:px-4 py-2.5 flex items-center gap-2 bg-gray-50/50">
           {/* Search */}
-          <div className="relative flex-1 min-w-0">
-            <input
-              type="text"
-              placeholder="Search orders..."
-              value={searchQuery}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              className="block w-full pl-10 pr-10 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-lg placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-            />
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
-            </div>
-            {searchQuery && (
-              <button
-                onClick={handleClearSearch}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center justify-center rounded-r-lg transition-colors"
-                title="Clear search"
-              >
-                <XMarkIcon className="h-5 w-5 text-gray-400" />
-              </button>
-            )}
-          </div>
+          <OrdersSearchBar
+            onDebouncedChange={handleDebouncedSearchChange}
+            seedQuery={searchSeed}
+          />
           <div
             className="flex shrink-0 items-center rounded-xl border border-gray-200 bg-white p-0.5 shadow-sm"
             role="group"
@@ -3315,6 +3345,23 @@ const Orders = () => {
           </div>
         </div>
 
+        {statusFilter === 'all' && !loadAllOrders && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-amber-100 bg-amber-50 px-3 py-2 sm:px-4">
+            <p className="text-xs sm:text-sm text-amber-900">
+              Showing active orders only (excluding fulfilled, cancelled, and deleted).
+              {debouncedSearchQuery.trim() ? ' Search applies to this set.' : ''}
+            </p>
+            <button
+              type="button"
+              onClick={() => setLoadAllOrders(true)}
+              disabled={ordersFetching}
+              className="shrink-0 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {ordersFetching ? 'Loading…' : 'Load all orders'}
+            </button>
+          </div>
+        )}
+
       </div>
 
       {/* Order list or map (same filters / sortedOrders as list view) */}
@@ -3367,6 +3414,12 @@ const Orders = () => {
           <ArrowUpIcon className="w-6 h-6 text-white" />
         </button>
       )}
+
+      <BulkShippingCostImportDialog
+        isOpen={isBulkShippingImportOpen}
+        onClose={() => setIsBulkShippingImportOpen(false)}
+        onImport={handleBulkShippingCostImport}
+      />
 
     </div>
   );

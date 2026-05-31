@@ -114,6 +114,7 @@ export default function CourierMap() {
         onReplaceShippingRouteForOrder={async () => undefined}
         selectedOrderIds={[]}
         readOnly
+        showPaidPriceLabel
         currentLocation={currentLocation}
         mapOrderCardProps={{
           onUpdateTags: (orderId, newTags) => {

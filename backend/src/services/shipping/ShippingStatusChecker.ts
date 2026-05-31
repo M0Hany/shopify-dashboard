@@ -84,20 +84,24 @@ export class ShippingStatusChecker {
         }
       }));
 
-      // Process ShipBlu shipped orders only (check fulfillments for delivered status; no shipping API fetch)
-      const shipBluOrders = orders.filter(order => {
+      // Company shipped orders (default / other-company; not scooter or pickup) — check fulfillments for delivered
+      const companyShippedOrders = orders.filter(order => {
         const tags = Array.isArray(order.tags) ? 
           order.tags.map(t => t.trim().toLowerCase()) : 
           typeof order.tags === 'string' ? 
             order.tags.split(',').map(t => t.trim().toLowerCase()) : 
             [];
-        return tags.includes('shipped') && tags.includes('sent to shipblu');
+        if (!tags.includes('shipped')) return false;
+        const isScooterOrPickup = tags.some((tag) =>
+          tag.startsWith('shipping_method:') &&
+          (tag.includes('scooter') || tag.includes('pickup'))
+        );
+        return !isScooterOrPickup;
       });
 
-      logger.info(`Found ${shipBluOrders.length} ShipBlu shipped orders to check for delivery status`);
+      logger.info(`Found ${companyShippedOrders.length} company shipped orders to check for delivery status`);
 
-      // Process ShipBlu orders - check fulfillments for delivered status
-      await Promise.all(shipBluOrders.map(async (order) => {
+      await Promise.all(companyShippedOrders.map(async (order) => {
         try {
           // Check if order has fulfillments with displayStatus === "DELIVERED"
           if (order.fulfillments && Array.isArray(order.fulfillments) && order.fulfillments.length > 0) {
@@ -128,7 +132,7 @@ export class ShippingStatusChecker {
               // Update order tags
               await this.shopifyService.updateOrderTags(order.id.toString(), newTags);
               
-              logger.info('Updated ShipBlu order status to fulfilled (delivered)', {
+              logger.info('Updated company shipped order status to fulfilled (delivered)', {
                 orderId: order.id,
                 orderName: order.name,
                 displayStatus: deliveredFulfillment.displayStatus,
@@ -138,7 +142,7 @@ export class ShippingStatusChecker {
             }
           }
         } catch (error) {
-          logger.error('Error processing ShipBlu shipped order', {
+          logger.error('Error processing company shipped order', {
             error,
             orderId: order.id
           });

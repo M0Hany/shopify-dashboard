@@ -137,7 +137,7 @@ export default function BulkShippingCostRevertDialog({
   const checkForDuplicates = async (orderIds: number[]): Promise<DuplicateOrder[]> => {
     try {
       // Fetch all orders
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders?scope=all`, {
         cache: 'no-store',
         headers: { 'Cache-Control': 'no-cache' }
       });

@@ -49,6 +49,8 @@ export interface MapOrderCardProps {
   mapRoutePicker?: OrderCardMapRoutePicker;
   readOnly?: boolean;
   onCourierMarkDelivered?: (orderId: number) => void | Promise<void>;
+  /** Courier map only — show مدفوع instead of price for paid orders. */
+  showPaidPriceLabel?: boolean;
 }
 
 function getDaysLeftBadgeStyle(daysLeft: number): string {
@@ -137,6 +139,7 @@ export default function MapOrderCard({
   mapRoutePicker,
   readOnly = false,
   onCourierMarkDelivered,
+  showPaidPriceLabel = false,
 }: MapOrderCardProps) {
   const navigate = useNavigate();
   const [productsExpanded, setProductsExpanded] = useState(false);
@@ -165,7 +168,10 @@ export default function MapOrderCard({
   const noteModalRef = useRef<HTMLDivElement | null>(null);
   const tagDialogRef = useRef<HTMLDivElement | null>(null);
 
-  const summary = useMemo(() => buildOrderMapSummary(order), [order]);
+  const summary = useMemo(
+    () => buildOrderMapSummary(order, { showPaidPriceLabel }),
+    [order, showPaidPriceLabel]
+  );
   const daysLeft = useMemo(() => calculateOrderDaysLeft(order), [order]);
   const daysLeftClass = getDaysLeftBadgeStyle(daysLeft);
   const latLng = useMemo(() => getOrderLatLng(order), [order]);

@@ -184,6 +184,8 @@ export interface OrdersMapPanelProps {
   currentLocation?: { lat: number; lng: number } | null;
   onToggleCourierAssignmentRoute?: (route: { id: string; name: string; orderIds: number[] }, assign: boolean) => void | Promise<void>;
   leftColumnTopContent?: ReactNode;
+  /** Courier map only — show مدفوع instead of price for paid orders. */
+  showPaidPriceLabel?: boolean;
 }
 
 export function OrdersMapPanel({
@@ -195,6 +197,7 @@ export function OrdersMapPanel({
   currentLocation = null,
   onToggleCourierAssignmentRoute,
   leftColumnTopContent,
+  showPaidPriceLabel = false,
 }: OrdersMapPanelProps) {
   const [localRoutes, setLocalRoutes] = useState<DraftRoute[]>([]);
   /** Stop order overrides for routes rebuilt from Shopify tags (cleared when tag set changes). */
@@ -459,7 +462,7 @@ export function OrdersMapPanel({
   const applyBulkScooterPaid = useCallback(
     async (route: DraftRoute, totalCostRaw: string) => {
       if (readOnly) return;
-      if (!mapOrderCardProps.onUpdateTags || !mapOrderCardProps.onUpdateStatus) {
+      if (!mapOrderCardProps.onUpdateTags) {
         toast.error('Bulk payment action is not available');
         return;
       }
@@ -491,13 +494,24 @@ export function OrdersMapPanel({
             return (
               !low.startsWith('scooter_shipping_cost:') &&
               !low.startsWith('paid_date:') &&
+              !low.startsWith('fulfillment_date:') &&
+              !low.startsWith('fulfilled_at:') &&
+              low !== 'paid' &&
+              low !== 'fulfilled' &&
+              low !== 'priority' &&
               low !== COURIER_ASSIGNED_TAG
             );
           });
 
-          const nextTags = [...cleaned, `scooter_shipping_cost:${perOrderCost}`, `paid_date:${paidDate}`];
+          const nextTags = [
+            ...cleaned,
+            `scooter_shipping_cost:${perOrderCost}`,
+            `paid_date:${paidDate}`,
+            'paid',
+            'fulfilled',
+            `fulfillment_date:${paidDate}`,
+          ];
           mapOrderCardProps.onUpdateTags(order.id, nextTags);
-          mapOrderCardProps.onUpdateStatus(order.id, 'paid');
         }
 
         toast.success(`Marked ${routeOrders.length} order(s) as paid (${perOrderCost} each)`);
@@ -877,6 +891,7 @@ export function OrdersMapPanel({
                             }
                       }
                       readOnly={readOnly}
+                      showPaidPriceLabel={showPaidPriceLabel}
                       onCourierMarkDelivered={mapOrderCardProps.onUpdateTags ? async (orderId) => {
                         const currentOrder = byId.get(orderId);
                         if (!currentOrder) {

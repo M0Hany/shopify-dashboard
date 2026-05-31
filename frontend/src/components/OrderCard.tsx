@@ -18,6 +18,12 @@ import {
   mergeRushTypeWithPriorityMaking,
   shouldHidePriorityMakingLine,
 } from '../utils/priorityMakingRush';
+import { getShippingConfirmationTemplateKey, getShippingMethodFromTags } from '../utils/shippingMethod';
+import {
+  isOrderPaidByTag,
+  isOrderPaymentHighlighted,
+  isShopifyPaymentPaid,
+} from '../utils/orderPayment';
 import { normalizeOrderTagsArray, stripShippingRouteTags } from '../utils/shippingRouteTags';
 import { getOrderLatLng, tryParseLatLngFromMapsUrl } from '../utils/orderGeolocation';
 
@@ -348,15 +354,20 @@ const OrderCard: React.FC<OrderCardProps> = ({
   // Check if automated WhatsApp confirmation tag exists
   const hasAutomatedWhatsAppConfirmation = trimmedTags.includes('automated_whatsapp_confirmation');
 
-  // Fetch manual WhatsApp confirmation template from API (for inline button when order ready)
-  const { data: manualConfirmationTemplate } = useQuery({
-    queryKey: ['whatsapp-template', 'manual_whatsapp_confirmation'],
+  const shippingConfirmationTemplateKey = getShippingConfirmationTemplateKey(tags);
+
+  // Fetch order-ready WhatsApp confirmation template by shipping method (company | scooter)
+  const { data: shippingConfirmationTemplate } = useQuery({
+    queryKey: ['whatsapp-template', shippingConfirmationTemplateKey],
     queryFn: async () => {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/templates/key/manual_whatsapp_confirmation`);
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/whatsapp/templates/key/${shippingConfirmationTemplateKey}`
+      );
       if (!res.ok) return null;
       const json = await res.json();
       return json as { id: string; key: string; name: string; body: string };
     },
+    enabled: isOrderReady,
   });
 
   // Fetch all templates when Send template dialog is open
@@ -825,8 +836,8 @@ const OrderCard: React.FC<OrderCardProps> = ({
         }
       }
       
-      // Check if shipping method is Other Company
-      if (shippingMethod === 'Other Company') {
+      // Check if shipping method is Company
+      if (shippingMethod === 'Company') {
         // Check if shipping company cost tag already exists
         const companyCostTag = trimmedTags.find((tag: string) => tag.trim().startsWith('shipping_company_cost:'));
         if (!companyCostTag) {
@@ -1274,70 +1285,60 @@ Please kindly confirm 🤍`;
 Your order is being picked up by the shipping company and should be arriving to you in the next couple of days🚚`;
   };
 
-  // Get manual WhatsApp confirmation message template
-  const getManualWhatsAppConfirmationTemplate = (customerFirstName: string, orderItems: any[]): string => {
-    const itemsList = orderItems.map(item => {
-      const variant = item.variant_title ? ` (${item.variant_title})` : '';
-      return `- ${item.title}${variant}`;
-    }).join('\n');
-    
-    return `Good evening ${customerFirstName}, this is OCD Crochet ✨
-
-Your order for:
-
-${itemsList}
-
-is being shipped and it usually arrives within 2–3 working days.
-
-Could you kindly confirm if you'll be available to receive it during that time? 💌`;
+  // Build WhatsApp message from template placeholders (same as Send template menu)
+  const buildTemplateMessage = (
+    templateBody: string,
+    customerFirstName: string,
+    orderItems: any[]
+  ): string => {
+    const itemsList =
+      orderItems
+        .map((item: any) => {
+          const variant = item.variant_title ? ` (${item.variant_title})` : '';
+          return `- ${item.title}${variant}`;
+        })
+        .join('\n') || '—';
+    return templateBody
+      .replace(/\{\{customer_first_name\}\}/g, customerFirstName)
+      .replace(/\{\{items_list\}\}/g, itemsList);
   };
 
-  // Handle manual WhatsApp confirmation button click
+  // Handle manual WhatsApp confirmation button click (order ready view)
   const handleManualWhatsAppConfirmation = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!order.customer?.phone || !isOrderReady) return;
 
-    const customerFirstName = order.customer.first_name || '';
+    const customerFirstName = order.customer.first_name?.trim() || 'Customer';
     const orderItems = (order.line_items || []).filter(
       (item: any) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item))
     );
-    const itemsList = orderItems.map((item: any) => {
-      const variant = item.variant_title ? ` (${item.variant_title})` : '';
-      return `- ${item.title}${variant}`;
-    }).join('\n');
 
-    let message: string;
-    if (manualConfirmationTemplate?.body) {
-      message = manualConfirmationTemplate.body
-        .replace(/\{\{customer_first_name\}\}/g, customerFirstName)
-        .replace(/\{\{items_list\}\}/g, itemsList);
-    } else {
-      message = getManualWhatsAppConfirmationTemplate(customerFirstName, orderItems);
+    if (!shippingConfirmationTemplate?.body) {
+      toast.error(
+        `No WhatsApp template found for key "${shippingConfirmationTemplateKey}". Add it in WhatsApp → Message templates.`
+      );
+      return;
     }
 
-    // Format phone number for WhatsApp
+    const message = buildTemplateMessage(
+      shippingConfirmationTemplate.body,
+      customerFirstName,
+      orderItems
+    );
+
     const formattedPhone = formatPhoneNumber(order.customer.phone);
-    
-    // Encode the message
-    const encodedMessage = encodeURIComponent(message);
-    
-    // Create WhatsApp Business link (wa.me works for both web and mobile)
-    const whatsAppLink = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
-    
-    // Open WhatsApp
+    const whatsAppLink = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(message)}`;
     window.open(whatsAppLink, '_blank');
-    
-    // Add the tag if it doesn't exist
+
     if (!hasManualWhatsAppConfirmation && onUpdateTags) {
       const currentTags = Array.isArray(order.tags)
         ? order.tags.map((t: string) => t.trim())
         : typeof order.tags === 'string'
           ? order.tags.split(',').map((t: string) => t.trim())
           : [];
-      
+
       if (!currentTags.includes('manual_whatsapp_confirmation')) {
-        const updatedTags = [...currentTags, 'manual_whatsapp_confirmation'];
-        onUpdateTags(order.id, updatedTags);
+        onUpdateTags(order.id, [...currentTags, 'manual_whatsapp_confirmation']);
       }
     }
   };
@@ -1349,15 +1350,10 @@ Could you kindly confirm if you'll be available to receive it during that time? 
       return;
     }
     const customerFirstName = order.customer.first_name?.trim() || 'Customer';
-    const itemsList = (order.line_items || [])
-      .filter((item: any) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item)))
-      .map((item: any) => {
-      const variant = item.variant_title ? ` (${item.variant_title})` : '';
-      return `- ${item.title}${variant}`;
-    }).join('\n') || '—';
-    const body = t.body
-      .replace(/\{\{customer_first_name\}\}/g, customerFirstName)
-      .replace(/\{\{items_list\}\}/g, itemsList);
+    const orderItems = (order.line_items || []).filter(
+      (item: any) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item))
+    );
+    const body = buildTemplateMessage(t.body, customerFirstName, orderItems);
     const formattedPhone = formatPhoneNumber(order.customer.phone);
     const whatsAppLink = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(body)}`;
     window.open(whatsAppLink, '_blank');
@@ -1844,26 +1840,14 @@ Could you kindly confirm if you'll be available to receive it during that time? 
     setNewTag('');
   };
 
-  // Get shipping method from tags
-  const getShippingMethod = (): string => {
-    const shippingMethodTag = tags.find((tag: string) => 
-      tag.trim().toLowerCase().startsWith('shipping_method:')
-    );
-    if (shippingMethodTag) {
-      const method = shippingMethodTag.split(':')[1]?.trim().toLowerCase();
-      if (method === 'scooter') return 'Scooter';
-      if (method === 'pickup') return 'Pickup';
-      if (method === 'other-company' || method === 'other_company') return 'Other Company';
-    }
-    return 'Shipblu'; // Default
-  };
+  const getShippingMethod = (): string => getShippingMethodFromTags(tags);
 
   // Get shipping icon and styling based on method
   const getShippingIcon = () => {
     const method = getShippingMethod();
     
     switch (method) {
-      case 'Other Company':
+      case 'Company':
         return {
           icon: TruckIcon,
           className: 'w-5 h-5 text-green-600 flex-shrink-0 hover:text-green-700 transition-colors',
@@ -1881,14 +1865,72 @@ Could you kindly confirm if you'll be available to receive it during that time? 
           className: 'w-5 h-5 text-purple-500 flex-shrink-0 hover:text-purple-600 transition-colors',
           containerClassName: ''
         };
-      case 'Shipblu':
       default:
         return {
           icon: TruckIcon,
-          className: 'w-5 h-5 text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors',
-          containerClassName: ''
+          className: 'w-5 h-5 text-green-600 flex-shrink-0 hover:text-green-700 transition-colors',
+          containerClassName: 'bg-green-100 border border-green-300 rounded'
         };
     }
+  };
+
+  const isOrderPaid = isOrderPaidByTag(trimmedTags);
+  const isPaymentHighlighted = isOrderPaymentHighlighted(trimmedTags, order.financial_status);
+
+  const getPaymentIconStyle = () => {
+    if (isPaymentHighlighted) {
+      return {
+        className: 'w-5 h-5 text-green-600 flex-shrink-0 hover:text-green-700 transition-colors',
+        containerClassName: 'bg-green-100 border border-green-300 rounded',
+      };
+    }
+    return {
+      className: 'w-5 h-5 text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors',
+      containerClassName: '',
+    };
+  };
+
+  const handleMarkAsPaid = () => {
+    const currentTags = getCurrentTags();
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const updatedTags = currentTags.filter(
+      (tag) =>
+        tag.trim().toLowerCase() !== 'paid' && !tag.trim().startsWith('paid_date:')
+    );
+    updatedTags.push('paid', `paid_date:${today}`);
+    if (onUpdateTags) {
+      onUpdateTags(order.id, updatedTags);
+    }
+    setCurrentStatus('paid');
+    toast.success('Order marked as paid');
+  };
+
+  const handleMarkAsUnpaid = () => {
+    const currentTags = getCurrentTags();
+    const updatedTags = currentTags.filter(
+      (tag) =>
+        tag.trim().toLowerCase() !== 'paid' && !tag.trim().startsWith('paid_date:')
+    );
+    if (onUpdateTags) {
+      onUpdateTags(order.id, updatedTags);
+    }
+    const tagsWithoutPaid = updatedTags.map((t) => t.trim());
+    if (tagsWithoutPaid.some((t) => t.toLowerCase() === 'fulfilled')) {
+      setCurrentStatus('fulfilled');
+    } else if (tagsWithoutPaid.includes('shipped')) {
+      setCurrentStatus('shipped');
+    } else if (tagsWithoutPaid.includes('ready_to_ship')) {
+      setCurrentStatus('ready_to_ship');
+    } else if (tagsWithoutPaid.includes('customer_confirmed')) {
+      setCurrentStatus('confirmed');
+    } else if (tagsWithoutPaid.includes('on_hold')) {
+      setCurrentStatus('on_hold');
+    } else if (tagsWithoutPaid.includes('order_ready')) {
+      setCurrentStatus('order-ready');
+    } else {
+      setCurrentStatus('pending');
+    }
+    toast.success('Order marked as unpaid');
   };
 
   // Handle shipping method change
@@ -1908,13 +1950,14 @@ Could you kindly confirm if you'll be available to receive it during that time? 
     let tagValue = '';
     if (method === 'Scooter') tagValue = 'shipping_method:scooter';
     else if (method === 'Pickup') tagValue = 'shipping_method:pickup';
-    else if (method === 'Other Company') tagValue = 'shipping_method:other-company';
+    // Company is the default — clear shipping_method tags (no tag or legacy other-company both display as Company)
 
     if (tagValue) {
       updatedTags.push(tagValue);
-      if (onUpdateTags) {
-        onUpdateTags(order.id, updatedTags);
-      }
+    }
+
+    if (onUpdateTags) {
+      onUpdateTags(order.id, updatedTags);
     }
   };
 
@@ -2037,7 +2080,11 @@ Could you kindly confirm if you'll be available to receive it during that time? 
               <button
                 onClick={(e) => { e.stopPropagation(); handleManualWhatsAppConfirmation(e); }}
                 className="p-1.5 rounded-full hover:bg-gray-100 transition-colors"
-                title={hasManualWhatsAppConfirmation ? 'WhatsApp confirmation already sent' : 'Send WhatsApp shipping confirmation'}
+                title={
+                  hasManualWhatsAppConfirmation
+                    ? 'WhatsApp confirmation already sent'
+                    : `Send WhatsApp shipping confirmation (${shippingConfirmationTemplateKey})`
+                }
               >
                 <img
                   src={whatsappLogo}
@@ -2640,10 +2687,10 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                             <Menu.Item>
                               {({ active }) => (
                                 <button
-                                  onClick={() => handleShippingMethodChange('Other Company')}
+                                  onClick={() => handleShippingMethodChange('Company')}
                                   className={`${active ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700`}
                                 >
-                                  Other Company
+                                  Company
                                 </button>
                               )}
                             </Menu.Item>
@@ -2675,7 +2722,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                   }}
                 </Menu>
                 <span className={`truncate font-medium ${
-                  getShippingMethod() === 'Other Company' 
+                  getShippingMethod() === 'Company' 
                     ? 'text-green-700 font-semibold' 
                     : getShippingMethod() === 'Scooter'
                     ? 'text-orange-600'
@@ -2687,13 +2734,71 @@ Could you kindly confirm if you'll be available to receive it during that time? 
                 </span>
               </div>
               <div className="flex items-center gap-2 text-xs text-gray-600">
-                <button
-                  className="p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors"
-                  title="Total Price"
-                >
-                  <CurrencyDollarIcon className="w-5 h-5 text-gray-400 flex-shrink-0 hover:text-gray-500 transition-colors" />
-                </button>
-                <span className="truncate font-medium">${order.total_price}</span>
+                <Menu as="div" className="relative inline-block text-left">
+                  {({ open }) => {
+                    const paymentIcon = getPaymentIconStyle();
+                    return (
+                      <>
+                        <Menu.Button
+                          onClick={(e) => e.stopPropagation()}
+                          className={`p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors ${paymentIcon.containerClassName}`}
+                          title={
+                            isOrderPaid && isShopifyPaymentPaid(order.financial_status)
+                              ? 'Paid (tag and Shopify)'
+                              : isOrderPaid
+                                ? 'Paid (tag)'
+                                : isShopifyPaymentPaid(order.financial_status)
+                                  ? 'Shopify payment: Paid'
+                                  : 'Payment status'
+                          }
+                        >
+                          <CurrencyDollarIcon className={paymentIcon.className} />
+                        </Menu.Button>
+                        {open && (
+                          <Menu.Items
+                            static
+                            className="absolute right-0 mt-1 w-40 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="py-1">
+                              <Menu.Item disabled={isOrderPaid}>
+                                {({ active, disabled }) => (
+                                  <button
+                                    type="button"
+                                    disabled={disabled}
+                                    onClick={handleMarkAsPaid}
+                                    className={`${active && !disabled ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm ${
+                                      disabled ? 'text-gray-400 cursor-not-allowed' : 'text-gray-700'
+                                    }`}
+                                  >
+                                    Mark as Paid
+                                  </button>
+                                )}
+                              </Menu.Item>
+                              <Menu.Item disabled={!isOrderPaid}>
+                                {({ active, disabled }) => (
+                                  <button
+                                    type="button"
+                                    disabled={disabled}
+                                    onClick={handleMarkAsUnpaid}
+                                    className={`${active && !disabled ? 'bg-gray-100' : ''} flex items-center gap-2 w-full px-4 py-2 text-sm ${
+                                      disabled ? 'text-gray-400 cursor-not-allowed' : 'text-gray-700'
+                                    }`}
+                                  >
+                                    Mark as Unpaid
+                                  </button>
+                                )}
+                              </Menu.Item>
+                            </div>
+                          </Menu.Items>
+                        )}
+                      </>
+                    );
+                  }}
+                </Menu>
+                <span className={`truncate font-medium ${isPaymentHighlighted ? 'text-green-700 font-semibold' : ''}`}>
+                  ${order.total_price}
+                </span>
               </div>
             </div>
           </div>
@@ -3461,7 +3566,7 @@ Could you kindly confirm if you'll be available to receive it during that time? 
           </div>
         )}
 
-        {/* Other Company Shipping Cost Modal */}
+        {/* Company Shipping Cost Modal */}
         {isCompanyShippingCostModalOpen && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg p-6 max-w-md w-full relative" onClick={e => e.stopPropagation()}>

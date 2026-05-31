@@ -1,10 +1,13 @@
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import { getPaidOrderPriceLabel } from './orderPayment';
 
 export type ShippingSlipOrder = {
   id: number;
   name?: string | null;
   total_price?: string | number | null;
+  financial_status?: string | null;
+  tags?: string[] | string | null;
   line_items?: Array<{
     title?: string | null;
     quantity?: number | null;
@@ -39,6 +42,8 @@ function formatSlipAddress(order: ShippingSlipOrder): string {
 }
 
 function formatSlipPrice(order: ShippingSlipOrder): string {
+  const paidLabel = getPaidOrderPriceLabel(order.tags, order.financial_status);
+  if (paidLabel) return paidLabel;
   return new Intl.NumberFormat('en-EG', {
     style: 'currency',
     currency: 'EGP',
@@ -73,9 +78,11 @@ function buildSlipHtml(order: ShippingSlipOrder): string {
   const address = formatSlipAddress(order);
   const price = formatSlipPrice(order);
   const productLines = formatSlipProducts(order);
-  const rtl = [orderName, name, phone, address, ...productLines].some((value) => isArabicText(value));
+  const rtl = [orderName, name, phone, address, price, ...productLines].some((value) => isArabicText(value));
   const valueAlign = rtl ? 'right' : 'left';
   const dir = rtl ? 'rtl' : 'ltr';
+  const priceDir = isArabicText(price) ? 'rtl' : 'ltr';
+  const priceAlign = isArabicText(price) ? 'right' : 'left';
 
   const escapeHtml = (value: string) =>
     value
@@ -105,7 +112,7 @@ function buildSlipHtml(order: ShippingSlipOrder): string {
         <div style="font-weight:700;">Products:</div>
         <div style="display:flex;flex-direction:column;gap:3px;">${productsHtml}</div>
         <div style="font-weight:700;">Price:</div>
-        <div style="direction:ltr;text-align:left;word-break:break-word;">${escapeHtml(price)}</div>
+        <div style="direction:${priceDir};text-align:${priceAlign};word-break:break-word;">${escapeHtml(price)}</div>
       </div>
     </div>
   `;

@@ -7,7 +7,7 @@ const CRON_TIMEZONE = 'Africa/Cairo';
 
 /**
  * SchedulerService runs recurring cron jobs. Additional jobs started from index.ts:
- * - startShippingStatusChecker() — ShipBlu delivery status, every 30 min
+ * - startShippingStatusChecker() — company delivery status, every 30 min
  */
 export class SchedulerService {
   private static instance: SchedulerService;

@@ -290,9 +290,9 @@ router.post('/interactions', express.raw({ type: 'application/json' }), async (r
               const method = shippingTag.split(':')[1]?.trim();
               if (method === 'scooter') return 'Scooter';
               if (method === 'pickup') return 'Pickup';
-              if (method === 'other-company' || method === 'other_company') return 'Other Company';
+              if (method === 'other-company' || method === 'other_company' || method === 'company') return 'Company';
             }
-            return 'Shipblu';
+            return 'Company';
           };
 
           // Get priority status
@@ -529,9 +529,9 @@ router.post('/interactions', express.raw({ type: 'application/json' }), async (r
               const method = shippingTag.split(':')[1]?.trim();
               if (method === 'scooter') return 'Scooter';
               if (method === 'pickup') return 'Pickup';
-              if (method === 'other-company' || method === 'other_company') return 'Other Company';
+              if (method === 'other-company' || method === 'other_company' || method === 'company') return 'Company';
             }
-            return 'Shipblu';
+            return 'Company';
           };
 
           const isPriority = tags.some((t: string) => t.trim().toLowerCase() === 'priority');

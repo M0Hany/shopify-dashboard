@@ -145,7 +145,7 @@ export default function BulkShippingCostImportDialog({
   const checkForDuplicates = async (entries: Array<{ orderNumber: string; cost: number }>): Promise<DuplicateOrder[]> => {
     try {
       // Fetch all orders
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders?scope=all`, {
         cache: 'no-store',
         headers: { 'Cache-Control': 'no-cache' }
       });
@@ -278,7 +278,6 @@ export default function BulkShippingCostImportDialog({
   };
 
   const totalCost = parsedEntries.reduce((sum, entry) => sum + entry.cost, 0);
-  const totalCostWithTax = totalCost * 1.14;
 
   return (
     <Transition show={isOpen} as="div">
@@ -377,11 +376,8 @@ export default function BulkShippingCostImportDialog({
                             <h4 className="text-sm font-medium text-gray-900">
                               Parsed Entries ({parsedEntries.length})
                             </h4>
-                            <div className="text-sm text-gray-600">
-                              <div>Total Cost: EGP {totalCost.toFixed(2)}</div>
-                              <div className="font-semibold">
-                                With 14% Tax: EGP {totalCostWithTax.toFixed(2)}
-                              </div>
+                            <div className="text-sm font-semibold text-gray-600">
+                              Total Cost: EGP {totalCost.toFixed(2)}
                             </div>
                           </div>
                           <div className="max-h-48 overflow-y-auto">

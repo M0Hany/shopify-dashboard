@@ -26,6 +26,32 @@ function invalidateCourierMapCache(): void {
   courierMapCache = null;
 }
 
+/** Default admin list: pipeline orders only (no terminal tags). */
+const ACTIVE_ORDERS_QUERY =
+  'status:any NOT tag:cancelled NOT tag:deleted NOT tag:fulfilled';
+
+type OrdersListScope = 'active' | 'all' | 'fulfilled' | 'cancelled';
+
+function resolveOrdersListScope(raw: unknown): OrdersListScope {
+  const scope = String(raw || 'active').toLowerCase();
+  if (scope === 'all' || scope === 'fulfilled' || scope === 'cancelled') return scope;
+  return 'active';
+}
+
+function ordersQueryForScope(scope: OrdersListScope): string {
+  switch (scope) {
+    case 'all':
+      return 'status:any';
+    case 'fulfilled':
+      return 'tag:fulfilled NOT tag:deleted';
+    case 'cancelled':
+      return 'tag:cancelled NOT tag:deleted';
+    case 'active':
+    default:
+      return ACTIVE_ORDERS_QUERY;
+  }
+}
+
 // Get all orders with optional filters
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -34,20 +60,22 @@ router.get('/', async (req: Request, res: Response) => {
       'Cache-Control': 'no-store'
     });
 
-    // Fetch all orders (no limit) to ensure all orders are available in the frontend
-    // The frontend will handle filtering and pagination if needed
-    logger.info(`[GET /api/orders] Fetching orders with params:`, {
-      status: req.query.status,
+    const scope = resolveOrdersListScope(req.query.scope);
+    const ordersQuery = ordersQueryForScope(scope);
+
+    logger.info(`[GET /api/orders] Fetching orders`, {
+      scope,
+      ordersQuery,
       created_at_min: req.query.created_at_min,
       created_at_max: req.query.created_at_max,
     });
     const orders = await shopifyServiceInstance.getOrders({
-      status: req.query.status as string,
+      ordersQuery,
       created_at_min: req.query.created_at_min as string,
       created_at_max: req.query.created_at_max as string,
     });
-    logger.info(`[GET /api/orders] Successfully fetched ${orders.length} orders from Shopify`);
-    console.log(`[GET /api/orders] Total orders returned: ${orders.length}`);
+    logger.info(`[GET /api/orders] Successfully fetched ${orders.length} orders from Shopify (scope=${scope})`);
+    console.log(`[GET /api/orders] Total orders returned: ${orders.length} (scope=${scope})`);
     res.json(orders);
   } catch (error) {
     logger.error('Error fetching orders:', error);
@@ -628,8 +656,7 @@ router.post('/bulk-import-shipping-costs', async (req: Request, res: Response) =
             ? order.tags.split(',').map((t: string) => t.trim())
             : [];
 
-        // Remove existing shipping_company_cost, shipping_company_cost_date, paid, and paid_date tags
-        // This ensures we overwrite any existing values with the new ones from bulk import
+        // Remove existing shipping/paid/fulfillment tags so bulk import can overwrite them
         const filteredTags = existingTags.filter(
           (tag: string) => {
             const trimmedTag = tag.trim().toLowerCase();
@@ -637,20 +664,23 @@ router.post('/bulk-import-shipping-costs', async (req: Request, res: Response) =
               !trimmedTag.startsWith('shipping_company_cost:') &&
               !trimmedTag.startsWith('shipping_company_cost_date:') &&
               trimmedTag !== 'paid' &&
-              !trimmedTag.startsWith('paid_date:')
+              !trimmedTag.startsWith('paid_date:') &&
+              trimmedTag !== 'fulfilled' &&
+              !trimmedTag.startsWith('fulfillment_date:') &&
+              !trimmedTag.startsWith('fulfilled_at:') &&
+              trimmedTag !== 'priority'
             );
           }
         );
 
-        // Calculate cost with 14% (multiply by 1.14)
-        const costWithTax = parseFloat(cost) * 1.14;
-        const formattedCost = costWithTax.toFixed(2);
+        const formattedCost = parseFloat(cost).toFixed(2);
 
-        // Add new tags (overwriting any previous values)
         filteredTags.push(`shipping_company_cost:${formattedCost}`);
         filteredTags.push(`shipping_company_cost_date:${transactionDate}`);
         filteredTags.push('paid');
         filteredTags.push(`paid_date:${transactionDate}`);
+        filteredTags.push('fulfilled');
+        filteredTags.push(`fulfillment_date:${transactionDate}`);
 
         // Update order tags
         await shopifyServiceInstance.updateOrderTags(order.id.toString(), filteredTags);
@@ -664,8 +694,7 @@ router.post('/bulk-import-shipping-costs', async (req: Request, res: Response) =
         logger.info('Updated shipping company cost for order', {
           orderId: order.id,
           orderName: order.name,
-          originalCost: cost,
-          costWithTax: formattedCost,
+          cost: formattedCost,
           transactionDate,
         });
       } catch (error: any) {
