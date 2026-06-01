@@ -22,6 +22,9 @@
   ],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@shopify/shopify-api": "^11.12.0",
     "@supabase/supabase-js": "^2.49.4",

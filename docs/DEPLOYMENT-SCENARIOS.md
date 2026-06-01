@@ -4,7 +4,7 @@ A full-stack application for managing Shopify orders with shipping integration.
 
 ## Prerequisites
 
-- Node.js 18 or higher
+- Node.js 20 or higher (required by `@whiskeysockets/baileys`)
 - Docker and Docker Compose (for Docker deployment)
 - Git
 - Redis (for local development)

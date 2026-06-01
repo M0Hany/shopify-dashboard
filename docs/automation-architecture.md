@@ -57,7 +57,7 @@ async function handleStatusChange(orderId: string, newStatus: string) {
 ### Docker Configuration
 ```dockerfile
 # Example Dockerfile
-FROM node:18-alpine
+FROM node:20-alpine
 
 WORKDIR /app
 COPY package*.json ./
