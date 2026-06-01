@@ -6,6 +6,7 @@ import CourierMap from './pages/CourierMap';
 import Finance from './pages/Finance';
 import WhatsAppInbox from './pages/WhatsAppInbox';
 import WhatsAppTemplates from './pages/WhatsAppTemplates';
+import WhatsAppWebConnect from './pages/WhatsAppWebConnect';
 import { Layout } from './components/layout/Layout';
 
 const queryClient = new QueryClient({
@@ -67,6 +68,7 @@ function App() {
             <Route path="/finance" element={<Finance />} />
             <Route path="/whatsapp" element={<WhatsAppInbox />} />
             <Route path="/whatsapp/templates" element={<WhatsAppTemplates />} />
+            <Route path="/whatsapp/connect" element={<WhatsAppWebConnect />} />
           </Routes>
         </Layout>
       </HashRouter>

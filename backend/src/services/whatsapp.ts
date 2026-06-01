@@ -1,4 +1,5 @@
 import axios, { AxiosError } from 'axios';
+import { isWabaEnabled } from '../config/whatsappConfig';
 import { logger } from '../utils/logger';
 import { WhatsAppMonitor } from './monitoring/WhatsAppMonitor';
 import { MessageService } from './messageService';
@@ -69,12 +70,19 @@ export class WhatsAppService {
     return formatted;
   }
 
+  private assertWabaEnabled(): void {
+    if (!isWabaEnabled()) {
+      throw new Error('WhatsApp Business API (WABA) is disabled on this server');
+    }
+  }
+
   private async sendTemplateMessage(
     phone: string,
     template: string,
     parameters: { type: string; text: string }[] = [],
     orderNumber?: string
   ): Promise<string | null> {
+    this.assertWabaEnabled();
     try {
       const originalPhone = phone;
       const formattedPhone = this.formatPhoneNumber(phone);
@@ -341,6 +349,7 @@ export class WhatsAppService {
 
   // Send text message (for inbox functionality)
   async sendTextMessage(phone: string, message: string): Promise<string | null> {
+    this.assertWabaEnabled();
     try {
       const formattedPhone = this.formatPhoneNumber(phone);
       

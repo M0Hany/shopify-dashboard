@@ -112,6 +112,31 @@ orderConfirmationQueue.on('ready', () => {
   logger.info('Order confirmation queue connected successfully');
 });
 
+orderConfirmationQueue.on('failed', async (job, error) => {
+  if (!job || job.name !== 'send-order-confirmation') return;
+  const maxAttempts = job.opts.attempts ?? 1;
+  if (job.attemptsMade < maxAttempts) return;
+
+  logger.error('Order confirmation job failed permanently', {
+    jobId: job.id,
+    orderId: job.data?.orderId,
+    error: error?.message
+  });
+
+  try {
+    const { OrderConfirmationService } = await import('../services/orderConfirmation.service');
+    if (job.data?.orderId) {
+      await OrderConfirmationService.getInstance().clearConfirmationScheduled(
+        String(job.data.orderId)
+      );
+    }
+  } catch (clearErr) {
+    logger.error('Failed to clear confirmation_scheduled after job failure', {
+      clearErr
+    });
+  }
+});
+
 // Log successful job completion
 shippingQueue.on('completed', (job) => {
   logger.info('Job completed', { jobId: job.id, queue: 'shipping-operations' });

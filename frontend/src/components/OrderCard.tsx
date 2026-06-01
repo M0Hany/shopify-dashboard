@@ -26,6 +26,11 @@ import {
 } from '../utils/orderPayment';
 import { normalizeOrderTagsArray, stripShippingRouteTags } from '../utils/shippingRouteTags';
 import { getOrderLatLng, tryParseLatLngFromMapsUrl } from '../utils/orderGeolocation';
+import {
+  applyTemplatePlaceholders,
+  buildWaMeLink,
+  orderItemsList,
+} from '../utils/whatsappMessaging';
 
 interface LocationSelections {
   cityId: string | null;
@@ -379,7 +384,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
       const json = await res.json();
       return (json.templates || []) as Array<{ id: string; key: string; name: string; body: string }>;
     },
-    enabled: showTemplateDialog,
+    staleTime: 5 * 60 * 1000,
   });
 
   // Legacy making-time detection (title/properties only; per line item for rush type)
@@ -1589,7 +1594,7 @@ Your order is being picked up by the shipping company and should be arriving to 
   const handleOrderReadyClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     
-    // If order is pending, change status to order-ready, add automated_whatsapp_confirmation tag, and send WhatsApp message
+    // Pending → order-ready: tags, status, send company/scooter template via linked WhatsApp
     if (currentStatus === 'pending') {
       // Check if order has customer phone number
       if (!order.customer?.phone) {
@@ -1622,12 +1627,13 @@ Your order is being picked up by the shipping company and should be arriving to 
       filtered = filtered.filter((tag: string) => !tag.startsWith('order_ready_date:'));
       filtered = [...filtered, orderReadyDateTag];
       
-      // Add automated_whatsapp_confirmation tag if it doesn't exist
-      if (!filtered.includes('automated_whatsapp_confirmation')) {
-        filtered = [...filtered, 'automated_whatsapp_confirmation'];
+      if (!filtered.includes('manual_whatsapp_confirmation')) {
+        filtered = [...filtered, 'manual_whatsapp_confirmation'];
       }
-      
-      // Update tags with both order_ready and automated_whatsapp_confirmation
+
+      const readyTemplateKey = getShippingConfirmationTemplateKey(filtered);
+
+      // Update tags: order_ready + manual_whatsapp_confirmation
       // This will make the order_ready tag appear instantly
       if (onUpdateTags) {
         onUpdateTags(order.id, filtered);
@@ -1642,31 +1648,8 @@ Your order is being picked up by the shipping company and should be arriving to 
         }
       });
 
-      // Send WhatsApp order_ready message
-      (async () => {
-        try {
-          const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/order-ready`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ 
-              phone: order.customer.phone,
-              orderNumber: order.name // Include order number (e.g., "#1023")
-            }),
-          });
+      void sendOrderReadyTemplateMessage(readyTemplateKey);
 
-          if (!response.ok) {
-            throw new Error('Failed to send order ready notification');
-          }
-          
-          toast.success('Order ready notification sent successfully');
-        } catch (error) {
-          console.error('Error sending order ready notification:', error);
-          toast.error('Failed to send order ready notification');
-        }
-      })();
-      
       return;
     }
     
@@ -1677,27 +1660,86 @@ Your order is being picked up by the shipping company and should be arriving to 
     }
   };
 
+  const buildTemplateMessageBody = (templateKey: string): string | null => {
+    if (!order.customer?.phone) return null;
+
+    const customerFirstName = order.customer.first_name?.trim() || 'Customer';
+    const orderItems = (order.line_items || []).filter(
+      (item: any) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item))
+    );
+    const placeholders = {
+      customer_first_name: customerFirstName,
+      items_list: orderItemsList(orderItems),
+      order_number: order.name,
+    };
+
+    const fromList = (allTemplates as { key: string; body: string }[] | undefined)?.find(
+      (t) => t.key === templateKey
+    );
+    const body = fromList?.body?.trim() || '';
+
+    if (!body) {
+      return null;
+    }
+
+    return applyTemplatePlaceholders(body, placeholders);
+  };
+
+  const openWhatsAppTemplateMessage = (templateKey: string) => {
+    if (!order.customer?.phone) return;
+    const message = buildTemplateMessageBody(templateKey);
+    if (!message) {
+      toast.error(`No template "${templateKey}". Add it under WhatsApp → Templates.`);
+      return;
+    }
+    window.open(buildWaMeLink(order.customer.phone, message), '_blank');
+  };
+
+  const sendOrderReadyTemplateMessage = async (templateKey: string) => {
+    if (!order.customer?.phone) return;
+
+    const message = buildTemplateMessageBody(templateKey);
+    if (!message) {
+      toast.error(
+        `No WhatsApp template for key "${templateKey}". Add it in WhatsApp → Message templates.`
+      );
+      return;
+    }
+
+    const webSecret = import.meta.env.VITE_WHATSAPP_WEB_ADMIN_SECRET as string | undefined;
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    if (webSecret) {
+      headers['X-WhatsApp-Web-Secret'] = webSecret;
+    }
+
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/web/send-text`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ phone: order.customer.phone, message }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(json.error || 'Failed to send via linked WhatsApp');
+      }
+      toast.success(`Order ready message sent (${templateKey})`);
+    } catch (error) {
+      console.error('WhatsApp Web send failed, opening wa.me', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Send failed — opening WhatsApp app instead'
+      );
+      window.open(buildWaMeLink(order.customer.phone, message), '_blank');
+    }
+  };
+
   // Handle actual confirmation after dialog
   const handleOrderReadyConfirm = async () => {
     if (!order.customer?.phone || isOrderConfirmed) return;
     
     try {
-      // Send the order ready notification via the API
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/order-ready`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          phone: order.customer.phone,
-          orderNumber: order.name // Include order number (e.g., "#1023")
-        }),
-      });
+      const templateKey = getShippingConfirmationTemplateKey(getCurrentTags());
+      await sendOrderReadyTemplateMessage(templateKey);
 
-      if (!response.ok) {
-        throw new Error('Failed to send order ready notification');
-      }
-      
       // Update tags to include order_ready_confirmed
       if (onUpdateTags) {
         const currentTags = getCurrentTags();

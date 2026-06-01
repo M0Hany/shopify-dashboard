@@ -1,17 +1,57 @@
-import { WhatsAppService } from './whatsapp';
+import { sendOrderConfirmationMessage } from './orderConfirmationMessaging';
 import { ShopifyService } from './shopify';
 import { logger } from '../utils/logger';
 import { ShopifyOrder } from './shopify';
 import { orderConfirmationQueue } from '../jobs/queue';
 
+const CONFIRMATION_SENT_TAG = 'confirmation_sent';
+const CONFIRMATION_SCHEDULED_TAG = 'confirmation_scheduled';
+
+const SKIP_CONFIRMATION_TAGS = [
+  'confirmed',
+  'ready_to_ship',
+  'shipped',
+  'fulfilled',
+  'paid',
+  'cancelled',
+  CONFIRMATION_SENT_TAG,
+  CONFIRMATION_SCHEDULED_TAG
+];
+
 export class OrderConfirmationService {
   private static instance: OrderConfirmationService;
-  private whatsappService: WhatsAppService;
   private shopifyService: ShopifyService;
 
   private constructor() {
-    this.whatsappService = new WhatsAppService();
     this.shopifyService = new ShopifyService();
+  }
+
+  private parseOrderTags(order: ShopifyOrder | { tags?: string | string[] }): string[] {
+    const tags = order.tags;
+    if (Array.isArray(tags)) return tags.map((t) => t.trim()).filter(Boolean);
+    if (typeof tags === 'string') return tags.split(',').map((t) => t.trim()).filter(Boolean);
+    return [];
+  }
+
+  private hasTag(tags: string[], name: string): boolean {
+    const target = name.trim().toLowerCase();
+    return tags.some((t) => t.trim().toLowerCase() === target);
+  }
+
+  private withTag(tags: string[], name: string): string[] {
+    if (this.hasTag(tags, name)) return tags;
+    return [...tags, name];
+  }
+
+  private withoutTag(tags: string[], name: string): string[] {
+    const target = name.trim().toLowerCase();
+    return tags.filter((t) => t.trim().toLowerCase() !== target);
+  }
+
+  private shouldSkipConfirmation(tags: string[]): boolean {
+    return tags.some((tag) =>
+      SKIP_CONFIRMATION_TAGS.includes(tag.trim().toLowerCase())
+    );
   }
 
   public static getInstance(): OrderConfirmationService {
@@ -23,23 +63,14 @@ export class OrderConfirmationService {
 
   public async handleNewOrder(order: ShopifyOrder): Promise<void> {
     try {
-      // Check if order already has required tags
-      const tags = Array.isArray(order.tags) 
-        ? order.tags 
-        : typeof order.tags === 'string'
-          ? order.tags.split(',').map((t: string) => t.trim())
-          : [];
+      const tags = this.parseOrderTags(order);
 
-      // Skip if order already has any of these tags
-      if (tags.some((tag: string) => [
-        'confirmed',
-        'ready_to_ship',
-        'shipped',
-        'fulfilled',
-        'paid',
-        'cancelled',
-        'confirmation_sent'
-      ].includes(tag.trim()))) {
+      if (this.shouldSkipConfirmation(tags)) {
+        logger.info('Order confirmation skipped — already sent or scheduled', {
+          orderId: order.id,
+          orderName: order.name,
+          tags
+        });
         return;
       }
 
@@ -54,31 +85,46 @@ export class OrderConfirmationService {
         return;
       }
 
-      // Schedule WhatsApp confirmation message to be sent after 1 hour
-      const delay = 60 * 60 * 1000; // 1 hour in milliseconds
-      
-      await orderConfirmationQueue.add(
-        'send-order-confirmation',
-        {
-          phone,
-          orderNumber: order.name,
-          customerName: order.customer.first_name,
-          orderId: order.id.toString()
-        },
-        {
-          delay,
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 60000 // 1 minute
-          }
-        }
-      );
+      // Default 1h delay; set ORDER_CONFIRMATION_DELAY_MS=0 for instant send (testing)
+      const defaultDelayMs = 60 * 60 * 1000;
+      const parsed = Number(process.env.ORDER_CONFIRMATION_DELAY_MS);
+      const delay = Number.isFinite(parsed) ? Math.max(0, parsed) : defaultDelayMs;
 
-      logger.info('Order confirmation message scheduled to be sent in 1 hour', {
+      const jobPayload = {
+        phone,
+        orderNumber: order.name,
+        customerName: order.customer.first_name,
+        orderId: order.id.toString()
+      };
+
+      if (delay === 0) {
+        await this.sendDelayedConfirmation(jobPayload);
+        logger.info('Order confirmation sent immediately (ORDER_CONFIRMATION_DELAY_MS=0)', {
+          orderId: order.id,
+          orderName: order.name,
+          phone
+        });
+        return;
+      }
+
+      await orderConfirmationQueue.add('send-order-confirmation', jobPayload, {
+        jobId: `order-confirmation-${order.id}`,
+        delay,
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 60000
+        }
+      });
+
+      const scheduledTags = this.withTag(tags, CONFIRMATION_SCHEDULED_TAG);
+      await this.shopifyService.updateOrderTags(order.id.toString(), scheduledTags);
+
+      logger.info('Order confirmation message scheduled', {
         orderId: order.id,
         orderName: order.name,
-        phone: phone,
+        phone,
+        delayMs: delay,
         scheduledAt: new Date(Date.now() + delay).toISOString()
       });
     } catch (error) {
@@ -91,14 +137,34 @@ export class OrderConfirmationService {
     }
   }
 
+  /** Orders eligible for first confirmation (same filter as scheduler). */
+  public async getPendingConfirmationOrders(): Promise<ShopifyOrder[]> {
+    return this.shopifyService.getOrders({
+      excluded_tags:
+        'confirmed,ready_to_ship,shipped,fulfilled,paid,cancelled,confirmation_sent,confirmation_scheduled'
+    });
+  }
+
+  /** Remove scheduled marker after a failed queue job so the order can be retried later. */
+  public async clearConfirmationScheduled(orderId: string): Promise<void> {
+    const id = parseInt(orderId, 10);
+    if (isNaN(id)) return;
+    const order = await this.shopifyService.getOrder(id);
+    if (!order) return;
+    const tags = this.parseOrderTags(order);
+    if (!this.hasTag(tags, CONFIRMATION_SCHEDULED_TAG)) return;
+    await this.shopifyService.updateOrderTags(
+      orderId,
+      this.withoutTag(tags, CONFIRMATION_SCHEDULED_TAG)
+    );
+  }
+
   public async checkPendingOrders(): Promise<void> {
     try {
       logger.info('Checking for pending orders without confirmation');
       
       // Get all orders without the specified tags
-      const orders = await this.shopifyService.getOrders({
-        excluded_tags: 'confirmed,ready_to_ship,shipped,fulfilled,paid,cancelled,confirmation_sent'
-      });
+      const orders = await this.getPendingConfirmationOrders();
 
       logger.info(`Found ${orders.length} pending orders without confirmation`);
 
@@ -141,23 +207,10 @@ export class OrderConfirmationService {
         return;
       }
 
-      const tags = Array.isArray(order.tags) 
-        ? order.tags 
-        : typeof order.tags === 'string'
-          ? order.tags.split(',').map((t: string) => t.trim())
-          : [];
+      const tags = this.parseOrderTags(order);
 
-      // Skip if order already has confirmation_sent tag or is in a final state
-      if (tags.some((tag: string) => [
-        'confirmed',
-        'ready_to_ship',
-        'shipped',
-        'fulfilled',
-        'paid',
-        'cancelled',
-        'confirmation_sent'
-      ].includes(tag.trim()))) {
-        logger.info('Order confirmation skipped - order already processed', {
+      if (this.hasTag(tags, CONFIRMATION_SENT_TAG)) {
+        logger.info('Order confirmation skipped — already sent', {
           orderId: data.orderId,
           orderNumber: data.orderNumber,
           tags
@@ -165,21 +218,38 @@ export class OrderConfirmationService {
         return;
       }
 
-      // Send WhatsApp confirmation message
-      await this.whatsappService.sendOrderConfirmation(
+      if (
+        tags.some((tag) =>
+          ['confirmed', 'ready_to_ship', 'shipped', 'fulfilled', 'paid', 'cancelled'].includes(
+            tag.trim().toLowerCase()
+          )
+        )
+      ) {
+        logger.info('Order confirmation skipped — order in final state', {
+          orderId: data.orderId,
+          orderNumber: data.orderNumber,
+          tags
+        });
+        return;
+      }
+
+      await sendOrderConfirmationMessage(
         data.phone,
         data.orderNumber,
         data.customerName
       );
 
-      // Add confirmation_sent tag
-      const newTags = [...tags, 'confirmation_sent'];
+      const newTags = this.withTag(
+        this.withoutTag(tags, CONFIRMATION_SCHEDULED_TAG),
+        CONFIRMATION_SENT_TAG
+      );
       await this.shopifyService.updateOrderTags(data.orderId, newTags);
 
-      logger.info('Delayed order confirmation message sent successfully', {
+      logger.info('Order confirmation sent; confirmation_sent tag applied', {
         orderId: data.orderId,
         orderName: data.orderNumber,
-        phone: data.phone
+        phone: data.phone,
+        tags: newTags
       });
     } catch (error) {
       logger.error('Error sending delayed order confirmation message', {

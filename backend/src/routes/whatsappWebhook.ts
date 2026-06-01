@@ -4,12 +4,22 @@ import fs from 'fs/promises';
 import path from 'path';
 import { WhatsAppMonitor } from '../services/monitoring/WhatsAppMonitor';
 import { WhatsAppService } from '../services/whatsapp';
+import { sendOrderConfirmationMessage } from '../services/orderConfirmationMessaging';
 import { MessageService } from '../services/messageService';
 import { logger } from '../utils/logger';
 import { ShopifyService } from '../services/shopify';
 import { supabase } from '../config/supabase';
 import { discordNotificationService } from '../services/discordNotifications';
 import { whatsappTemplateService } from '../services/whatsappTemplateService';
+import { isWabaEnabled } from '../config/whatsappConfig';
+import { OrderConfirmationService } from '../services/orderConfirmation.service';
+import { whatsappWebService } from '../services/whatsappWeb.service';
+
+const wabaDisabled = (_req: express.Request, res: express.Response) =>
+  res.status(410).json({
+    error: 'WhatsApp Business API (WABA) is disabled. Use the Messaging hub or WhatsApp app.',
+    wabaEnabled: false
+  });
 
 const router = express.Router();
 const whatsappService = new WhatsAppService();
@@ -376,7 +386,7 @@ router.post('/order-confirmed', async (req, res) => {
       return res.status(400).json({ error: 'Customer name is required' });
     }
 
-    await whatsappService.sendOrderConfirmation(phone, orderNumber, customerName);
+    await sendOrderConfirmationMessage(phone, orderNumber, customerName);
 
     res.json({ success: true, message: 'Order confirmation sent successfully' });
   } catch (error) {
@@ -387,6 +397,7 @@ router.post('/order-confirmed', async (req, res) => {
 
 // Send order ready notification
 router.post('/order-ready', async (req, res) => {
+  if (!isWabaEnabled()) return wabaDisabled(req, res);
   try {
     const { phone, orderNumber } = req.body;
     
@@ -439,8 +450,9 @@ router.post('/order-received', async (req, res) => {
   }
 });
 
-// Send text message (for inbox functionality)
+// Send text message (WABA inbox — disabled when WABA off)
 router.post('/send-text', async (req, res) => {
+  if (!isWabaEnabled()) return wabaDisabled(req, res);
   try {
     const { phone, message } = req.body;
     
@@ -468,6 +480,7 @@ router.post('/send-text', async (req, res) => {
 
 // Proxy WhatsApp media by media ID so frontend can preview images even when local file is missing
 router.get('/media/:mediaId', async (req, res) => {
+  if (!isWabaEnabled()) return wabaDisabled(req, res);
   try {
     const { mediaId } = req.params;
     const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -519,6 +532,9 @@ router.get('/media/:mediaId', async (req, res) => {
 
 // Get conversation history for a specific phone number
 router.get('/conversation/:phone', async (req, res) => {
+  if (!isWabaEnabled()) {
+    return res.json({ success: true, messages: [], count: 0, wabaEnabled: false });
+  }
   try {
     const { phone } = req.params;
     const { limit = 50 } = req.query;
@@ -542,6 +558,9 @@ router.get('/conversation/:phone', async (req, res) => {
 
 // Get all conversations
 router.get('/conversations', async (req, res) => {
+  if (!isWabaEnabled()) {
+    return res.json({ success: true, conversations: [], count: 0, wabaEnabled: false });
+  }
   try {
     const { limit = 20, unread } = req.query;
     const unreadOnly = unread === 'true' || unread === '1';
@@ -561,6 +580,9 @@ router.get('/conversations', async (req, res) => {
 
 // Mark messages as read for a phone number
 router.post('/mark-read/:phone', async (req, res) => {
+  if (!isWabaEnabled()) {
+    return res.json({ success: true, wabaEnabled: false });
+  }
   try {
     const { phone } = req.params;
     
@@ -580,15 +602,32 @@ router.post('/mark-read/:phone', async (req, res) => {
   }
 });
 
-// Get message statistics
-router.get('/stats', async (req, res) => {
+// Get message statistics (hub mode when WABA off)
+router.get('/stats', async (_req, res) => {
   try {
-    const stats = await MessageService.getMessageStats();
+    if (!isWabaEnabled()) {
+      const web = whatsappWebService.getStatus();
+      let pendingConfirmations = 0;
+      try {
+        const orders = await OrderConfirmationService.getInstance().getPendingConfirmationOrders();
+        pendingConfirmations = orders.length;
+      } catch {
+        /* ignore */
+      }
+      return res.json({
+        success: true,
+        mode: 'hub',
+        stats: {
+          unreadMessages: pendingConfirmations,
+          pendingConfirmations,
+          webStatus: web.status,
+          webConnected: web.status === 'connected'
+        }
+      });
+    }
 
-    res.json({ 
-      success: true, 
-      stats
-    });
+    const stats = await MessageService.getMessageStats();
+    res.json({ success: true, mode: 'waba', stats });
   } catch (error) {
     logger.error('Error getting message statistics:', error);
     res.status(500).json({ error: 'Failed to get message statistics' });
@@ -675,6 +714,9 @@ router.get('/webhook', (req, res) => {
 
 // Handle webhook notifications
 router.post('/webhook', express.json(), async (req, res) => {
+  if (!isWabaEnabled()) {
+    return res.status(200).json({ success: true, ignored: true, reason: 'WABA disabled' });
+  }
   try {
     const { entry } = req.body;
     

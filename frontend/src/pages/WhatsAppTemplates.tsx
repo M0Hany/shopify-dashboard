@@ -163,6 +163,12 @@ const WhatsAppTemplates: React.FC = () => {
               Add template
             </button>
             <Link
+              to="/whatsapp/connect"
+              className="px-3 py-1.5 text-sm font-medium text-white bg-white/20 hover:bg-white/30 rounded-full transition-colors"
+            >
+              Link account
+            </Link>
+            <Link
               to="/whatsapp"
               className="px-3 py-1.5 text-sm font-medium text-white bg-white/20 hover:bg-white/30 rounded-full transition-colors"
             >

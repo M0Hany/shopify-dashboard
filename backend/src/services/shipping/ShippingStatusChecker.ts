@@ -418,17 +418,20 @@ export class ShippingStatusChecker {
             newTags
           });
 
-          // Send WhatsApp delivery confirmation
+          // Send WhatsApp delivery confirmation (WABA only)
           try {
-            await this.whatsappService.sendDeliveryConfirmation(
-              order.customer.phone,
-              order.name,
-              order.customer.first_name
-            );
-            logger.info('WhatsApp delivery confirmation sent', {
-              orderName: order.name,
-              phone: order.customer.phone
-            });
+            const { isWabaEnabled } = await import('../../config/whatsappConfig');
+            if (isWabaEnabled()) {
+              await this.whatsappService.sendDeliveryConfirmation(
+                order.customer.phone,
+                order.name,
+                order.customer.first_name
+              );
+              logger.info('WhatsApp delivery confirmation sent', {
+                orderName: order.name,
+                phone: order.customer.phone
+              });
+            }
           } catch (whatsappError) {
             logger.error('Failed to send WhatsApp delivery confirmation', {
               error: whatsappError,

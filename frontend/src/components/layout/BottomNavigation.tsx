@@ -25,7 +25,7 @@ const BottomNavigation: React.FC = () => {
         const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/stats`);
         if (!response.ok) return 0;
         const data = await response.json();
-        return data.stats?.unreadMessages || 0;
+        return data.stats?.pendingConfirmations ?? data.stats?.unreadMessages ?? 0;
       } catch {
         return 0;
       }

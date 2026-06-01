@@ -2,7 +2,7 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Skip Puppeteer Chrome download to save space (we use WhatsApp Business API, not whatsapp-web.js)
+# Skip Puppeteer Chrome download (Baileys does not use a browser)
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
 # Show npm progress so build doesn't appear frozen
@@ -21,8 +21,12 @@ COPY . .
 # Build TypeScript code
 RUN npm run build
 
+# Persist Baileys session (order confirmation automation)
+RUN mkdir -p /app/data/whatsapp-web-auth
+
 # Create a non-root user
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup \
+  && chown -R appuser:appgroup /app/data
 
 # Switch to non-root user
 USER appuser

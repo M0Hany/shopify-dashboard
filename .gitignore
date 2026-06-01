@@ -70,6 +70,7 @@ debug/
 # WhatsApp Web session data
 .wwebjs_auth/
 .wwebjs_cache/
+data/whatsapp-web-auth/
 
 # Large media files and assets
 *.mp4

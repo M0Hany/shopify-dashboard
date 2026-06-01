@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './load-env';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
@@ -8,6 +8,9 @@ import financeRoutes from './routes/financeRoutes';
 import financialRoutes from './routes/financial';
 import shippingRoutes from './routes/shipping';
 import whatsappWebhook from './routes/whatsappWebhook';
+import whatsappWebRoutes from './routes/whatsappWeb';
+import whatsappHubRoutes from './routes/whatsappHub';
+import { whatsappWebService } from './services/whatsappWeb.service';
 import discordInteractions from './routes/discordInteractions';
 import { errorHandler } from './middleware/errorHandler';
 import { getConfig } from './config';
@@ -96,6 +99,8 @@ app.use('/api/finance', financeRoutes);
 app.use('/api/financial', financialRoutes);
 app.use('/api/shipping', shippingRoutes);
 app.use('/api/whatsapp', whatsappWebhook);
+app.use('/api/whatsapp/web', whatsappWebRoutes);
+app.use('/api/whatsapp/hub', whatsappHubRoutes);
 // Note: Discord interactions route is registered above, before json() middleware
 
 // Test endpoint
@@ -129,7 +134,20 @@ const startServer = async () => {
 
     // Run shipping status check once at startup (then cron takes over)
     scheduleShippingStatusCheck();
-    
+
+    const whatsappWebOn = whatsappWebService.isEnabled();
+    logger.info('WhatsApp Web configuration', {
+      enabled: whatsappWebOn,
+      env: process.env.WHATSAPP_WEB_ENABLED ?? '(not set)'
+    });
+
+    if (whatsappWebOn) {
+      whatsappWebService.start().catch((err) => {
+        logger.error('WhatsApp Web failed to start', { err });
+      });
+      logger.info('WhatsApp Web started — order confirmations use linked Business account');
+    }
+
     app.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
     });
