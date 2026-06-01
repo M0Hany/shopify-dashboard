@@ -3,6 +3,7 @@ import multer from 'multer';
 import xlsx from 'xlsx';
 import { ShopifyOrder, ShopifyService } from '../services/shopify';
 import { logger } from '../utils/logger';
+import { stripWorkflowStatusTags } from '../utils/orderWorkflowStatusTags';
 // REMOVED: Mylerz-specific location tags import (no longer used)
 // import { addLocationTags } from '../services/shopify';
 import { shopifyService } from '../services/shopify';
@@ -656,9 +657,9 @@ router.post('/bulk-import-shipping-costs', async (req: Request, res: Response) =
             ? order.tags.split(',').map((t: string) => t.trim())
             : [];
 
-        // Remove existing shipping/paid/fulfillment tags so bulk import can overwrite them
-        const filteredTags = existingTags.filter(
-          (tag: string) => {
+        // Remove shipping/paid/fulfillment tags and workflow status tags (order_ready, shipped, etc.)
+        const filteredTags = stripWorkflowStatusTags(
+          existingTags.filter((tag: string) => {
             const trimmedTag = tag.trim().toLowerCase();
             return (
               !trimmedTag.startsWith('shipping_company_cost:') &&
@@ -670,7 +671,7 @@ router.post('/bulk-import-shipping-costs', async (req: Request, res: Response) =
               !trimmedTag.startsWith('fulfilled_at:') &&
               trimmedTag !== 'priority'
             );
-          }
+          })
         );
 
         const formattedCost = parseFloat(cost).toFixed(2);

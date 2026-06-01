@@ -25,6 +25,7 @@ import { generateShippingSlipsPdf } from '../utils/shippingSlipsPdf';
 import { type OrderCardProps } from './OrderCard';
 import MapOrderCard from './MapOrderCard';
 import { reoptimizeStopOrder, routeRowStats } from '../utils/routeGeoUtils';
+import { stripWorkflowStatusTags } from '../utils/orderWorkflowStatusTags';
 
 import iconRetina from 'leaflet/dist/images/marker-icon-2x.png';
 import icon from 'leaflet/dist/images/marker-icon.png';
@@ -489,19 +490,21 @@ export function OrdersMapPanel({
       try {
         for (const order of routeOrders) {
           const currentTags = normalizeOrderTagsArray(order.tags);
-          const cleaned = currentTags.filter((tag) => {
-            const low = tag.trim().toLowerCase();
-            return (
-              !low.startsWith('scooter_shipping_cost:') &&
-              !low.startsWith('paid_date:') &&
-              !low.startsWith('fulfillment_date:') &&
-              !low.startsWith('fulfilled_at:') &&
-              low !== 'paid' &&
-              low !== 'fulfilled' &&
-              low !== 'priority' &&
-              low !== COURIER_ASSIGNED_TAG
-            );
-          });
+          const cleaned = stripWorkflowStatusTags(
+            currentTags.filter((tag) => {
+              const low = tag.trim().toLowerCase();
+              return (
+                !low.startsWith('scooter_shipping_cost:') &&
+                !low.startsWith('paid_date:') &&
+                !low.startsWith('fulfillment_date:') &&
+                !low.startsWith('fulfilled_at:') &&
+                low !== 'paid' &&
+                low !== 'fulfilled' &&
+                low !== 'priority' &&
+                low !== COURIER_ASSIGNED_TAG
+              );
+            })
+          );
 
           const nextTags = [
             ...cleaned,

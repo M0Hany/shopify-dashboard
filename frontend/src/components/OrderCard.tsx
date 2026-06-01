@@ -793,8 +793,14 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const handleStatusChange = (newStatus: string) => {
     if (newStatus === currentStatus) return;
     
-    // If the new status is cancelled, open cancellation reason dialog
+    // Shipped orders: cancel immediately (no reason popup), tag as cancelled after shipping
     if (newStatus === 'cancelled') {
+      const isShipped = trimmedTags.some((tag: string) => tag.trim().toLowerCase() === 'shipped');
+      if (isShipped) {
+        applyOrderCancellation({ afterShipping: true });
+        toast.success('Order cancelled');
+        return;
+      }
       setPendingCancellationStatus('cancelled');
       setCancellationReason('');
       setIsCancellationReasonModalOpen(true);
@@ -1144,49 +1150,9 @@ const OrderCard: React.FC<OrderCardProps> = ({
       toast.error('Please enter a cancellation reason');
       return;
     }
-    
-    // Get current tags
-    const currentTags = getCurrentTags();
-    
-    // Check if order is shipped
-    const isShipped = trimmedTags.includes('shipped');
-    
-    // Remove existing status tags and cancellation_reason tag
-    const statusTags = ['order_ready', 'on_hold', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
-    let filtered = currentTags.filter((tag: string) => {
-      const trimmed = tag.trim().toLowerCase();
-      return !statusTags.some(st => st.trim().toLowerCase() === trimmed) &&
-             !tag.trim().toLowerCase().startsWith('cancellation_reason:');
-    });
-    
-    // Add cancelled tag and cancellation reason tag
-    filtered = [...filtered, 'cancelled', `cancellation_reason:${cancellationReason.trim()}`];
-    
-    // Add cancelled_date tag
-    const today = format(new Date(), 'yyyy-MM-dd');
-    filtered = filtered.filter(tag => !tag.toLowerCase().startsWith('cancelled_date:'));
-    filtered = [...filtered, `cancelled_date:${today}`];
-    
-    // If order is shipped, add cancelled_after_shipping tag
-    if (isShipped) {
-      filtered = [...filtered, 'cancelled_after_shipping'];
-    }
-    
-    // Update tags first
-    if (onUpdateTags) {
-      onUpdateTags(order.id, filtered);
-    }
-    
-    // Then update status
-    if (onUpdateStatus) {
-      setLocalPriority(false);
-      onUpdateStatus(order.id, 'cancelled');
-    }
-    
-    // Update local status
-    setCurrentStatus('cancelled');
-    
-    // Close modal and reset
+
+    applyOrderCancellation({ reason: cancellationReason.trim() });
+
     setIsCancellationReasonModalOpen(false);
     setCancellationReason('');
     setPendingCancellationStatus(null);
@@ -1498,6 +1464,38 @@ Your order is being picked up by the shipping company and should be arriving to 
       : Array.isArray(tags) 
         ? tags.map(tag => tag.trim())
         : [];
+  };
+
+  const applyOrderCancellation = (options: { reason?: string; afterShipping?: boolean }) => {
+    const currentTags = getCurrentTags();
+    const statusTags = ['order_ready', 'on_hold', 'customer_confirmed', 'ready_to_ship', 'shipped', 'fulfilled'];
+    let filtered = currentTags.filter((tag: string) => {
+      const trimmed = tag.trim().toLowerCase();
+      return !statusTags.some(st => st.trim().toLowerCase() === trimmed) &&
+             !tag.trim().toLowerCase().startsWith('cancellation_reason:');
+    });
+
+    filtered = [...filtered, 'cancelled'];
+    if (options.reason) {
+      filtered = [...filtered, `cancellation_reason:${options.reason}`];
+    }
+
+    const today = format(new Date(), 'yyyy-MM-dd');
+    filtered = filtered.filter(tag => !tag.toLowerCase().startsWith('cancelled_date:'));
+    filtered = [...filtered, `cancelled_date:${today}`];
+
+    if (options.afterShipping) {
+      filtered = [...filtered, 'cancelled_after_shipping'];
+    }
+
+    if (onUpdateTags) {
+      onUpdateTags(order.id, filtered);
+    }
+    if (onUpdateStatus) {
+      setLocalPriority(false);
+      onUpdateStatus(order.id, 'cancelled');
+    }
+    setCurrentStatus('cancelled');
   };
 
   // Function to commit location changes
