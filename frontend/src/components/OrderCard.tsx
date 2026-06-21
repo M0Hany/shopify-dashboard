@@ -28,8 +28,8 @@ import { normalizeOrderTagsArray, stripShippingRouteTags } from '../utils/shippi
 import { getOrderLatLng, tryParseLatLngFromMapsUrl } from '../utils/orderGeolocation';
 import {
   applyTemplatePlaceholders,
+  buildOrderTemplatePlaceholders,
   buildWaMeLink,
-  orderItemsList,
 } from '../utils/whatsappMessaging';
 
 interface LocationSelections {
@@ -1256,22 +1256,21 @@ Please kindly confirm 🤍`;
 Your order is being picked up by the shipping company and should be arriving to you in the next couple of days🚚`;
   };
 
-  // Build WhatsApp message from template placeholders (same as Send template menu)
+  const getFilteredOrderItems = () =>
+    (order.line_items || []).filter(
+      (item: any) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item))
+    );
+
   const buildTemplateMessage = (
     templateBody: string,
-    customerFirstName: string,
-    orderItems: any[]
+    customerFirstName: string
   ): string => {
-    const itemsList =
-      orderItems
-        .map((item: any) => {
-          const variant = item.variant_title ? ` (${item.variant_title})` : '';
-          return `- ${item.title}${variant}`;
-        })
-        .join('\n') || '—';
-    return templateBody
-      .replace(/\{\{customer_first_name\}\}/g, customerFirstName)
-      .replace(/\{\{items_list\}\}/g, itemsList);
+    const placeholders = buildOrderTemplatePlaceholders(
+      order,
+      customerFirstName,
+      getFilteredOrderItems()
+    );
+    return applyTemplatePlaceholders(templateBody, placeholders);
   };
 
   // Handle manual WhatsApp confirmation button click (order ready view)
@@ -1280,9 +1279,6 @@ Your order is being picked up by the shipping company and should be arriving to 
     if (!order.customer?.phone || !isOrderReady) return;
 
     const customerFirstName = order.customer.first_name?.trim() || 'Customer';
-    const orderItems = (order.line_items || []).filter(
-      (item: any) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item))
-    );
 
     if (!shippingConfirmationTemplate?.body) {
       toast.error(
@@ -1293,8 +1289,7 @@ Your order is being picked up by the shipping company and should be arriving to 
 
     const message = buildTemplateMessage(
       shippingConfirmationTemplate.body,
-      customerFirstName,
-      orderItems
+      customerFirstName
     );
 
     const formattedPhone = formatPhoneNumber(order.customer.phone);
@@ -1321,10 +1316,7 @@ Your order is being picked up by the shipping company and should be arriving to 
       return;
     }
     const customerFirstName = order.customer.first_name?.trim() || 'Customer';
-    const orderItems = (order.line_items || []).filter(
-      (item: any) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item))
-    );
-    const body = buildTemplateMessage(t.body, customerFirstName, orderItems);
+    const body = buildTemplateMessage(t.body, customerFirstName);
     const formattedPhone = formatPhoneNumber(order.customer.phone);
     const whatsAppLink = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(body)}`;
     window.open(whatsAppLink, '_blank');
@@ -1664,14 +1656,11 @@ Your order is being picked up by the shipping company and should be arriving to 
     if (!order.customer?.phone) return null;
 
     const customerFirstName = order.customer.first_name?.trim() || 'Customer';
-    const orderItems = (order.line_items || []).filter(
-      (item: any) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item))
+    const placeholders = buildOrderTemplatePlaceholders(
+      order,
+      customerFirstName,
+      getFilteredOrderItems()
     );
-    const placeholders = {
-      customer_first_name: customerFirstName,
-      items_list: orderItemsList(orderItems),
-      order_number: order.name,
-    };
 
     const fromList = (allTemplates as { key: string; body: string }[] | undefined)?.find(
       (t) => t.key === templateKey

@@ -27,10 +27,15 @@ export type OrderForMapSummary = {
   financial_status: string;
   fulfillment_status: string;
   tags?: string[] | string | null;
+  shipping_lines?: Array<{ price: string; title?: string }>;
+  total_shipping_price_set?: {
+    shop_money?: { amount: string };
+  };
   custom_attributes?: Array<{ key: string; value: string }>;
   line_items: Array<{
     title: string;
     quantity: number;
+    price?: string;
     variant_title: string | null;
     properties?: Array<{ name: string; value: string }>;
   }>;

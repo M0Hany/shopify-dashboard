@@ -14,10 +14,10 @@ import {
 import { toast } from 'react-hot-toast';
 import {
   applyTemplatePlaceholders,
+  buildOrderTemplatePlaceholders,
   buildWaMeLink,
   formatPhoneForWhatsApp,
   getOrderPhone,
-  orderItemsList,
 } from '../utils/whatsappMessaging';
 
 const API = import.meta.env.VITE_API_URL;
@@ -39,10 +39,20 @@ interface Template {
 interface HubOrder {
   id: number;
   name: string;
+  total_price?: string;
   tags?: string | string[];
   customer?: { first_name?: string; phone?: string };
   shipping_address?: { phone?: string };
-  line_items?: Array<{ title: string; variant_title?: string | null }>;
+  line_items?: Array<{
+    title: string;
+    quantity?: number;
+    price?: string;
+    variant_title?: string | null;
+  }>;
+  shipping_lines?: Array<{ price: string; title?: string }>;
+  total_shipping_price_set?: {
+    shop_money?: { amount: string };
+  };
 }
 
 function parseTags(tags: string | string[] | undefined): string[] {
@@ -149,13 +159,19 @@ const WhatsAppInbox: React.FC = () => {
 
   const placeholderData = useMemo(() => {
     if (!selectedOrder) {
-      return { customer_first_name: 'Customer', items_list: '—', order_number: '—' };
+      return {
+        customer_first_name: 'Customer',
+        items_list: '—',
+        items_list_simple: '—',
+        order_number: '—',
+        shipping_price: '—',
+        total_price: '—',
+      };
     }
-    return {
-      customer_first_name: selectedOrder.customer?.first_name?.trim() || 'Customer',
-      items_list: orderItemsList(selectedOrder.line_items),
-      order_number: selectedOrder.name,
-    };
+    return buildOrderTemplatePlaceholders(
+      selectedOrder,
+      selectedOrder.customer?.first_name?.trim() || 'Customer'
+    );
   }, [selectedOrder]);
 
   const sendWebMutation = useMutation({

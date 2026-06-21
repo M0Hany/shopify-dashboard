@@ -11,6 +11,10 @@ import { OrderConfirmationService } from '../services/orderConfirmation.service'
 import { WhatsAppService } from '../services/whatsapp';
 import { AxiosError } from 'axios';
 import { discordNotificationService } from '../services/discordNotifications';
+import {
+  fulfilledReviewMessaging,
+  tagsIncludeFulfilled
+} from '../services/fulfilledReviewMessaging.service';
 
 const router = express.Router();
 const shopifyServiceInstance = new ShopifyService();
@@ -205,6 +209,7 @@ router.put('/bulk/status', async (req: Request, res: Response) => {
     const orderNames: string[] = [];
     
     // Update each order
+    let reviewBulkIndex = 0;
     for (let i = 0; i < orderIds.length; i++) {
       const orderId = Number(orderIds[i]);
       const orderBeforeResult = ordersBefore[i];
@@ -219,6 +224,18 @@ router.put('/bulk/status', async (req: Request, res: Response) => {
         
         await shopifyServiceInstance.updateOrderStatus(orderId, normalizedStatus, orderPreviousStatus);
         results.successful.push(orderId);
+
+        if (
+          normalizedStatus === 'fulfilled' &&
+          orderBeforeResult.status === 'fulfilled' &&
+          !tagsIncludeFulfilled(orderBeforeResult.value.tags)
+        ) {
+          await fulfilledReviewMessaging.scheduleReviewForOrder({
+            orderId,
+            bulkIndex: reviewBulkIndex
+          });
+          reviewBulkIndex += 1;
+        }
       } catch (error: any) {
         results.failed.push({
           orderId,
@@ -277,6 +294,10 @@ router.put('/:id/status', async (req: Request, res: Response) => {
     
     // Update the order status (pass previous status to check for ready_to_ship -> shipped transition)
     await shopifyServiceInstance.updateOrderStatus(orderId, status, previousStatus);
+    
+    if (status === 'fulfilled' && !tagsIncludeFulfilled(orderBefore.tags)) {
+      await fulfilledReviewMessaging.scheduleReviewForOrder({ orderId });
+    }
     
     // Get updated order for notification
     const orderAfter = await shopifyServiceInstance.getOrder(orderId);
@@ -551,8 +572,18 @@ router.put('/:id/tags', async (req: Request, res: Response) => {
     const wasMarkedBefore = hasDeliveredMarkTag(orderBefore.tags);
     const isMarkedAfter = hasDeliveredMarkTag(newTags);
 
+    const reviewBulkIndex =
+      typeof req.body.reviewBulkIndex === 'number' ? req.body.reviewBulkIndex : undefined;
+
     await shopifyServiceInstance.updateOrderTags(orderId, newTags);
     invalidateCourierMapCache();
+
+    await fulfilledReviewMessaging.scheduleIfNewlyFulfilled({
+      orderId: orderIdNum,
+      tagsBefore: orderBefore.tags,
+      tagsAfter: newTags,
+      bulkIndex: reviewBulkIndex
+    });
 
     logger.info('Tags update successful:', {
       orderId,
@@ -607,6 +638,7 @@ router.post('/bulk-import-shipping-costs', async (req: Request, res: Response) =
     };
 
     // Process each entry
+    let reviewBulkIndex = 0;
     for (const entry of entries) {
       const { orderNumber, cost } = entry;
       
@@ -685,6 +717,14 @@ router.post('/bulk-import-shipping-costs', async (req: Request, res: Response) =
 
         // Update order tags
         await shopifyServiceInstance.updateOrderTags(order.id.toString(), filteredTags);
+
+        if (!tagsIncludeFulfilled(existingTags)) {
+          await fulfilledReviewMessaging.scheduleReviewForOrder({
+            orderId: order.id,
+            bulkIndex: reviewBulkIndex
+          });
+          reviewBulkIndex += 1;
+        }
 
         results.successful.push({
           orderId: order.id,

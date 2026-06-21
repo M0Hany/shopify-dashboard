@@ -267,10 +267,13 @@ const WhatsAppTemplates: React.FC = () => {
                   required
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Placeholders: <code className="bg-gray-100 px-1 rounded">{'{{customer_first_name}}'}</code>
-                  {', '}
-                  <code className="bg-gray-100 px-1 rounded">{'{{items_list}}'}</code>
-                  {' '}(for shipping confirmation only)
+                  Placeholders:{' '}
+                  <code className="bg-gray-100 px-1 rounded">{'{{customer_first_name}}'}</code>,{' '}
+                  <code className="bg-gray-100 px-1 rounded">{'{{items_list}}'}</code> (qty &amp; price per line),{' '}
+                  <code className="bg-gray-100 px-1 rounded">{'{{items_list_simple}}'}</code>,{' '}
+                  <code className="bg-gray-100 px-1 rounded">{'{{shipping_price}}'}</code>,{' '}
+                  <code className="bg-gray-100 px-1 rounded">{'{{total_price}}'}</code>,{' '}
+                  <code className="bg-gray-100 px-1 rounded">{'{{order_number}}'}</code>
                 </p>
               </div>
               <div className="flex justify-end gap-2 pt-2">
@@ -331,14 +334,17 @@ const WhatsAppTemplates: React.FC = () => {
                   value={newBody}
                   onChange={(e) => setNewBody(e.target.value)}
                   rows={8}
-                  placeholder="Use {{customer_first_name}} and {{items_list}} as placeholders"
+                  placeholder="Use {{customer_first_name}}, {{items_list}}, {{shipping_price}}, {{total_price}}"
                   className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   required
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Placeholders: <code className="bg-gray-100 px-1 rounded">{'{{customer_first_name}}'}</code>
-                  {', '}
-                  <code className="bg-gray-100 px-1 rounded">{'{{items_list}}'}</code>
+                  Placeholders:{' '}
+                  <code className="bg-gray-100 px-1 rounded">{'{{customer_first_name}}'}</code>,{' '}
+                  <code className="bg-gray-100 px-1 rounded">{'{{items_list}}'}</code>,{' '}
+                  <code className="bg-gray-100 px-1 rounded">{'{{shipping_price}}'}</code>,{' '}
+                  <code className="bg-gray-100 px-1 rounded">{'{{total_price}}'}</code>,{' '}
+                  <code className="bg-gray-100 px-1 rounded">{'{{order_number}}'}</code>
                 </p>
               </div>
               <div className="flex justify-end gap-2 pt-2">

@@ -1,9 +1,6 @@
-import { format } from 'date-fns';
 import { ShippingService } from './ShippingService';
 import { ShopifyOrder, ShopifyService } from '../../services/shopify';
-import { updateOrderStatus } from '../../services/shopify';
 import { logger } from '../../utils/logger';
-import { WhatsAppService } from '../whatsapp';
 
 interface ShippingStatusResponse {
   tabOneOrders: any[];
@@ -12,11 +9,8 @@ interface ShippingStatusResponse {
 }
 
 export class ShippingStatusChecker {
-  private static readonly DELIVERY_STATUSES = ["Delivered", "Confirm Delivered"];
-  private static readonly RETURN_STATUS = "Ready for Return";
   private static shippingService = ShippingService.getInstance();
   private static shopifyService = new ShopifyService();
-  private static whatsappService = new WhatsAppService();
 
   public static async checkAndUpdateStatuses(): Promise<void> {
     try {
@@ -84,73 +78,7 @@ export class ShippingStatusChecker {
         }
       }));
 
-      // Company shipped orders (default / other-company; not scooter or pickup) — check fulfillments for delivered
-      const companyShippedOrders = orders.filter(order => {
-        const tags = Array.isArray(order.tags) ? 
-          order.tags.map(t => t.trim().toLowerCase()) : 
-          typeof order.tags === 'string' ? 
-            order.tags.split(',').map(t => t.trim().toLowerCase()) : 
-            [];
-        if (!tags.includes('shipped')) return false;
-        const isScooterOrPickup = tags.some((tag) =>
-          tag.startsWith('shipping_method:') &&
-          (tag.includes('scooter') || tag.includes('pickup'))
-        );
-        return !isScooterOrPickup;
-      });
-
-      logger.info(`Found ${companyShippedOrders.length} company shipped orders to check for delivery status`);
-
-      await Promise.all(companyShippedOrders.map(async (order) => {
-        try {
-          // Check if order has fulfillments with displayStatus === "DELIVERED"
-          if (order.fulfillments && Array.isArray(order.fulfillments) && order.fulfillments.length > 0) {
-            const deliveredFulfillment = order.fulfillments.find(
-              (fulfillment) => fulfillment.displayStatus === 'DELIVERED'
-            );
-
-            if (deliveredFulfillment) {
-              // Get current tags
-              const tags = Array.isArray(order.tags) ? 
-                order.tags.map(t => t.trim()) : 
-                typeof order.tags === 'string' ? 
-                  order.tags.split(',').map(t => t.trim()) : 
-                  [];
-
-              // Remove shipped tag and add fulfilled tag
-              const newTags = tags.filter(tag => 
-                tag.toLowerCase() !== 'shipped' && !tag.toLowerCase().startsWith('fulfillment_date:')
-              );
-              
-              // Add fulfilled tag
-              newTags.push('fulfilled');
-              
-              // Add fulfillment date tag
-              const today = format(new Date(), 'yyyy-MM-dd');
-              newTags.push(`fulfillment_date:${today}`);
-
-              // Update order tags
-              await this.shopifyService.updateOrderTags(order.id.toString(), newTags);
-              
-              logger.info('Updated company shipped order status to fulfilled (delivered)', {
-                orderId: order.id,
-                orderName: order.name,
-                displayStatus: deliveredFulfillment.displayStatus,
-                previousStatus: 'shipped',
-                newStatus: 'fulfilled'
-              });
-            }
-          }
-        } catch (error) {
-          logger.error('Error processing company shipped order', {
-            error,
-            orderId: order.id
-          });
-        }
-      }));
-
-
-      // Continue with existing ready to ship orders check
+      // Ready to ship → shipped when carrier picks up (auto-fulfill on delivery removed)
       const readyToShipOrders = orders.filter(order => {
         const tags = Array.isArray(order.tags) ? 
           order.tags.map(t => t.trim()) : 
@@ -344,111 +272,4 @@ export class ShippingStatusChecker {
       tabThreeOrders: tabThree.Value.Result
     };
   }
-
-  private static async processOrders(orders: ShopifyOrder[], shippingData: ShippingStatusResponse): Promise<void> {
-    const allShippingOrders = [
-      ...shippingData.tabOneOrders,
-      ...shippingData.tabTwoOrders,
-      ...shippingData.tabThreeOrders
-    ];
-
-    logger.info(`Processing ${orders.length} orders against ${allShippingOrders.length} shipping records`);
-
-    for (const order of orders) {
-      try {
-        // Format phone number
-        let formattedPhone = order.customer.phone.replace(/\D/g, '');
-        if (formattedPhone.startsWith('20')) {
-          formattedPhone = formattedPhone.substring(2);
-        }
-        if (!formattedPhone.startsWith('0')) {
-          formattedPhone = '0' + formattedPhone;
-        }
-
-        logger.info('Processing order', {
-          orderName: order.name,
-          customerName: order.customer.first_name,
-          formattedPhone
-        });
-
-        // Find matching shipping status
-        const matchingStatus = allShippingOrders.find(shipping => {
-          const shippingPhone = shipping.PhoneNo?.replace(/\D/g, '') || '';
-          const normalizedShippingPhone = shippingPhone.startsWith('0') ? 
-            shippingPhone : `0${shippingPhone}`;
-          
-          const matches = normalizedShippingPhone === formattedPhone &&
-            shipping.CustomerName?.toLowerCase().includes(order.customer.first_name.toLowerCase());
-
-          if (matches) {
-            logger.info('Found matching shipping record', {
-              orderName: order.name,
-              shippingStatus: shipping.PackageENStatus,
-              customerName: shipping.CustomerName
-            });
-          }
-
-          return matches;
-        });
-
-        if (matchingStatus && this.DELIVERY_STATUSES.includes(matchingStatus.PackageENStatus)) {
-          logger.info('Auto-fulfilling order due to delivery confirmation', {
-            orderName: order.name,
-            status: matchingStatus.PackageENStatus
-          });
-
-          // Add fulfillment date and update status
-          const today = format(new Date(), 'yyyy-MM-dd');
-          const tags = Array.isArray(order.tags) ? 
-            order.tags : 
-            typeof order.tags === 'string' ? 
-              order.tags.split(',').map(t => t.trim()) : 
-              [];
-
-          const newTags = [
-            ...tags.filter((tag: string) => tag !== 'shipped'),
-            'fulfilled',
-            `fulfillment_date:${today}`
-          ];
-
-          // Update order in Shopify
-          await updateOrderStatus(order.id, newTags);
-          logger.info('Successfully updated order status', {
-            orderName: order.name,
-            newTags
-          });
-
-          // Send WhatsApp delivery confirmation (WABA only)
-          try {
-            const { isWabaEnabled } = await import('../../config/whatsappConfig');
-            if (isWabaEnabled()) {
-              await this.whatsappService.sendDeliveryConfirmation(
-                order.customer.phone,
-                order.name,
-                order.customer.first_name
-              );
-              logger.info('WhatsApp delivery confirmation sent', {
-                orderName: order.name,
-                phone: order.customer.phone
-              });
-            }
-          } catch (whatsappError) {
-            logger.error('Failed to send WhatsApp delivery confirmation', {
-              error: whatsappError,
-              orderName: order.name
-            });
-            // Don't throw the error - we don't want to stop processing other orders
-          }
-        } else {
-          logger.info('No status update needed', {
-            orderName: order.name,
-            matchFound: !!matchingStatus,
-            status: matchingStatus?.PackageENStatus
-          });
-        }
-      } catch (error) {
-        logger.error(`Error processing order ${order.name}:`, error);
-      }
-    }
-  }
-} 
+}

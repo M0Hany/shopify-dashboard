@@ -183,6 +183,10 @@ interface Order {
   financial_status: string;
   fulfillment_status: string;
   tags?: string[] | string | null;
+  shipping_lines?: Array<{ price: string; title?: string }>;
+  total_shipping_price_set?: {
+    shop_money?: { amount: string; currency_code?: string };
+  };
   payment_gateway_names?: string[]; 
   fulfillments?: Array<{
     id: number;
@@ -1813,13 +1817,24 @@ const Orders = () => {
 
   // Mutation for updating tags
   const updateTagsMutation = useMutation({
-    mutationFn: async ({ orderId, newTags }: { orderId: number; newTags: string[] }) => {
+    mutationFn: async ({
+      orderId,
+      newTags,
+      reviewBulkIndex
+    }: {
+      orderId: number;
+      newTags: string[];
+      reviewBulkIndex?: number;
+    }) => {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}/tags`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ tags: newTags }),
+        body: JSON.stringify({
+          tags: newTags,
+          ...(reviewBulkIndex !== undefined ? { reviewBulkIndex } : {})
+        }),
       });
       if (!response.ok) {
         throw new Error('Failed to update tags');
@@ -1838,8 +1853,8 @@ const Orders = () => {
     // Intentionally no background refresh to avoid fetching after each single update
   });
 
-  const handleUpdateTags = (orderId: number, newTags: string[]) => {
-    updateTagsMutation.mutate({ orderId, newTags });
+  const handleUpdateTags = (orderId: number, newTags: string[], reviewBulkIndex?: number) => {
+    updateTagsMutation.mutate({ orderId, newTags, reviewBulkIndex });
   };
 
   const handleReplaceShippingRouteForOrder = useCallback(

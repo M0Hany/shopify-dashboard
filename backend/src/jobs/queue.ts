@@ -32,6 +32,15 @@ export const orderConfirmationQueue = new Queue('order-confirmations', {
   }
 });
 
+export const reviewMessageQueue = new Queue('review-messages', {
+  redis: {
+    host: config.redis.host,
+    port: config.redis.port,
+    maxRetriesPerRequest: config.redis.maxRetriesPerRequest,
+    retryStrategy: config.redis.retryStrategy
+  }
+});
+
 // Process status changes
 statusQueue.process(async (job) => {
   try {
@@ -70,10 +79,24 @@ orderConfirmationQueue.process('send-order-confirmation', async (job) => {
   }
 });
 
+reviewMessageQueue.process('send-review', async (job) => {
+  try {
+    const { FulfilledReviewMessagingService } = await import(
+      '../services/fulfilledReviewMessaging.service'
+    );
+    await FulfilledReviewMessagingService.getInstance().sendReviewMessage(job.data);
+    logger.info('Review message job completed', { jobId: job.id });
+  } catch (error) {
+    logger.error('Review message job failed', { jobId: job.id, error });
+    throw error;
+  }
+});
+
 // Error handling for queues
 let hasLoggedShippingError = false;
 let hasLoggedStatusError = false;
 let hasLoggedOrderConfirmationError = false;
+let hasLoggedReviewMessageError = false;
 
 shippingQueue.on('error', (error) => {
   if (!hasLoggedShippingError) {
@@ -150,12 +173,29 @@ orderConfirmationQueue.on('completed', (job) => {
   logger.info('Job completed', { jobId: job.id, queue: 'order-confirmations' });
 });
 
+reviewMessageQueue.on('error', (error) => {
+  if (!hasLoggedReviewMessageError) {
+    logger.error('Review message queue error:', error);
+    hasLoggedReviewMessageError = true;
+  }
+});
+
+reviewMessageQueue.on('ready', () => {
+  hasLoggedReviewMessageError = false;
+  logger.info('Review message queue connected successfully');
+});
+
+reviewMessageQueue.on('completed', (job) => {
+  logger.info('Job completed', { jobId: job.id, queue: 'review-messages' });
+});
+
 // Clean up completed jobs
 async function cleanupJobs() {
   await Promise.all([
     statusQueue.clean(7 * 24 * 3600 * 1000), // 7 days
     shippingQueue.clean(7 * 24 * 3600 * 1000),
-    orderConfirmationQueue.clean(7 * 24 * 3600 * 1000) // 7 days
+    orderConfirmationQueue.clean(7 * 24 * 3600 * 1000), // 7 days
+    reviewMessageQueue.clean(7 * 24 * 3600 * 1000)
   ]);
 }
 

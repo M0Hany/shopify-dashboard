@@ -488,7 +488,8 @@ export function OrdersMapPanel({
 
       setBulkPaying(true);
       try {
-        for (const order of routeOrders) {
+        for (let i = 0; i < routeOrders.length; i++) {
+          const order = routeOrders[i];
           const currentTags = normalizeOrderTagsArray(order.tags);
           const cleaned = stripWorkflowStatusTags(
             currentTags.filter((tag) => {
@@ -514,7 +515,7 @@ export function OrdersMapPanel({
             'fulfilled',
             `fulfillment_date:${paidDate}`,
           ];
-          mapOrderCardProps.onUpdateTags(order.id, nextTags);
+          mapOrderCardProps.onUpdateTags(order.id, nextTags, i);
         }
 
         toast.success(`Marked ${routeOrders.length} order(s) as paid (${perOrderCost} each)`);
