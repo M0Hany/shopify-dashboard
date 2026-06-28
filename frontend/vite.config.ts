@@ -31,6 +31,6 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     host: true,
-    allowedHosts: ['ocdcrochet.store', 'www.ocdcrochet.store']
+    allowedHosts: ['165.22.25.137', 'ocdcrochet.store', 'www.ocdcrochet.store']
   },
 }) 

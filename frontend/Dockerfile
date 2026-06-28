@@ -2,6 +2,11 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+ARG VITE_API_URL=http://165.22.25.137
+ARG VITE_API_BASE_URL=http://165.22.25.137/api
+ENV VITE_API_URL=$VITE_API_URL
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+
 # Show npm progress so build doesn't appear frozen
 ENV NPM_CONFIG_LOGLEVEL=info
 ENV NPM_CONFIG_FUND=false

@@ -80,11 +80,13 @@ export function getConfig(): Config {
       memberId: process.env.SHIPPING_MEMBER_ID || '',
     },
     allowedOrigins: [
-      'https://ocdcrochet.store',
-      'https://www.ocdcrochet.store',
+      ...((process.env.CORS_ORIGIN || '')
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean)),
       'http://localhost:5173',
-      'https://localhost:5173'
-    ]
+      'https://localhost:5173',
+    ],
   };
 }
 
@@ -92,12 +94,7 @@ export function getConfig(): Config {
 export const config = getConfig();
 
 export const corsOptions = {
-  origin: [
-    'https://ocdcrochet.store',
-    'https://www.ocdcrochet.store',
-    'http://localhost:5173',
-    'https://localhost:5173'
-  ],
+  origin: getConfig().allowedOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
