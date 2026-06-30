@@ -2,8 +2,8 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-ARG VITE_API_URL=http://165.22.25.137
-ARG VITE_API_BASE_URL=http://165.22.25.137/api
+ARG VITE_API_URL=https://ocdcrochet.qzz.io
+ARG VITE_API_BASE_URL=https://ocdcrochet.qzz.io/api
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 

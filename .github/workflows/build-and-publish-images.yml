@@ -53,8 +53,8 @@ jobs:
           push: true
           platforms: linux/amd64
           build-args: |
-            VITE_API_URL=http://165.22.25.137
-            VITE_API_BASE_URL=http://165.22.25.137/api
+            VITE_API_URL=https://ocdcrochet.qzz.io
+            VITE_API_BASE_URL=https://ocdcrochet.qzz.io/api
           tags: |
             ghcr.io/m0hany/shopify-dashboard-frontend:latest
             ghcr.io/m0hany/shopify-dashboard-frontend:${{ github.sha }}
