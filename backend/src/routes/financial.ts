@@ -1,67 +1,13 @@
 import { Router, Request, Response } from 'express';
-import { productCostService } from '../services/financial/productCostService';
 import { expenseService } from '../services/financial/expenseService';
 import { shippingLedgerService } from '../services/financial/shippingLedgerService';
 import { profitEngineService } from '../services/financial/profitEngineService';
-import { payoutService } from '../services/financial/payoutService';
-import { ShippingType, ShippingStatus } from '../types/financial';
+import { financeMonthService, getShippingRecordsForMonth } from '../services/financial/financeMonthService';
+import { financeMonthSnapshotService } from '../services/financial/financeMonthSnapshotService';
+import { isPastFinanceMonth } from '../utils/financeMonth';
 import { logger } from '../utils/logger';
 
 const router = Router();
-
-// ==================== Product Costs ====================
-router.get('/product-costs', async (req: Request, res: Response) => {
-  try {
-    const costs = await productCostService.getAll();
-    res.json(costs);
-  } catch (error: any) {
-    logger.error('Error fetching product costs:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch product costs' });
-  }
-});
-
-router.get('/product-costs/:id', async (req: Request, res: Response) => {
-  try {
-    const cost = await productCostService.getById(req.params.id);
-    if (!cost) {
-      return res.status(404).json({ error: 'Product cost not found' });
-    }
-    res.json(cost);
-  } catch (error: any) {
-    logger.error('Error fetching product cost:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch product cost' });
-  }
-});
-
-router.post('/product-costs', async (req: Request, res: Response) => {
-  try {
-    const cost = await productCostService.create(req.body);
-    res.status(201).json(cost);
-  } catch (error: any) {
-    logger.error('Error creating product cost:', error);
-    res.status(500).json({ error: error.message || 'Failed to create product cost' });
-  }
-});
-
-router.put('/product-costs/:id', async (req: Request, res: Response) => {
-  try {
-    const cost = await productCostService.update(req.params.id, req.body);
-    res.json(cost);
-  } catch (error: any) {
-    logger.error('Error updating product cost:', error);
-    res.status(500).json({ error: error.message || 'Failed to update product cost' });
-  }
-});
-
-router.delete('/product-costs/:id', async (req: Request, res: Response) => {
-  try {
-    await productCostService.delete(req.params.id);
-    res.json({ success: true });
-  } catch (error: any) {
-    logger.error('Error deleting product cost:', error);
-    res.status(500).json({ error: error.message || 'Failed to delete product cost' });
-  }
-});
 
 // ==================== Expenses ====================
 router.get('/expenses', async (req: Request, res: Response) => {
@@ -123,189 +69,14 @@ router.delete('/expenses/:id', async (req: Request, res: Response) => {
 router.get('/shipping', async (req: Request, res: Response) => {
   try {
     const month = req.query.month as string | undefined;
-    
-    // Get manual shipping records from database
-    const manualRecords = await shippingLedgerService.getAll(month);
-    
-    // If month is specified, also get shipping costs from order tags
-    let tagBasedRecords: any[] = [];
-    if (month) {
-      const fulfilledOrders = await profitEngineService.getFulfilledOrdersForMonth(month);
-      const cancelledOrders = await profitEngineService.getCancelledOrdersWithShippingCosts(month);
-      
-      // Process fulfilled orders
-      for (const order of fulfilledOrders) {
-        const tags = Array.isArray(order.tags)
-          ? order.tags
-          : typeof order.tags === 'string'
-            ? order.tags.split(',').map((t: string) => t.trim())
-            : [];
-
-        // Check for shipping_company_cost tag
-        const companyCostTag = tags.find((tag: string) => 
-          tag.trim().startsWith('shipping_company_cost:')
-        );
-
-        if (companyCostTag) {
-          const actualCost = parseFloat(companyCostTag.split(':')[1]?.trim() || '0');
-          if (!isNaN(actualCost)) {
-            // Get customer shipping charged
-            let customerCharged = 0;
-            if (order.total_shipping_price_set?.shop_money?.amount) {
-              customerCharged = parseFloat(order.total_shipping_price_set.shop_money.amount || '0');
-            } else if (order.shipping_lines && order.shipping_lines.length > 0) {
-              customerCharged = order.shipping_lines.reduce((sum: number, line: any) => {
-                return sum + parseFloat(line.price || '0');
-              }, 0);
-            }
-
-            // Get transaction date from tag
-            const costDateTag = tags.find((tag: string) => 
-              tag.trim().startsWith('shipping_company_cost_date:')
-            );
-            const transactionDate = costDateTag 
-              ? costDateTag.split(':')[1]?.trim() 
-              : new Date().toISOString().split('T')[0];
-
-            // Extract order number (e.g., "#1120" -> "1120")
-            const orderNumber = order.name.replace(/[^0-9]/g, '');
-
-            tagBasedRecords.push({
-              id: `tag-${order.id}`,
-              order_id: parseInt(orderNumber) || undefined,
-              type: 'Company' as ShippingType,
-              customer_shipping_charged: customerCharged,
-              actual_shipping_cost: actualCost,
-              status: 'Delivered' as ShippingStatus,
-              date: transactionDate,
-              month: month,
-              invoice_id: undefined,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-              isFromTag: true, // Flag to identify tag-based records
-            });
-          }
-        }
-
-        // Also check for scooter shipping costs
-        const isScooter = tags.some((tag: string) => 
-          tag.trim().toLowerCase().startsWith('shipping_method:') && 
-          tag.trim().toLowerCase().includes('scooter')
-        );
-
-        if (isScooter) {
-          const scooterCostTag = tags.find((tag: string) => 
-            tag.trim().startsWith('scooter_shipping_cost:')
-          );
-
-          if (scooterCostTag) {
-            const actualCost = parseFloat(scooterCostTag.split(':')[1]?.trim() || '0');
-            if (!isNaN(actualCost)) {
-              // Get customer shipping charged
-              let customerCharged = 0;
-              if (order.total_shipping_price_set?.shop_money?.amount) {
-                customerCharged = parseFloat(order.total_shipping_price_set.shop_money.amount || '0');
-              } else if (order.shipping_lines && order.shipping_lines.length > 0) {
-                customerCharged = order.shipping_lines.reduce((sum: number, line: any) => {
-                  return sum + parseFloat(line.price || '0');
-                }, 0);
-              } else {
-                customerCharged = 50; // Default estimate
-              }
-
-              // Get paid date - ONLY use paid_date, no fallback
-              const paidDateTag = tags.find((tag: string) => 
-                tag.trim().startsWith('paid_date:')
-              );
-              const transactionDate = paidDateTag 
-                ? paidDateTag.split(':')[1]?.trim() 
-                : new Date().toISOString().split('T')[0];
-
-              const orderNumber = order.name.replace(/[^0-9]/g, '');
-
-              tagBasedRecords.push({
-                id: `tag-scooter-${order.id}`,
-                order_id: parseInt(orderNumber) || undefined,
-                type: 'Uber' as ShippingType,
-                customer_shipping_charged: customerCharged,
-                actual_shipping_cost: actualCost,
-                status: 'Delivered' as ShippingStatus,
-                date: transactionDate,
-                month: month,
-                invoice_id: undefined,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-                isFromTag: true,
-              });
-            }
-          }
-        }
-      }
-
-      // Process cancelled orders with shipping costs
-      for (const order of cancelledOrders) {
-        const tags = Array.isArray(order.tags)
-          ? order.tags
-          : typeof order.tags === 'string'
-            ? order.tags.split(',').map((t: string) => t.trim())
-            : [];
-
-        // Check for shipping_company_cost tag
-        const companyCostTag = tags.find((tag: string) => 
-          tag.trim().startsWith('shipping_company_cost:')
-        );
-
-        if (companyCostTag) {
-          const actualCost = parseFloat(companyCostTag.split(':')[1]?.trim() || '0');
-          if (!isNaN(actualCost)) {
-            // For cancelled orders, customer was not charged (order was cancelled)
-            const customerCharged = 0;
-
-            // Get transaction date from tag
-            const costDateTag = tags.find((tag: string) => 
-              tag.trim().startsWith('shipping_company_cost_date:')
-            );
-            const paidDateTag = tags.find((tag: string) => 
-              tag.trim().startsWith('paid_date:')
-            );
-            const transactionDate = costDateTag 
-              ? costDateTag.split(':')[1]?.trim() 
-              : paidDateTag
-                ? paidDateTag.split(':')[1]?.trim()
-                : new Date().toISOString().split('T')[0];
-
-            // Extract order number (e.g., "#1120" -> "1120")
-            const orderNumber = order.name.replace(/[^0-9]/g, '');
-
-            tagBasedRecords.push({
-              id: `tag-cancelled-${order.id}`,
-              order_id: parseInt(orderNumber) || undefined,
-              type: 'Company' as ShippingType,
-              customer_shipping_charged: customerCharged,
-              actual_shipping_cost: actualCost,
-              status: 'Cancelled' as ShippingStatus,
-              date: transactionDate,
-              month: month,
-              invoice_id: undefined,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-              isFromTag: true, // Flag to identify tag-based records
-            });
-          }
-        }
-      }
+    if (!month) {
+      const manualRecords = await shippingLedgerService.getAll();
+      res.json(manualRecords);
+      return;
     }
 
-    // Combine manual records and tag-based records
-    const allRecords = [...manualRecords, ...tagBasedRecords];
-    
-    // Sort by date (most recent first)
-    allRecords.sort((a, b) => {
-      const dateA = new Date(a.date).getTime();
-      const dateB = new Date(b.date).getTime();
-      return dateB - dateA;
-    });
-
+    const allRecords = await getShippingRecordsForMonth(month);
+    allRecords.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     res.json(allRecords);
   } catch (error: any) {
     logger.error('Error fetching shipping records:', error);
@@ -356,6 +127,38 @@ router.delete('/shipping/:id', async (req: Request, res: Response) => {
   }
 });
 
+// ==================== Finance month bundle (single request per month) ====================
+router.get('/month/:month', async (req: Request, res: Response) => {
+  try {
+    const month = req.params.month;
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: 'Month must be YYYY-MM' });
+    }
+    res.set({ 'Cache-Control': 'no-store' });
+    const bundle = await financeMonthService.getMonthBundle(month);
+    res.json(bundle);
+  } catch (error: any) {
+    const msg = error?.message || 'Failed to fetch finance month';
+    logger.error(`Error fetching finance month bundle: ${msg}`);
+    res.status(500).json({ error: msg });
+  }
+});
+
+router.post('/month/:month/calculate', async (req: Request, res: Response) => {
+  try {
+    const month = req.params.month;
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: 'Month must be YYYY-MM' });
+    }
+    const bundle = await financeMonthService.calculateAndSaveMonth(month);
+    res.json(bundle);
+  } catch (error: any) {
+    const msg = error?.message || 'Failed to calculate finance month';
+    logger.error(`Error calculating finance month: ${msg}`);
+    res.status(500).json({ error: msg });
+  }
+});
+
 // ==================== Profit Engine ====================
 router.get('/profit', async (req: Request, res: Response) => {
   try {
@@ -363,7 +166,7 @@ router.get('/profit', async (req: Request, res: Response) => {
     if (!month) {
       return res.status(400).json({ error: 'Month parameter is required (YYYY-MM)' });
     }
-    const profit = await profitEngineService.getMonthlyProfit(month);
+    const profit = await profitEngineService.getMonthlyProfitRow(month);
     if (!profit) {
       return res.status(404).json({ error: 'Profit not found for this month' });
     }
@@ -380,8 +183,8 @@ router.post('/profit/calculate', async (req: Request, res: Response) => {
     if (!month) {
       return res.status(400).json({ error: 'Month parameter is required (YYYY-MM)' });
     }
-    const profit = await profitEngineService.calculateProfit(month);
-    res.json(profit);
+    const bundle = await financeMonthService.calculateAndSaveMonth(month);
+    res.json(bundle.profit);
   } catch (error: any) {
     logger.error('Error calculating profit:', error);
     res.status(500).json({ error: error.message || 'Failed to calculate profit' });
@@ -431,58 +234,6 @@ router.get('/profit/cancelled-orders', async (req: Request, res: Response) => {
   }
 });
 
-// ==================== Payouts ====================
-router.get('/payouts', async (req: Request, res: Response) => {
-  try {
-    const month = req.query.month as string;
-    if (!month) {
-      return res.status(400).json({ error: 'Month parameter is required (YYYY-MM)' });
-    }
-    const payout = await payoutService.getMonthlyPayout(month);
-    if (!payout) {
-      return res.status(404).json({ error: 'Payout not found for this month' });
-    }
-    res.json(payout);
-  } catch (error: any) {
-    logger.error('Error fetching payout:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch payout' });
-  }
-});
-
-router.post('/payouts/calculate', async (req: Request, res: Response) => {
-  try {
-    const month = req.query.month as string || req.body.month;
-    if (!month) {
-      return res.status(400).json({ error: 'Month parameter is required (YYYY-MM)' });
-    }
-    const payout = await payoutService.calculatePayouts(month);
-    res.json(payout);
-  } catch (error: any) {
-    logger.error('Error calculating payout:', error);
-    res.status(500).json({ error: error.message || 'Failed to calculate payout' });
-  }
-});
-
-router.get('/payout-config', async (req: Request, res: Response) => {
-  try {
-    const config = await payoutService.getConfig();
-    res.json(config);
-  } catch (error: any) {
-    logger.error('Error fetching payout config:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch payout config' });
-  }
-});
-
-router.put('/payout-config', async (req: Request, res: Response) => {
-  try {
-    const config = await payoutService.updateConfig(req.body);
-    res.json(config);
-  } catch (error: any) {
-    logger.error('Error updating payout config:', error);
-    res.status(500).json({ error: error.message || 'Failed to update payout config' });
-  }
-});
-
 // ==================== Dashboard Endpoints ====================
 router.get('/dashboard/product-margins', async (req: Request, res: Response) => {
   try {
@@ -502,24 +253,36 @@ router.get('/dashboard/shipping-performance', async (req: Request, res: Response
       return res.status(400).json({ error: 'Month parameter is required (YYYY-MM)' });
     }
 
-    // Calculate shipping profit/loss ONLY from order tags (no manual shipping_records)
-    const fulfilledOrders = await profitEngineService.getFulfilledOrdersForMonth(month);
-    
-    // Calculate scooter shipping profit/loss from tags
-    const scooterShippingProfitLoss = await profitEngineService.calculateScooterShippingProfitLoss(fulfilledOrders, month);
-    
-    // Calculate company shipping profit/loss from tags
-    const companyShippingProfitLoss = await profitEngineService.calculateCompanyShippingProfitLoss(fulfilledOrders, month);
+    const snapshot = await financeMonthSnapshotService.get(month);
+    if (isPastFinanceMonth(month) && snapshot?.shipping_summary) {
+      const s = snapshot.shipping_summary;
+      const scooter = Number(s.scooterProfitLoss) || 0;
+      const company = Number(s.companyProfitLoss) || 0;
+      return res.json({
+        month,
+        total_profit_loss: scooter + company,
+        uber_profit_loss: scooter,
+        company_profit_loss: company,
+        cancelled_losses: 0,
+      });
+    }
 
-    // Total profit/loss from tags only
-    const totalProfitLoss = scooterShippingProfitLoss + companyShippingProfitLoss;
+    const fulfilledOrders = await profitEngineService.getFulfilledOrdersForMonth(month);
+    const scooterShippingProfitLoss = await profitEngineService.calculateScooterShippingProfitLoss(
+      fulfilledOrders,
+      month
+    );
+    const companyShippingProfitLoss = await profitEngineService.calculateCompanyShippingProfitLoss(
+      fulfilledOrders,
+      month
+    );
 
     res.json({
       month,
-      total_profit_loss: totalProfitLoss,
-      uber_profit_loss: scooterShippingProfitLoss, // Uber = Scooter
+      total_profit_loss: scooterShippingProfitLoss + companyShippingProfitLoss,
+      uber_profit_loss: scooterShippingProfitLoss,
       company_profit_loss: companyShippingProfitLoss,
-      cancelled_losses: 0, // Cancelled losses not tracked in tags
+      cancelled_losses: 0,
     });
   } catch (error: any) {
     logger.error('Error fetching shipping performance:', error);
@@ -535,7 +298,7 @@ router.get('/dashboard/expense-breakdown', async (req: Request, res: Response) =
     }
 
     const byCategory = await expenseService.getByCategory(month);
-    const monthlyProfit = await profitEngineService.getMonthlyProfit(month);
+    const monthlyProfit = await profitEngineService.getMonthlyProfitRow(month);
     const revenue = monthlyProfit?.revenue || 0;
 
     const breakdown = Object.entries(byCategory).map(([category, amount]) => ({

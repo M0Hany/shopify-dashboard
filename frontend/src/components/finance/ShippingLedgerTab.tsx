@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { financialService, ShippingRecord, ShippingRecordInput, ShippingType, ShippingStatus } from '../../services/financialService';
-import { format } from 'date-fns';
+import { financeMonthRefetchInterval, isPastFinanceMonth } from '../../utils/financeMonthQuery';
 import { TrashIcon, PencilIcon, XMarkIcon, PlusIcon, DocumentArrowDownIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import BulkShippingCostImportDialog from './BulkShippingCostImportDialog';
@@ -36,9 +36,10 @@ export default function ShippingLedgerTab({ selectedMonth, setSelectedMonth, onB
     queryKey: ['shipping-records', selectedMonth],
     queryFn: () => financialService.getShippingRecords(selectedMonth),
     enabled: !!selectedMonth,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    gcTime: 0,
+    staleTime: isPastFinanceMonth(selectedMonth) ? Infinity : 0,
+    refetchOnMount: !isPastFinanceMonth(selectedMonth),
+    refetchInterval: financeMonthRefetchInterval(selectedMonth),
+    gcTime: 24 * 60 * 60 * 1000,
   });
 
   const createMutation = useMutation({

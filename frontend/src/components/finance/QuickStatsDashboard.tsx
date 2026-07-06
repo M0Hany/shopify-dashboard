@@ -3,9 +3,7 @@ import { financialService } from '../../services/financialService';
 import { format } from 'date-fns';
 import { 
   CurrencyDollarIcon, 
-  ChartBarIcon, 
   BanknotesIcon,
-  ArrowTrendingUpIcon,
   ArrowTrendingDownIcon
 } from '@heroicons/react/24/outline';
 import { useNavigate } from 'react-router-dom';
@@ -18,15 +16,6 @@ export default function QuickStatsDashboard() {
   const { data: profit, isLoading: profitLoading } = useQuery({
     queryKey: ['monthly-profit', currentMonth],
     queryFn: () => financialService.getMonthlyProfit(currentMonth),
-    retry: false,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    gcTime: 0,
-  });
-
-  const { data: payout, isLoading: payoutLoading } = useQuery({
-    queryKey: ['monthly-payout', currentMonth],
-    queryFn: () => financialService.getMonthlyPayout(currentMonth),
     retry: false,
     staleTime: 0,
     refetchOnMount: 'always',
@@ -60,22 +49,13 @@ export default function QuickStatsDashboard() {
       tab: 0,
     },
     {
-      name: 'Gross Profit',
-      value: profit?.gross_profit || 0,
-      icon: ChartBarIcon,
-      color: profit?.gross_profit && profit.gross_profit >= 0 ? 'text-green-600' : 'text-red-600',
-      bgColor: profit?.gross_profit && profit.gross_profit >= 0 ? 'bg-green-50' : 'bg-red-50',
-      borderColor: profit?.gross_profit && profit.gross_profit >= 0 ? 'border-green-200' : 'border-red-200',
-      tab: 0,
-    },
-    {
-      name: 'DPP',
-      value: profit?.dpp || payout?.dpp || 0,
+      name: 'Profit',
+      value: profit?.cash_dpp ?? profit?.dpp ?? 0,
       icon: BanknotesIcon,
       color: 'text-purple-600',
       bgColor: 'bg-purple-50',
       borderColor: 'border-purple-200',
-      tab: 4,
+      tab: 0,
     },
     {
       name: 'Expenses',
@@ -97,7 +77,7 @@ export default function QuickStatsDashboard() {
     }).format(value);
   };
 
-  if (profitLoading || payoutLoading) {
+  if (profitLoading) {
     return (
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-6">
         {[1, 2, 3, 4].map((i) => (

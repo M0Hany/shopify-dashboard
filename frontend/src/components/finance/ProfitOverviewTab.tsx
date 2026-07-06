@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { financialService } from '../../services/financialService';
+import { useFinanceMonth } from '../../hooks/useFinanceMonth';
+import { isPastFinanceMonth } from '../../utils/financeMonthQuery';
 import { format, subMonths } from 'date-fns';
 import { 
   ArrowTrendingUpIcon,
@@ -10,7 +12,6 @@ import {
   EyeIcon,
   ArrowUpIcon,
   ArrowDownIcon,
-  Cog6ToothIcon,
   CubeIcon
 } from '@heroicons/react/24/outline';
 import { SkeletonCard, SkeletonChart } from '../common/SkeletonLoader';
@@ -83,7 +84,7 @@ function ComparisonBadge({ current, previous, label }: { current: number; previo
 interface ProfitOverviewTabProps {
   selectedMonth: string;
   setSelectedMonth: (month: string) => void;
-  onNavigate?: (tab: 'expenses' | 'shipping' | 'payouts' | 'product-margins' | 'settings') => void;
+  onNavigate?: (tab: 'expenses' | 'shipping') => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
 }
@@ -97,25 +98,21 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [showCharts, setShowCharts] = useState(false);
 
-  const { data: profit, isLoading, error } = useQuery({
-    queryKey: ['monthly-profit', selectedMonth],
-    queryFn: () => financialService.getMonthlyProfit(selectedMonth),
-    enabled: !!selectedMonth,
-    retry: false,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    gcTime: 0,
-  });
+  const {
+    data: monthBundle,
+    isLoading: monthLoading,
+    error: monthError,
+    isFetching: monthFetching,
+  } = useFinanceMonth(selectedMonth);
 
-  // Get payout config to calculate payouts
-  const { data: payoutConfig, isLoading: configLoading } = useQuery({
-    queryKey: ['payout-config'],
-    queryFn: () => financialService.getPayoutConfig(),
-    retry: false,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    gcTime: 0,
-  });
+  const profit = monthBundle?.profit ?? null;
+  const fulfilledOrders = monthBundle?.orders ?? [];
+  const paidOrderCount = monthBundle?.paidOrderCount ?? fulfilledOrders.length;
+  const fromCache = monthBundle?.fromCache ?? false;
+  const expensesForModal = monthBundle?.expenses ?? [];
+  const shippingRecordsForModal = monthBundle?.shippingRecords ?? [];
+  const shippingData = monthBundle?.shippingSummary ?? null;
+  const isLiveMonth = monthBundle ? !monthBundle.fromCache : !isPastFinanceMonth(selectedMonth);
 
   // Get previous month for comparison
   const previousMonth = useMemo(() => {
@@ -130,90 +127,32 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
     queryFn: () => financialService.getMonthlyProfit(previousMonth),
     enabled: !!previousMonth,
     retry: false,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    gcTime: 0,
+    staleTime: Infinity,
   });
 
-  // Get last 6 months for trend chart - only fetch when charts are shown
   const { data: trendData } = useQuery({
     queryKey: ['profit-trend', selectedMonth],
     queryFn: async () => {
-      const months = [];
       const [year, month] = selectedMonth.split('-').map(Number);
-      for (let i = 5; i >= 0; i--) {
-        const date = new Date(year, month - 1 - i, 1);
-        const monthStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-        try {
-          const data = await financialService.getMonthlyProfit(monthStr);
-          months.push({
-            month: format(date, 'MMM'),
-            revenue: data.revenue,
-            profit: data.gross_profit,
-            dpp: data.dpp,
-          });
-        } catch {
-          months.push({
-            month: format(date, 'MMM'),
-            revenue: 0,
-            profit: 0,
-            dpp: 0,
-          });
-        }
-      }
-      return months;
+      const startDate = new Date(year, month - 1 - 5, 1);
+      const endDate = new Date(year, month - 1, 1);
+      const startMonth = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, '0')}`;
+      const endMonth = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}`;
+      const rows = await financialService.getProfitSummary(startMonth, endMonth);
+      return rows.map((data) => {
+        const [y, m] = data.month.split('-').map(Number);
+        return {
+          month: format(new Date(y, m - 1, 1), 'MMM'),
+          revenue: data.revenue,
+          profit: data.gross_profit,
+          dpp: data.dpp,
+        };
+      });
     },
     enabled: !!selectedMonth && showCharts,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    gcTime: 0,
+    staleTime: 10 * 60 * 1000,
   });
 
-  const calculateMutation = useMutation({
-    mutationFn: (month: string) => financialService.calculateProfit(month),
-    onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey: ['monthly-profit', selectedMonth] });
-      const previousProfit = queryClient.getQueryData(['monthly-profit', selectedMonth]);
-      return { previousProfit };
-    },
-    onSuccess: (data) => {
-      // Update with real calculated data
-      queryClient.setQueryData(['monthly-profit', selectedMonth], data);
-      // Also update payout if it exists (since it depends on profit)
-      queryClient.invalidateQueries({ queryKey: ['monthly-payout', selectedMonth], exact: true });
-      toast.success('Profit calculated successfully!');
-    },
-    onError: (error: any, variables, context) => {
-      if (context?.previousProfit) {
-        queryClient.setQueryData(['monthly-profit', selectedMonth], context.previousProfit);
-      }
-      toast.error(error.message || 'Failed to calculate profit');
-    },
-  });
-
-  // Fetch fulfilled orders and cancelled orders - always fetch to calculate revenue correctly
-  const { data: fulfilledOrders, isLoading: ordersLoading } = useQuery({
-    queryKey: ['fulfilled-orders', selectedMonth],
-    queryFn: async () => {
-      const fulfilled = await financialService.getFulfilledOrders(selectedMonth);
-      const cancelled = await financialService.getCancelledOrders(selectedMonth);
-      return [...fulfilled, ...cancelled];
-    },
-    enabled: !!selectedMonth,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    gcTime: 0,
-  });
-
-  // Fetch expenses - always fetch to calculate correct expenses in the box
-  const { data: expensesForModal, isLoading: expensesModalLoading } = useQuery({
-    queryKey: ['financial-expenses', selectedMonth],
-    queryFn: () => financialService.getExpenses(selectedMonth),
-    enabled: !!selectedMonth,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    gcTime: 0,
-  });
 
   // Calculate expenses from expenses query (not from profit.total_expenses)
   const calculatedExpenses = useMemo(() => {
@@ -221,28 +160,7 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
     return expensesForModal.reduce((sum: number, expense: any) => sum + expense.amount, 0);
   }, [expensesForModal]);
 
-  // Fetch shipping records - always fetch to calculate correct profit/loss
-  const { data: shippingRecordsForModal, isLoading: shippingRecordsModalLoading } = useQuery({
-    queryKey: ['shipping-records', selectedMonth],
-    queryFn: () => financialService.getShippingRecords(selectedMonth),
-    enabled: !!selectedMonth,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    gcTime: 0,
-  });
-
-  const { data: ordersForShippingModal } = useQuery({
-    queryKey: ['shipping-orders', selectedMonth],
-    queryFn: async () => {
-      const fulfilled = await financialService.getFulfilledOrders(selectedMonth);
-      const cancelled = await financialService.getCancelledOrders(selectedMonth);
-      return [...fulfilled, ...cancelled];
-    },
-    enabled: showShippingCostModal && !!selectedMonth,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    gcTime: 0,
-  });
+  const ordersForShippingModal = fulfilledOrders;
 
   // Sort orders based on sortField and sortDirection
   const sortedOrders = useMemo(() => {
@@ -320,68 +238,6 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
     });
   }, [fulfilledOrders, sortField, sortDirection]);
 
-  // Calculate shipping costs and revenue from tags
-  const { data: shippingData } = useQuery({
-    queryKey: ['shipping-data-from-tags', selectedMonth],
-    queryFn: async () => {
-      const orders = await financialService.getFulfilledOrders(selectedMonth);
-      let totalCosts = 0;
-      let totalCustomerCharged = 0;
-      
-      orders.forEach((order: any) => {
-        const tags = Array.isArray(order.tags)
-          ? order.tags
-          : typeof order.tags === 'string'
-            ? order.tags.split(',').map((t: string) => t.trim())
-            : [];
-
-        // Get customer shipping charged
-        let customerCharged = 0;
-        if (order.total_shipping_price_set?.shop_money?.amount) {
-          customerCharged = parseFloat(order.total_shipping_price_set.shop_money.amount || '0');
-        } else if (order.shipping_lines && order.shipping_lines.length > 0) {
-          customerCharged = order.shipping_lines.reduce((sum: number, line: any) => {
-            return sum + parseFloat(line.price || '0');
-          }, 0);
-        }
-        totalCustomerCharged += customerCharged;
-
-        // Get scooter shipping cost
-        const scooterCostTag = tags.find((tag: string) => 
-          tag.trim().startsWith('scooter_shipping_cost:')
-        );
-        if (scooterCostTag) {
-          const cost = parseFloat(scooterCostTag.split(':')[1]?.trim() || '0');
-          if (!isNaN(cost)) {
-            totalCosts += cost;
-          }
-        }
-
-        // Get company shipping cost
-        const companyCostTag = tags.find((tag: string) => 
-          tag.trim().startsWith('shipping_company_cost:')
-        );
-        if (companyCostTag) {
-          const cost = parseFloat(companyCostTag.split(':')[1]?.trim() || '0');
-          if (!isNaN(cost)) {
-            totalCosts += cost;
-          }
-        }
-      });
-      
-      return {
-        costs: totalCosts,
-        customerCharged: totalCustomerCharged,
-        profitLoss: totalCustomerCharged - totalCosts,
-      };
-    },
-    enabled: !!selectedMonth && !!profit,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    gcTime: 0,
-  });
-
-
   const formatMonthDisplay = (monthStr: string) => {
     const [year, month] = monthStr.split('-');
     const date = new Date(parseInt(year), parseInt(month) - 1, 1);
@@ -423,39 +279,10 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
     }, 0);
   }, [fulfilledOrders]);
 
-  // Calculate DPP using calculated revenue and shipping cost (matching modal logic)
-  // DPP = Revenue - Expenses - Shipping Cost
-  const calculatedDPP = useMemo(() => {
+  // Profit = Revenue - Expenses - Shipping Cost
+  const calculatedProfit = useMemo(() => {
     return calculatedRevenue - calculatedExpenses - calculatedShippingCost;
   }, [calculatedRevenue, calculatedExpenses, calculatedShippingCost]);
-
-  // Calculate payouts and final profit directly from displayed numbers
-  const calculatedPayouts = useMemo(() => {
-    if (!payoutConfig || !calculatedDPP) return null;
-
-    const mediaBuyerAmount = calculatedDPP * (payoutConfig.media_buyer_percent / 100);
-    const opsAmount = calculatedDPP * (payoutConfig.ops_percent / 100);
-    const crmAmount = calculatedDPP * (payoutConfig.crm_percent / 100);
-    
-    // Calculate owner pay
-    let ownerAmount = 0;
-    if (payoutConfig.owner_pay_type === 'fixed') {
-      ownerAmount = payoutConfig.owner_pay_value;
-    } else {
-      ownerAmount = calculatedDPP * (payoutConfig.owner_pay_value / 100);
-    }
-
-    // Calculate net business profit
-    const netBusinessProfit = calculatedDPP - mediaBuyerAmount - opsAmount - crmAmount - ownerAmount;
-
-    return {
-      media_buyer_amount: mediaBuyerAmount,
-      ops_amount: opsAmount,
-      crm_amount: crmAmount,
-      owner_amount: ownerAmount,
-      net_business_profit: netBusinessProfit,
-    };
-  }, [payoutConfig, calculatedDPP]);
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-EG', {
@@ -468,21 +295,21 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
 
   // Prepare pie chart data
   const pieData = profit ? [
-    { name: 'COGS', value: profit.cogs, color: '#ef4444' },
     { name: 'Expenses', value: profit.total_expenses, color: '#f59e0b' },
-    { name: 'Shipping Loss', value: Math.abs(profit.shipping_loss), color: '#8b5cf6' },
-    { name: 'Gross Profit', value: profit.gross_profit, color: '#10b981' },
+    { name: 'Production', value: profit.production_costs_paid || 0, color: '#f97316' },
+    { name: 'Shipping', value: Math.abs(profit.shipping_loss), color: '#8b5cf6' },
+    { name: 'Net Profit', value: Math.max(profit.cash_dpp ?? profit.dpp ?? 0, 0), color: '#10b981' },
   ].filter(item => item.value > 0) : [];
 
-  // Prepare bar chart data
   const barData = profit ? [
     { name: 'Revenue', value: calculatedRevenue, color: '#3b82f6' },
-    { name: 'COGS', value: profit.cogs, color: '#ef4444' },
-    { name: 'Gross Profit', value: profit.gross_profit, color: '#10b981' },
+    { name: 'Expenses', value: profit.total_expenses, color: '#f59e0b' },
+    { name: 'Shipping', value: Math.abs(profit.shipping_loss), color: '#8b5cf6' },
   ] : [];
 
   // Combined loading state - wait for all critical data before showing numbers
-  const isAllDataLoading = isLoading || ordersLoading || shippingRecordsModalLoading || configLoading || expensesModalLoading;
+  const isAllDataLoading = monthLoading;
+  const error = monthError;
 
   return (
     <div className="space-y-6">
@@ -505,7 +332,7 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
         <div className="text-center py-8 bg-red-50 rounded-lg border border-red-200">
           <p className="text-red-600">Error loading profit data: {error.message}</p>
           <button
-            onClick={() => queryClient.invalidateQueries({ queryKey: ['monthly-profit', selectedMonth] })}
+            onClick={() => queryClient.invalidateQueries({ queryKey: ['finance-month', selectedMonth] })}
             className="mt-4 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
           >
             Retry
@@ -513,8 +340,11 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
         </div>
       ) : profit ? (
         <div className="space-y-6">
+          {isLiveMonth && monthFetching && (
+            <p className="text-xs text-blue-600 text-center">Updating live figures from Shopify…</p>
+          )}
 
-          {/* Key Metrics Cards - 2x2 Layout: Revenue, Expenses, Shipping Cost, DPP */}
+          {/* Key Metrics Cards: Revenue, Expenses, Shipping, Profit */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
             {/* Revenue Box */}
             <div 
@@ -608,59 +438,24 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
               </p>
             </div>
 
-            {/* DPP Box */}
-            <div 
-              className="bg-gradient-to-br from-purple-50 to-purple-100 border-2 border-purple-200 rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow cursor-pointer" 
-              onClick={() => onNavigate?.('payouts')}
-              title="Click to view payouts"
-            >
+            {/* Profit Box */}
+            <div className="bg-gradient-to-br from-purple-50 to-purple-100 border-2 border-purple-200 rounded-lg p-6 shadow-sm">
               <div className="flex items-center justify-between mb-2">
-                <h4 className="text-sm font-medium text-gray-700">DPP</h4>
+                <h4 className="text-sm font-medium text-gray-700">Net Profit</h4>
                 {previousProfit && (
                   <ComparisonBadge 
-                    current={calculatedDPP} 
+                    current={calculatedProfit} 
                     previous={previousProfit.cash_dpp ?? previousProfit.dpp ?? 0} 
-                    label="DPP"
+                    label="Profit"
                   />
                 )}
               </div>
-              <p className="text-3xl font-bold text-purple-700 mb-3">
-                EGP <AnimatedNumber value={calculatedDPP} />
+              <p className="text-3xl font-bold text-purple-700">
+                EGP <AnimatedNumber value={calculatedProfit} />
               </p>
-              {calculatedPayouts && (
-                <div className="flex flex-col gap-1.5 mt-auto">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-blue-600 flex-shrink-0"></div>
-                    <span className="text-xs text-gray-600 truncate">Media Buyer: {formatCurrency(calculatedPayouts.media_buyer_amount)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-green-600 flex-shrink-0"></div>
-                    <span className="text-xs text-gray-600 truncate">Operations: {formatCurrency(calculatedPayouts.ops_amount)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-yellow-600 flex-shrink-0"></div>
-                    <span className="text-xs text-gray-600 truncate">CRM: {formatCurrency(calculatedPayouts.crm_amount)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-purple-600 flex-shrink-0"></div>
-                    <span className="text-xs text-gray-600 truncate">Owner: {formatCurrency(calculatedPayouts.owner_amount)}</span>
-                  </div>
-                  <div className="mt-2 pt-2 border-t border-purple-300">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium text-gray-700">Final Net Profit:</span>
-                      <span className="text-sm font-bold text-emerald-700">
-                        {formatCurrency(calculatedPayouts.net_business_profit)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
-              {!calculatedPayouts && payoutConfig && (
-                <p className="text-xs text-gray-500 mt-2">Loading payouts...</p>
-              )}
-              {!payoutConfig && (
-                <p className="text-xs text-gray-500 mt-2">Configure payouts to see distribution</p>
-              )}
+              <p className="mt-2 text-xs text-purple-600">
+                Revenue − expenses − shipping
+              </p>
             </div>
           </div>
 
@@ -688,7 +483,7 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Revenue vs COGS Bar Chart */}
                 <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
-                  <h4 className="text-lg font-semibold text-gray-900 mb-4">Revenue vs COGS</h4>
+                <h4 className="text-lg font-semibold text-gray-900 mb-4">Revenue vs Costs</h4>
                   <ResponsiveContainer width="100%" height={300}>
                     <BarChart data={barData}>
                       <CartesianGrid strokeDasharray="3 3" />
@@ -739,7 +534,7 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
                       <Legend />
                       <Line type="monotone" dataKey="revenue" stroke="#3b82f6" strokeWidth={2} name="Revenue" />
                       <Line type="monotone" dataKey="profit" stroke="#10b981" strokeWidth={2} name="Gross Profit" />
-                      <Line type="monotone" dataKey="dpp" stroke="#8b5cf6" strokeWidth={2} name="DPP" />
+                      <Line type="monotone" dataKey="dpp" stroke="#8b5cf6" strokeWidth={2} name="Profit" />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -750,14 +545,11 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
       ) : (
         <div className="text-center py-12 bg-gray-50 rounded-lg border border-gray-200">
           <p className="text-gray-600 font-medium text-lg">No profit data for {formatMonthDisplay(selectedMonth)}</p>
-          <p className="mt-2 text-sm text-gray-500">Calculate profit to see financial metrics for this month.</p>
-          <button
-            onClick={() => calculateMutation.mutate(selectedMonth)}
-            disabled={calculateMutation.isPending}
-            className="mt-6 px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-colors"
-          >
-            {calculateMutation.isPending ? 'Calculating...' : 'Calculate Profit'}
-          </button>
+          <p className="mt-2 text-sm text-gray-500">
+            {isPastFinanceMonth(selectedMonth)
+              ? 'This month was not saved before Shopify data was reset. Totals cannot be recovered.'
+              : 'Loading live data from Shopify…'}
+          </p>
         </div>
       )}
 
@@ -1005,7 +797,7 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
             </div>
 
             <div className="flex-1 overflow-y-auto">
-              {ordersLoading ? (
+              {monthFetching ? (
                 <div className="text-center py-8">
                   <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                   <p className="mt-2 text-gray-600">Loading orders...</p>
@@ -1307,9 +1099,18 @@ export default function ProfitOverviewTab({ selectedMonth, setSelectedMonth, onN
                     </table>
                   </div>
                 </div>
+              ) : fromCache && paidOrderCount > 0 && profit ? (
+                <div className="text-center py-8 px-4">
+                  <p className="text-gray-900 font-medium">{paidOrderCount} paid orders — totals saved in Supabase</p>
+                  <p className="text-sm text-gray-600 mt-2">
+                    Individual orders are not stored (Shopify history resets on plan renewal).
+                    Revenue for this month: {formatCurrency(profit.revenue)}.
+                  </p>
+                </div>
               ) : (
                 <div className="text-center py-8">
                   <p className="text-gray-600">No fulfilled orders found for {formatMonthDisplay(selectedMonth)}</p>
+                  <p className="text-sm text-gray-500 mt-2">Orders load automatically from Shopify for the current month.</p>
                 </div>
               )}
             </div>

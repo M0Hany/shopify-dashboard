@@ -29,6 +29,7 @@ import { getOrderLatLng, tryParseLatLngFromMapsUrl } from '../utils/orderGeoloca
 import {
   applyTemplatePlaceholders,
   buildOrderTemplatePlaceholders,
+  lineItemsForWhatsAppTemplate,
   buildWaMeLink,
 } from '../utils/whatsappMessaging';
 
@@ -800,7 +801,9 @@ const OrderCard: React.FC<OrderCardProps> = ({
     
     // Shipped orders: cancel immediately (no reason popup), tag as cancelled after shipping
     if (newStatus === 'cancelled') {
-      const isShipped = trimmedTags.some((tag: string) => tag.trim().toLowerCase() === 'shipped');
+      const isShipped =
+        currentStatus === 'shipped' ||
+        trimmedTags.some((tag: string) => tag.trim().toLowerCase() === 'shipped');
       if (isShipped) {
         applyOrderCancellation({ afterShipping: true });
         toast.success('Order cancelled');
@@ -1256,11 +1259,6 @@ Please kindly confirm 🤍`;
 Your order is being picked up by the shipping company and should be arriving to you in the next couple of days🚚`;
   };
 
-  const getFilteredOrderItems = () =>
-    (order.line_items || []).filter(
-      (item: any) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item))
-    );
-
   const buildTemplateMessage = (
     templateBody: string,
     customerFirstName: string
@@ -1268,7 +1266,7 @@ Your order is being picked up by the shipping company and should be arriving to 
     const placeholders = buildOrderTemplatePlaceholders(
       order,
       customerFirstName,
-      getFilteredOrderItems()
+      lineItemsForWhatsAppTemplate(order.line_items)
     );
     return applyTemplatePlaceholders(templateBody, placeholders);
   };
@@ -1487,11 +1485,11 @@ Your order is being picked up by the shipping company and should be arriving to 
 
     if (onUpdateTags) {
       onUpdateTags(order.id, filtered);
-    }
-    if (onUpdateStatus) {
+    } else if (onUpdateStatus) {
       setLocalPriority(false);
       onUpdateStatus(order.id, 'cancelled');
     }
+    setLocalPriority(false);
     setCurrentStatus('cancelled');
   };
 
@@ -1659,7 +1657,7 @@ Your order is being picked up by the shipping company and should be arriving to 
     const placeholders = buildOrderTemplatePlaceholders(
       order,
       customerFirstName,
-      getFilteredOrderItems()
+      lineItemsForWhatsAppTemplate(order.line_items)
     );
 
     const fromList = (allTemplates as { key: string; body: string }[] | undefined)?.find(

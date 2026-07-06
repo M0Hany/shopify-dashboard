@@ -97,12 +97,19 @@ export function orderItemsListDetailed(lineItems: LineItemForTemplate[] = []): s
     .join('\n\n');
 }
 
+/** All line items for WhatsApp — includes Priority Making (hidden on order cards) so totals match. */
+export function lineItemsForWhatsAppTemplate(
+  lineItems: LineItemForTemplate[] | undefined | null
+): LineItemForTemplate[] {
+  return lineItems ?? [];
+}
+
 export function buildOrderTemplatePlaceholders(
   order: OrderForTemplate,
   customerFirstName: string,
   lineItems?: LineItemForTemplate[]
 ): TemplatePlaceholderData {
-  const items = lineItems ?? order.line_items ?? [];
+  const items = lineItemsForWhatsAppTemplate(lineItems ?? order.line_items);
   const shippingAmount = getShippingAmount(order);
   const parsedTotal = parseFloat(order.total_price || '');
   const totalAmount = Number.isFinite(parsedTotal)

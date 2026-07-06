@@ -1,84 +1,116 @@
 import { supabase } from '../../config/supabase';
 import { MonthlyProfit } from '../../types/financial';
-import { productCostService } from './productCostService';
 import { expenseService } from './expenseService';
 import { shopifyService } from '../shopify';
 import { logger } from '../../utils/logger';
+import { isPastFinanceMonth, orderMonthFromTag, parseOrderTags } from '../../utils/financeMonth';
+import { formatSupabaseError } from '../../utils/financeOrderSnapshot';
+import { financeMonthSnapshotService } from './financeMonthSnapshotService';
 
-const SHIPPING_FLYER_COST = 2; // EGP per order
+const PAID_DATE_PREFIXES = ['paid_date:'];
+const CANCELLED_DATE_PREFIXES = [
+  'paid_date:',
+  'fulfillment_date:',
+  'shipping_company_cost_date:',
+  'scooter_shipping_cost_date:',
+];
+
+function filterPaidOrdersForMonth(orders: any[], month: string): any[] {
+  return orders.filter((order) => {
+    const tags = parseOrderTags(order.tags);
+    if (!tags.some((t) => t.toLowerCase() === 'paid')) return false;
+    if (tags.some((t) => t.toLowerCase() === 'cancelled')) return false;
+    const orderMonth = orderMonthFromTag(tags, PAID_DATE_PREFIXES);
+    return orderMonth === month;
+  });
+}
+
+function filterCancelledOrdersForMonth(orders: any[], month: string): any[] {
+  return orders.filter((order) => {
+    const tags = parseOrderTags(order.tags);
+    if (!tags.some((t) => t.toLowerCase() === 'cancelled')) return false;
+    const hasShippingCost = tags.some(
+      (t) =>
+        t.startsWith('shipping_company_cost:') || t.startsWith('scooter_shipping_cost:')
+    );
+    if (!hasShippingCost) return false;
+    const orderMonth = orderMonthFromTag(tags, CANCELLED_DATE_PREFIXES);
+    return orderMonth === month;
+  });
+}
 
 export class ProfitEngineService {
   /**
-   * Calculate profit for a specific month
-   * This is the core calculation engine
+   * One scoped Shopify fetch per order set (not the full catalog).
    */
+  async loadFinanceOrdersForMonth(
+    month: string,
+    options?: { fresh?: boolean }
+  ): Promise<{ paid: any[]; cancelled: any[] }> {
+    // Past months with cache: callers that need live data pass fresh: true
+    if (!options?.fresh && isPastFinanceMonth(month)) {
+      const snapshot = await financeMonthSnapshotService.get(month);
+      const profit = await profitEngineService.getMonthlyProfitRow(month);
+      if (snapshot && profit) {
+        return { paid: [], cancelled: [] };
+      }
+    }
+
+    const [paidCandidates, cancelledCandidates] = await Promise.all([
+      shopifyService.getOrders({ ordersQuery: 'tag:paid NOT tag:cancelled' }),
+      shopifyService.getOrders({ ordersQuery: 'tag:cancelled' }),
+    ]);
+
+    return {
+      paid: filterPaidOrdersForMonth(paidCandidates, month),
+      cancelled: filterCancelledOrdersForMonth(cancelledCandidates, month),
+    };
+  }
+
   async calculateProfit(month: string): Promise<MonthlyProfit> {
+    const { paid, cancelled } = await this.loadFinanceOrdersForMonth(month, { fresh: true });
+    return this.calculateProfitFromOrders(month, paid, cancelled);
+  }
+
+  /**
+   * Calculate profit when orders are already loaded.
+   */
+  async calculateProfitFromOrders(
+    month: string,
+    fulfilledOrders: any[],
+    cancelledOrders: any[]
+  ): Promise<MonthlyProfit> {
     logger.info(`Calculating profit for month: ${month}`);
 
-    // Step 1: Get all paid orders for the month (orders with 'paid' tag)
-    const fulfilledOrders = await this.getFulfilledOrdersForMonth(month);
-    logger.info(`Found ${fulfilledOrders.length} paid orders for ${month}`);
-
-    // Step 2: Calculate Revenue
     const revenue = this.calculateRevenue(fulfilledOrders);
-    logger.info(`Revenue: ${revenue}`);
-
-    // Step 3: Calculate COGS
-    const cogs = await this.calculateCOGS(fulfilledOrders);
-    logger.info(`COGS: ${cogs}`);
-
-    // Step 4: Calculate Gross Profit
-    const grossProfit = revenue - cogs;
-    logger.info(`Gross Profit: ${grossProfit}`);
-
-    // Step 5: Get monthly operating expenses (excluding production costs)
+    const cogs = 0;
+    const grossProfit = revenue;
     const monthlyExpenses = await expenseService.getMonthlyTotal(month, 'operating');
-    logger.info(`Monthly Operating Expenses: ${monthlyExpenses}`);
-
-    // Step 5b: Get production costs paid this month (cash flow basis)
     const productionCostsPaid = await expenseService.getMonthlyTotal(month, 'production');
-    logger.info(`Production Costs Paid: ${productionCostsPaid}`);
-
-    // Step 6: Calculate total shipping cost from all orders (fulfilled + cancelled)
-    // Step 6a: Get cancelled orders with shipping costs
-    const cancelledOrders = await this.getCancelledOrdersWithShippingCosts(month);
-    logger.info(`Found ${cancelledOrders.length} cancelled orders with shipping costs for ${month}`);
-    
-    // Step 6b: Calculate total shipping cost (actual cost paid, not profit/loss)
-    const shippingCostFromFulfilled = await this.calculateTotalShippingCostsFromTags(fulfilledOrders, month);
-    const shippingCostFromCancelled = await this.calculateTotalShippingCostsFromTags(cancelledOrders, month);
+    const shippingCostFromFulfilled = await this.calculateTotalShippingCostsFromTags(
+      fulfilledOrders,
+      month
+    );
+    const shippingCostFromCancelled = await this.calculateTotalShippingCostsFromTags(
+      cancelledOrders,
+      month
+    );
     const totalShippingCost = shippingCostFromFulfilled + shippingCostFromCancelled;
-    logger.info(`Total Shipping Cost: ${totalShippingCost}`);
-
-    // Step 7: Calculate Operating Profit (Accrual-based)
-    // Operating Profit = Gross Profit - Operating Expenses - Shipping Cost
     const operatingProfit = grossProfit - monthlyExpenses - totalShippingCost;
-    logger.info(`Operating Profit (Accrual): ${operatingProfit}`);
-
-    // Step 8: DPP (Accrual-based) = Operating Profit (for backward compatibility)
     const dpp = operatingProfit;
-    logger.info(`DPP (Accrual): ${dpp}`);
-
-    // Step 9: Calculate Cash-Flow Based DPP
-    // Cash DPP = Revenue - Production Costs Paid - Operating Expenses - Shipping Cost
-    // This reflects actual cash available for payouts
     const cashDpp = revenue - productionCostsPaid - monthlyExpenses - totalShippingCost;
-    logger.info(`Cash DPP: ${cashDpp}`);
 
-    // Save or update monthly profit record
-    // Don't include id - let Supabase auto-generate it
-    // Note: shipping_loss stores shipping cost as negative value (for backward compatibility)
     const monthlyProfitData = {
       month,
       revenue,
       cogs,
       gross_profit: grossProfit,
       total_expenses: monthlyExpenses,
-      shipping_loss: -totalShippingCost, // Shipping cost stored as negative (for backward compatibility)
+      shipping_loss: -totalShippingCost,
       operating_profit: operatingProfit,
-      dpp, // Accrual-based (legacy)
-      production_costs_paid: productionCostsPaid, // Cash-flow: production costs paid this month
-      cash_dpp: cashDpp, // Cash-flow based DPP (for payouts)
+      dpp,
+      production_costs_paid: productionCostsPaid,
+      cash_dpp: cashDpp,
     };
 
     return await this.saveMonthlyProfit(monthlyProfitData);
@@ -90,117 +122,27 @@ export class ProfitEngineService {
    * Only uses 'paid' and 'paid_date' tags - no fallback to fulfilled tags
    */
   async getFulfilledOrdersForMonth(month: string): Promise<any[]> {
-    // Get all orders (no limit to ensure we get all paid orders for the month)
-    const orders = await shopifyService.getOrders({});
-
-    // Filter for paid orders in the specified month
-    const paidOrders = orders.filter(order => {
-      const tags = Array.isArray(order.tags)
-        ? order.tags
-        : typeof order.tags === 'string'
-          ? order.tags.split(',').map((t: string) => t.trim())
-          : [];
-
-      // Check if order is paid - ONLY use paid tag, no fallback
-      const isPaid = tags.some(tag => tag.trim().toLowerCase() === 'paid');
-      if (!isPaid) return false;
-
-      // Check if order is cancelled (exclude cancelled orders)
-      const isCancelled = tags.some(tag => tag.trim().toLowerCase() === 'cancelled');
-      if (isCancelled) return false;
-
-      // Get paid_date from tags - ONLY use paid_date, no fallback
-      const paidDateTag = tags.find(tag => 
-        tag.trim().startsWith('paid_date:')
-      );
-      if (!paidDateTag) {
-        // If no paid_date tag, exclude this order
-        return false;
-      }
-
-      const dateStr = paidDateTag.split(':')[1]?.trim();
-      if (!dateStr) return false;
-
-      const orderMonth = dateStr.substring(0, 7); // YYYY-MM
-      return orderMonth === month;
-    });
-
-    return paidOrders;
+    if (isPastFinanceMonth(month)) {
+      const snapshot = await financeMonthSnapshotService.get(month);
+      const profit = await this.getMonthlyProfitRow(month);
+      if (snapshot && profit) return [];
+    }
+    const { paid } = await this.loadFinanceOrdersForMonth(month, { fresh: !isPastFinanceMonth(month) });
+    return paid;
   }
 
-  /**
-   * Get cancelled orders with shipping costs for a specific month
-   * These are orders that were shipped but customer didn't receive them
-   * They have shipping_company_cost tags but are cancelled, so they represent pure shipping losses
-   */
   async getCancelledOrdersWithShippingCosts(month: string): Promise<any[]> {
-    // Get all orders (no limit to ensure we get all cancelled orders with shipping costs)
-    const orders = await shopifyService.getOrders({});
-
-    // Filter for cancelled orders with shipping costs in the specified month
-    const cancelledOrders = orders.filter(order => {
-      const tags = Array.isArray(order.tags)
-        ? order.tags
-        : typeof order.tags === 'string'
-          ? order.tags.split(',').map((t: string) => t.trim())
-          : [];
-
-      // Check if order is cancelled
-      const isCancelled = tags.some(tag => tag.trim().toLowerCase() === 'cancelled');
-      if (!isCancelled) return false;
-
-      // Check if order has shipping_company_cost OR scooter_shipping_cost tag (indicates shipping was paid)
-      const hasShippingCost = tags.some(tag => 
-        tag.trim().startsWith('shipping_company_cost:') ||
-        tag.trim().startsWith('scooter_shipping_cost:')
-      );
-      if (!hasShippingCost) return false;
-
-      // Get date from tags to determine the month
-      // For cancelled orders, we use paid_date, fulfillment_date, or shipping cost date to determine which month the shipping cost belongs to
-      let dateTag = tags.find(tag => 
-        tag.trim().startsWith('paid_date:')
-      );
-      
-      if (!dateTag) {
-        // Try fulfillment_date
-        dateTag = tags.find(tag => 
-          tag.trim().startsWith('fulfillment_date:')
-        );
-      }
-      
-      if (!dateTag) {
-        // Try shipping_company_cost_date
-        dateTag = tags.find(tag => 
-          tag.trim().startsWith('shipping_company_cost_date:')
-        );
-      }
-      
-      if (!dateTag) {
-        // Try scooter_shipping_cost_date (if it exists in the future)
-        dateTag = tags.find(tag => 
-          tag.trim().startsWith('scooter_shipping_cost_date:')
-        );
-      }
-      
-      if (!dateTag) {
-        // If no date tag found, exclude this order
-        return false;
-      }
-
-      const dateStr = dateTag.split(':')[1]?.trim();
-      if (!dateStr) return false;
-
-      const orderMonth = dateStr.substring(0, 7); // YYYY-MM
-      return orderMonth === month;
-    });
-
-    return cancelledOrders;
+    if (isPastFinanceMonth(month)) {
+      const snapshot = await financeMonthSnapshotService.get(month);
+      const profit = await this.getMonthlyProfitRow(month);
+      if (snapshot && profit) return [];
+    }
+    const { cancelled } = await this.loadFinanceOrdersForMonth(month, { fresh: !isPastFinanceMonth(month) });
+    return cancelled;
   }
 
   /**
-   * Calculate revenue from fulfilled orders
-   * Revenue = items_revenue + shipping_charged
+   * Revenue = sum of paid order totals (items + shipping charged to customer).
    */
   private calculateRevenue(orders: any[]): number {
     return orders.reduce((sum, order) => {
@@ -211,45 +153,6 @@ export class ProfitEngineService {
       // You may need to adjust this based on your Shopify order structure
       return sum + totalPrice;
     }, 0);
-  }
-
-  /**
-   * Calculate COGS (Cost of Goods Sold)
-   * COGS = Σ(quantity × product_unit_cost) + (orders_count × 2 EGP flyer)
-   */
-  private async calculateCOGS(orders: any[]): Promise<number> {
-    let totalCOGS = 0;
-
-    for (const order of orders) {
-      let orderCOGS = 0;
-
-      // Calculate COGS for each line item
-      if (order.line_items && Array.isArray(order.line_items)) {
-        for (const item of order.line_items) {
-          // Try to get product cost
-          // Note: You may need to match by product title or variant
-          // For now, we'll try to match by product_id if available
-          const productId = item.product_id?.toString() || item.variant_id?.toString();
-          
-          if (productId) {
-            const productCost = await productCostService.getByProductId(productId);
-            if (productCost) {
-              orderCOGS += item.quantity * productCost.total_unit_cost;
-            } else {
-              logger.warn(`Product cost not found for product_id: ${productId}, order: ${order.name}`);
-              // If product cost not found, skip this item (or use default cost)
-            }
-          }
-        }
-      }
-
-      // Add shipping flyer cost (2 EGP per order)
-      orderCOGS += SHIPPING_FLYER_COST;
-
-      totalCOGS += orderCOGS;
-    }
-
-    return totalCOGS;
   }
 
   /**
@@ -473,80 +376,61 @@ export class ProfitEngineService {
   /**
    * Save or update monthly profit record
    */
-  private async saveMonthlyProfit(profitData: Omit<MonthlyProfit, 'id' | 'created_at' | 'updated_at'>): Promise<MonthlyProfit> {
-    // Check if record exists
-    const { data: existing } = await supabase
+  private async saveMonthlyProfit(
+    profitData: Omit<MonthlyProfit, 'id' | 'created_at' | 'updated_at'>
+  ): Promise<MonthlyProfit> {
+    const { data, error } = await supabase
       .from('monthly_profits')
-      .select('*')
-      .eq('month', profitData.month)
+      .upsert(profitData, { onConflict: 'month' })
+      .select()
       .single();
 
-    if (existing) {
-      // Update existing record
-      const { data, error } = await supabase
-        .from('monthly_profits')
-        .update({
-          revenue: profitData.revenue,
-          cogs: profitData.cogs,
-          gross_profit: profitData.gross_profit,
-          total_expenses: profitData.total_expenses,
-          shipping_loss: profitData.shipping_loss,
-          operating_profit: profitData.operating_profit,
-          dpp: profitData.dpp,
-          production_costs_paid: profitData.production_costs_paid,
-          cash_dpp: profitData.cash_dpp,
-        })
-        .eq('month', profitData.month)
-        .select()
-        .single();
-
-      if (error) {
-        logger.error('Error updating monthly profit:', error);
-        throw error;
+    if (error) {
+      const detail = formatSupabaseError(error);
+      if (error.code === '42P01' || error.code === 'PGRST205') {
+        logger.error(`monthly_profits table missing: ${detail}`);
+        throw new Error(
+          'Table monthly_profits not found. Run docs/FINANCE_MONTH_SNAPSHOTS.sql in Supabase SQL editor.'
+        );
       }
-
-      return data;
-    } else {
-      // Create new record (don't include id, created_at, updated_at - let database handle them)
-      const { data, error } = await supabase
-        .from('monthly_profits')
-        .insert([profitData])
-        .select()
-        .single();
-
-      if (error) {
-        logger.error('Error creating monthly profit:', error);
-        throw error;
-      }
-
-      return data;
+      logger.error(`Error saving monthly profit: ${detail}`);
+      throw new Error(`Failed to save monthly profit: ${detail}`);
     }
+
+    return data as MonthlyProfit;
+  }
+
+  /** Read stored profit only — never triggers Shopify or recalculation. */
+  async getMonthlyProfitRow(month: string): Promise<MonthlyProfit | null> {
+    const { data, error } = await supabase
+      .from('monthly_profits')
+      .select('*')
+      .eq('month', month)
+      .maybeSingle();
+
+    if (error) {
+      const detail = formatSupabaseError(error);
+      if (error.code === '42P01' || error.code === 'PGRST205') {
+        logger.warn(`monthly_profits table missing: ${detail}`);
+        return null;
+      }
+      logger.error(`Error fetching monthly profit: ${detail}`);
+      throw new Error(detail);
+    }
+
+    return data as MonthlyProfit | null;
   }
 
   /**
-   * Get monthly profit (calculate if doesn't exist)
+   * @deprecated Prefer getMonthlyProfitRow + explicit calculateProfit / finance month bundle.
    */
   async getMonthlyProfit(month: string, forceRecalculate = false): Promise<MonthlyProfit | null> {
     if (forceRecalculate) {
       return await this.calculateProfit(month);
     }
-
-    const { data, error } = await supabase
-      .from('monthly_profits')
-      .select('*')
-      .eq('month', month)
-      .single();
-
-    if (error) {
-      if (error.code === 'PGRST116') {
-        // Not found, calculate it
-        return await this.calculateProfit(month);
-      }
-      logger.error('Error fetching monthly profit:', error);
-      throw error;
-    }
-
-    return data;
+    const row = await this.getMonthlyProfitRow(month);
+    if (row) return row;
+    return null;
   }
 
   /**

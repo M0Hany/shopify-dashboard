@@ -705,6 +705,27 @@ export class ShopifyService {
         }
       }
 
+      const hadShippedTag = existingTags.some(
+        (tag: string) => tag.trim().toLowerCase() === 'shipped'
+      );
+
+      // Cancelled after shipping: preserve tag when cancelling a shipped order via status API
+      if (actualStatus.trim().toLowerCase() === 'cancelled' && hadShippedTag) {
+        const hasAfterShipping = filteredTags.some(
+          (tag: string) => tag.trim().toLowerCase() === 'cancelled_after_shipping'
+        );
+        if (!hasAfterShipping) {
+          filteredTags.push('cancelled_after_shipping');
+        }
+        const hasCancelledDate = filteredTags.some((tag: string) =>
+          tag.trim().toLowerCase().startsWith('cancelled_date:')
+        );
+        if (!hasCancelledDate) {
+          const cancelledDate = new Date().toISOString().split('T')[0];
+          filteredTags.push(`cancelled_date:${cancelledDate}`);
+        }
+      }
+
       // Add fulfilled_date tag when order is fulfilled
       if (actualStatus.trim().toLowerCase() === 'fulfilled') {
         // Check if fulfilled_at or fulfillment_date tag already exists (from additional tags or existing)

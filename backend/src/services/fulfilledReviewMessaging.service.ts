@@ -18,6 +18,12 @@ export function tagsIncludeFulfilled(tags: string | string[] | undefined | null)
   return parseTags(tags).some((t) => t.trim().toLowerCase() === 'fulfilled');
 }
 
+export function tagsIncludeCancelledAfterShipping(
+  tags: string | string[] | undefined | null
+): boolean {
+  return parseTags(tags).some((t) => t.trim().toLowerCase() === 'cancelled_after_shipping');
+}
+
 export function wasNewlyFulfilled(
   tagsBefore: string | string[] | undefined | null,
   tagsAfter: string | string[] | undefined | null
@@ -86,6 +92,14 @@ export class FulfilledReviewMessagingService {
         return;
       }
 
+      if (tagsIncludeCancelledAfterShipping(order.tags)) {
+        logger.info('Review WhatsApp skipped — cancelled after shipping', {
+          orderId: params.orderId,
+          orderName: order.name
+        });
+        return;
+      }
+
       const phone = order.shipping_address?.phone || order.customer?.phone;
       if (!phone?.trim()) {
         logger.warn('Review WhatsApp skipped — no phone', {
@@ -137,6 +151,7 @@ export class FulfilledReviewMessagingService {
     bulkIndex?: number;
   }): Promise<void> {
     if (!wasNewlyFulfilled(params.tagsBefore, params.tagsAfter)) return;
+    if (tagsIncludeCancelledAfterShipping(params.tagsAfter)) return;
     await this.scheduleReviewForOrder({
       orderId: params.orderId,
       bulkIndex: params.bulkIndex

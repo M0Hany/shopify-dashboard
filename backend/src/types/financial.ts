@@ -88,6 +88,7 @@ export interface ShippingRecord {
   invoice_id?: string; // Optional: shipping company invoice
   created_at: string;
   updated_at: string;
+  isFromTag?: boolean;
 }
 
 export interface ShippingRecordInput {

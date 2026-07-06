@@ -133,40 +133,7 @@ export interface MonthlyProfit {
   operating_profit: number;
   dpp: number; // Accrual-based (legacy)
   production_costs_paid?: number; // Cash-flow: production costs paid this month
-  cash_dpp?: number; // Cash-flow based DPP (for payouts)
-  created_at: string;
-  updated_at: string;
-}
-
-export type OwnerPayType = "fixed" | "percent";
-
-export interface PayoutConfig {
-  id: string;
-  media_buyer_percent: number;
-  ops_percent: number;
-  crm_percent: number;
-  owner_pay_type: OwnerPayType;
-  owner_pay_value: number;
-  updated_at: string;
-}
-
-export interface PayoutConfigInput {
-  media_buyer_percent: number;
-  ops_percent: number;
-  crm_percent: number;
-  owner_pay_type: OwnerPayType;
-  owner_pay_value: number;
-}
-
-export interface MonthlyPayout {
-  id: string;
-  month: string;
-  dpp: number;
-  media_buyer_amount: number;
-  ops_amount: number;
-  crm_amount: number;
-  owner_amount: number;
-  net_business_profit: number;
+  cash_dpp?: number; // Net profit (revenue − expenses − shipping)
   created_at: string;
   updated_at: string;
 }
@@ -347,43 +314,26 @@ export const financialService = {
     return response.json();
   },
 
-  // Payouts
-  async getMonthlyPayout(month: string): Promise<MonthlyPayout | null> {
-    const response = await fetch(`${API_URL}/api/financial/payouts?month=${month}`, {
+  async getFinanceMonth(month: string): Promise<import('../utils/financeMonthQuery').FinanceMonthBundle> {
+    const response = await fetch(`${API_URL}/api/financial/month/${month}`, {
       cache: 'no-store',
-      headers: { 'Cache-Control': 'no-cache' }
+      headers: { 'Cache-Control': 'no-cache' },
     });
-    if (response.status === 404) {
-      return null; // Payout data doesn't exist yet
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch finance month');
     }
-    if (!response.ok) throw new Error('Failed to fetch monthly payout');
     return response.json();
   },
 
-  async calculatePayouts(month: string): Promise<MonthlyPayout> {
-    const response = await fetch(`${API_URL}/api/financial/payouts/calculate?month=${month}`, {
+  async calculateFinanceMonth(month: string): Promise<import('../utils/financeMonthQuery').FinanceMonthBundle> {
+    const response = await fetch(`${API_URL}/api/financial/month/${month}/calculate`, {
       method: 'POST',
     });
-    if (!response.ok) throw new Error('Failed to calculate payouts');
-    return response.json();
-  },
-
-  async getPayoutConfig(): Promise<PayoutConfig> {
-    const response = await fetch(`${API_URL}/api/financial/payout-config`, {
-      cache: 'no-store',
-      headers: { 'Cache-Control': 'no-cache' }
-    });
-    if (!response.ok) throw new Error('Failed to fetch payout config');
-    return response.json();
-  },
-
-  async updatePayoutConfig(input: PayoutConfigInput): Promise<PayoutConfig> {
-    const response = await fetch(`${API_URL}/api/financial/payout-config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    if (!response.ok) throw new Error('Failed to update payout config');
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to calculate finance month');
+    }
     return response.json();
   },
 

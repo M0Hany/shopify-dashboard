@@ -13,6 +13,7 @@ import { AxiosError } from 'axios';
 import { discordNotificationService } from '../services/discordNotifications';
 import {
   fulfilledReviewMessaging,
+  tagsIncludeCancelledAfterShipping,
   tagsIncludeFulfilled
 } from '../services/fulfilledReviewMessaging.service';
 
@@ -718,7 +719,10 @@ router.post('/bulk-import-shipping-costs', async (req: Request, res: Response) =
         // Update order tags
         await shopifyServiceInstance.updateOrderTags(order.id.toString(), filteredTags);
 
-        if (!tagsIncludeFulfilled(existingTags)) {
+        if (
+          !tagsIncludeFulfilled(existingTags) &&
+          !tagsIncludeCancelledAfterShipping(existingTags)
+        ) {
           await fulfilledReviewMessaging.scheduleReviewForOrder({
             orderId: order.id,
             bulkIndex: reviewBulkIndex

@@ -1,6 +1,15 @@
 import { supabase } from '../../config/supabase';
 import { ShippingRecord, ShippingRecordInput } from '../../types/financial';
 import { logger } from '../../utils/logger';
+import { formatSupabaseError } from '../../utils/financeOrderSnapshot';
+
+function isMissingTableError(error: { code?: string; message?: string }): boolean {
+  return (
+    error.code === '42P01' ||
+    error.code === 'PGRST205' ||
+    (error.message?.includes('does not exist') ?? false)
+  );
+}
 
 export class ShippingLedgerService {
   async getAll(month?: string): Promise<ShippingRecord[]> {
@@ -16,7 +25,13 @@ export class ShippingLedgerService {
     const { data, error } = await query;
 
     if (error) {
-      logger.error('Error fetching shipping records:', error);
+      if (isMissingTableError(error)) {
+        logger.warn(
+          'shipping_records table missing — manual shipping entries disabled. Run docs/FINANCE_MONTH_SNAPSHOTS.sql'
+        );
+        return [];
+      }
+      logger.error(`Error fetching shipping records: ${formatSupabaseError(error)}`);
       throw error;
     }
 

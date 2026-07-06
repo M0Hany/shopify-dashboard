@@ -37,10 +37,10 @@ import { buildOrderMapSummary, calculateOrderDaysLeft } from '../utils/orderMapS
 import { getOrderLatLng } from '../utils/orderGeolocation';
 import { normalizeOrderTagsArray, stripShippingRouteTags } from '../utils/shippingRouteTags';
 import { useNavigate } from 'react-router-dom';
-import { analyzePriorityMakingLineItems, isPriorityMakingLineItem, shouldHidePriorityMakingLine } from '../utils/priorityMakingRush';
 import {
   applyTemplatePlaceholders,
   buildOrderTemplatePlaceholders,
+  lineItemsForWhatsAppTemplate,
 } from '../utils/whatsappMessaging';
 
 export interface MapOrderCardProps {
@@ -202,7 +202,6 @@ export default function MapOrderCard({
         : 'text-gray-600';
   const isPriority = currentTags.includes('priority');
   const isOrderCancelled = currentTags.includes('cancelled');
-  const hidePriorityMakingLine = shouldHidePriorityMakingLine(analyzePriorityMakingLineItems(order.line_items || []));
 
   const { data: allTemplates = [] } = useQuery({
     queryKey: ['whatsapp-templates'],
@@ -430,10 +429,11 @@ export default function MapOrderCard({
       return;
     }
     const customerFirstName = order.customer.first_name?.trim() || 'Customer';
-    const lineItems = (order.line_items || []).filter(
-      (item) => !(hidePriorityMakingLine && isPriorityMakingLineItem(item))
+    const placeholders = buildOrderTemplatePlaceholders(
+      order,
+      customerFirstName,
+      lineItemsForWhatsAppTemplate(order.line_items)
     );
-    const placeholders = buildOrderTemplatePlaceholders(order, customerFirstName, lineItems);
     const body = applyTemplatePlaceholders(t.body, placeholders);
     const formattedPhone = formatPhoneNumber(order.customer.phone);
     const whatsAppLink = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(body)}`;
