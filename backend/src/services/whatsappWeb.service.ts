@@ -40,6 +40,45 @@ class WhatsAppWebService {
     );
   }
 
+  private clearAuthState(): void {
+    if (this.socket) {
+      try {
+        this.socket.end(undefined);
+      } catch {
+        // ignore
+      }
+      this.socket = null;
+    }
+
+    const authDir = this.getAuthDir();
+    if (fs.existsSync(authDir)) {
+      fs.rmSync(authDir, { recursive: true, force: true });
+    }
+
+    this.latestQr = null;
+    this.latestQrDataUrl = null;
+    this.connectedPhone = null;
+  }
+
+  private hasInvalidSavedSession(): boolean {
+    const credsPath = path.join(this.getAuthDir(), 'creds.json');
+    if (!fs.existsSync(credsPath)) return false;
+
+    try {
+      const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8')) as { registered?: boolean };
+      return creds.registered === false;
+    } catch {
+      return true;
+    }
+  }
+
+  private shouldClearAuthOnDisconnect(statusCode: number | undefined): boolean {
+    return (
+      statusCode === DisconnectReason.loggedOut ||
+      statusCode === DisconnectReason.restartRequired
+    );
+  }
+
   getStatus(): {
     enabled: boolean;
     status: WhatsAppWebConnectionStatus;
@@ -57,8 +96,21 @@ class WhatsAppWebService {
   /** Start connection if enabled but not yet running (e.g. after env was added without restart). */
   ensureStarted(): void {
     if (!this.isEnabled()) return;
-    if (this.status === 'connected' || this.connectPromise) return;
+    if (this.status === 'connected') return;
+    if (this.connectPromise) return;
     void this.start();
+  }
+
+  /** Wipe saved session and start fresh — use when pairing is stuck without a QR. */
+  resetConnection(): void {
+    this.clearAuthState();
+    this.status = 'disconnected';
+    this.connectPromise = null;
+    this.isStarting = false;
+
+    if (this.isEnabled()) {
+      void this.start();
+    }
   }
 
   async getQrDataUrl(): Promise<string | null> {
@@ -88,8 +140,15 @@ class WhatsAppWebService {
         await this.openSocket();
         break;
       } catch (error) {
+        const statusCode =
+          error instanceof Boom ? error.output?.statusCode : undefined;
+        if (this.shouldClearAuthOnDisconnect(statusCode)) {
+          this.clearAuthState();
+        }
+
         logger.error('WhatsApp Web connection failed, retrying in 5s', {
-          error: error instanceof Error ? error.message : error
+          error: error instanceof Error ? error.message : error,
+          statusCode
         });
         this.status = 'disconnected';
         await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -102,6 +161,11 @@ class WhatsAppWebService {
 
   private async openSocket(): Promise<void> {
     const authDir = this.getAuthDir();
+    if (this.hasInvalidSavedSession()) {
+      logger.warn('WhatsApp Web: clearing invalid saved session before pairing');
+      this.clearAuthState();
+    }
+
     fs.mkdirSync(authDir, { recursive: true });
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
@@ -156,13 +220,24 @@ class WhatsAppWebService {
 
         if (connection === 'close') {
           const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
-          const loggedOut = statusCode === DisconnectReason.loggedOut;
 
-          this.status = loggedOut ? 'disconnected' : 'connecting';
           this.socket = null;
           this.connectedPhone = null;
 
-          if (!loggedOut && this.isEnabled()) {
+          if (this.shouldClearAuthOnDisconnect(statusCode)) {
+            logger.warn('WhatsApp Web: session invalid, clearing auth for fresh QR', {
+              statusCode
+            });
+            this.clearAuthState();
+            this.status = 'disconnected';
+            clearTimeout(timeout);
+            reject(lastDisconnect?.error || new Error('WhatsApp Web session expired'));
+            return;
+          }
+
+          this.status = 'connecting';
+
+          if (this.isEnabled()) {
             clearTimeout(timeout);
             logger.warn('WhatsApp Web disconnected, reconnecting…', { statusCode });
             setTimeout(() => {
@@ -172,6 +247,7 @@ class WhatsAppWebService {
             return;
           }
 
+          this.status = 'disconnected';
           clearTimeout(timeout);
           reject(lastDisconnect?.error || new Error('WhatsApp Web connection closed'));
         }
@@ -227,16 +303,10 @@ class WhatsAppWebService {
       }
     }
 
-    this.socket = null;
+    this.clearAuthState();
     this.status = 'disconnected';
-    this.connectedPhone = null;
-    this.latestQr = null;
-    this.latestQrDataUrl = null;
-
-    const authDir = this.getAuthDir();
-    if (fs.existsSync(authDir)) {
-      fs.rmSync(authDir, { recursive: true, force: true });
-    }
+    this.connectPromise = null;
+    this.isStarting = false;
 
     if (this.isEnabled()) {
       void this.runConnectionLoop();

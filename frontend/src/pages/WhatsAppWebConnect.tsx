@@ -23,6 +23,7 @@ const WhatsAppWebConnect: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -80,6 +81,25 @@ const WhatsAppWebConnect: React.FC = () => {
     }, 4000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      const res = await fetch(`${API}/api/whatsapp/web/reset`, {
+        method: 'POST',
+        headers: webHeaders()
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Reset failed');
+      toast.success('Connection reset. Waiting for QR…');
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to reset connection');
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const handleLogout = async () => {
     if (!window.confirm('Disconnect this WhatsApp session? You will need to scan QR again.')) {
@@ -170,12 +190,26 @@ const WhatsAppWebConnect: React.FC = () => {
                   </ol>
                 </>
               ) : (
-                <p className="text-center text-sm text-gray-500">
-                  {statusMessage ||
-                    (status === 'disabled'
-                      ? 'Set WHATSAPP_WEB_ENABLED=true on the backend and restart the server.'
-                      : 'Waiting for QR code…')}
-                </p>
+                <div className="space-y-3 text-center">
+                  <p className="text-sm text-gray-500">
+                    {statusMessage ||
+                      (status === 'disabled'
+                        ? 'Set WHATSAPP_WEB_ENABLED=true on the backend and restart the server.'
+                        : status === 'disconnected'
+                          ? 'Session expired or invalid. Reset the connection to get a new QR code.'
+                          : 'Waiting for QR code…')}
+                  </p>
+                  {(status === 'disconnected' || status === 'connecting') && (
+                    <button
+                      type="button"
+                      onClick={() => void handleReset()}
+                      disabled={resetting}
+                      className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                    >
+                      {resetting ? 'Resetting…' : 'Reset connection & show QR'}
+                    </button>
+                  )}
+                </div>
               )}
               <button
                 type="button"

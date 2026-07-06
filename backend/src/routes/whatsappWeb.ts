@@ -81,4 +81,18 @@ router.post('/logout', async (_req, res) => {
   }
 });
 
+router.post('/reset', (_req, res) => {
+  try {
+    if (!whatsappWebService.isEnabled()) {
+      return res.status(400).json({ error: 'WhatsApp Web is disabled on the server' });
+    }
+
+    whatsappWebService.resetConnection();
+    res.json({ success: true, message: 'Connection reset. Wait a few seconds, then refresh for QR.' });
+  } catch (error) {
+    logger.error('WhatsApp Web reset failed', { error });
+    res.status(500).json({ error: 'Failed to reset WhatsApp Web connection' });
+  }
+});
+
 export default router;
