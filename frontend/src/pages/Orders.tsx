@@ -27,7 +27,7 @@ import {
 } from '../utils/ordersFetchScope';
 import { getShippingMethodFromTags, SHIPPING_METHOD_ORDER } from '../utils/shippingMethod';
 import { COURIER_ASSIGNED_TAG, stripShippingRouteTags } from '../utils/shippingRouteTags';
-import BulkShippingCostImportDialog from '../components/finance/BulkShippingCostImportDialog';
+import { getDaysSinceShipped } from '../utils/orderShippedDate';
 import { financialService } from '../services/financialService';
 // Province mapping from English to Arabic
 const provinceMapping: { [key: string]: string } = {
@@ -1702,6 +1702,21 @@ const Orders = () => {
       const bNum = getOrderNumber(b.name || '');
       
       return aNum - bNum; // Ascending order
+    }
+
+    // Shipped view: oldest shipments first (most days since shipped)
+    if (statusFilter === 'shipped') {
+      const aDays = getDaysSinceShipped(a) ?? -1;
+      const bDays = getDaysSinceShipped(b) ?? -1;
+      if (aDays !== bDays) {
+        return bDays - aDays;
+      }
+
+      const getOrderNumber = (orderName: string): number => {
+        const match = orderName?.match(/\d+/);
+        return match ? parseInt(match[0], 10) : 0;
+      };
+      return getOrderNumber(a.name || '') - getOrderNumber(b.name || '');
     }
 
     // For all other statuses, use the existing sorting rules

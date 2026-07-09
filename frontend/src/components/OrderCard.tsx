@@ -4,6 +4,7 @@ import whatsappLogo from '../assets/whatsapp.png';
 import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, StarIcon as StarIconOutline, ChevronDownIcon, XMarkIcon, PhoneIcon, TruckIcon, TrashIcon, MapPinIcon, CheckIcon, CalendarIcon, TagIcon, PlusIcon, ChatBubbleLeftIcon, ClipboardDocumentIcon, EllipsisHorizontalIcon, DocumentTextIcon, ClockIcon, SparklesIcon, CheckBadgeIcon, PaperAirplaneIcon, XCircleIcon, BanknotesIcon, BoltIcon, HandRaisedIcon, HandThumbUpIcon, PauseCircleIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid, PhoneArrowUpRightIcon } from '@heroicons/react/24/solid';
 import { convertToCairoTime, calculateDaysRemaining } from '../utils/dateUtils';
+import { getDaysSinceShipped } from '../utils/orderShippedDate';
 import { Menu, Dialog } from '@headlessui/react';
 import { format } from 'date-fns';
 import LocationDialog, { Zone, SubZone } from './ui/LocationDialog';
@@ -517,7 +518,6 @@ const OrderCard: React.FC<OrderCardProps> = ({
   const orderReadyDateTag = trimmedTags.find((tag: string) => tag.toLowerCase().startsWith('order_ready_date:'));
   const movedToOnHoldDateTag = trimmedTags.find((tag: string) => tag.toLowerCase().startsWith('moved_to_on_hold:'));
   const customerConfirmedDateTag = trimmedTags.find((tag: string) => tag.toLowerCase().startsWith('customer_confirmed_date:'));
-  const shippedDateTag = trimmedTags.find((tag: string) => tag.toLowerCase().startsWith('shipped_date:') || tag.toLowerCase().startsWith('shipping_date:'));
   
   // Calculate dates in Cairo timezone
   let startDate;
@@ -673,34 +673,10 @@ const OrderCard: React.FC<OrderCardProps> = ({
     }
   };
 
-  // Calculate days since shipped_date
-  const getDaysInShipped = (): number | null => {
-    if (!shippedDateTag) return null;
-    try {
-      const dateStr = shippedDateTag.split(':')[1];
-      const shippedDate = convertToCairoTime(new Date(dateStr));
-      if (isNaN(shippedDate.getTime())) return null;
-      
-      const now = convertToCairoTime(new Date());
-      // Reset hours to midnight for accurate day calculation
-      const shipped = new Date(shippedDate);
-      shipped.setHours(0, 0, 0, 0);
-      const current = new Date(now);
-      current.setHours(0, 0, 0, 0);
-      
-      // Calculate days from shipped_date to now
-      const diffTime = current.getTime() - shipped.getTime();
-      const days = Math.round(diffTime / (1000 * 60 * 60 * 24));
-      return Math.max(0, days); // Don't show negative days
-    } catch (error) {
-      return null;
-    }
-  };
-
   const daysInOrderReady = getDaysInOrderReady();
   const daysInOnHold = getDaysInOnHold();
   const daysInConfirmed = getDaysInConfirmed();
-  const daysInShipped = getDaysInShipped();
+  const daysInShipped = getDaysSinceShipped(order);
 
   // Determine the current status based on tags and fulfillment status
   const getCurrentStatus = () => {
