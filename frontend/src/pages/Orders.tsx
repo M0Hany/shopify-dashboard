@@ -27,6 +27,7 @@ import {
 } from '../utils/ordersFetchScope';
 import { getShippingMethodFromTags, SHIPPING_METHOD_ORDER } from '../utils/shippingMethod';
 import { COURIER_ASSIGNED_TAG, stripShippingRouteTags } from '../utils/shippingRouteTags';
+import BulkShippingCostImportDialog from '../components/finance/BulkShippingCostImportDialog';
 import { getDaysSinceShipped } from '../utils/orderShippedDate';
 import { financialService } from '../services/financialService';
 // Province mapping from English to Arabic
