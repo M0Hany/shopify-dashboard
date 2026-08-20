@@ -101,7 +101,7 @@ export function orderItemsListDetailed(lineItems: LineItemForTemplate[] = []): s
 export function lineItemsForWhatsAppTemplate(
   lineItems: LineItemForTemplate[] | undefined | null
 ): LineItemForTemplate[] {
-  return lineItems ?? [];
+  return (lineItems ?? []).filter((item) => (Number(item.quantity) || 0) > 0);
 }
 
 export function buildOrderTemplatePlaceholders(

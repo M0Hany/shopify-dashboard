@@ -2,6 +2,7 @@ import '@shopify/shopify-api/adapters/node';
 import { shopifyApi, ApiVersion, Session, RequestReturn, AuthScopes } from '@shopify/shopify-api';
 import { OrderStatus } from '../types/order';
 import { logger } from '../utils/logger';
+import { normalizeShopifyLineItems, normalizeShopifyOrder } from '../utils/shopifyOrderNormalize';
 
 interface CustomerDetails {
   id: string;
@@ -276,6 +277,12 @@ export class ShopifyService {
                       currencyCode
                     }
                   }
+                  currentTotalPriceSet {
+                    shopMoney {
+                      amount
+                      currencyCode
+                    }
+                  }
                   subtotalPriceSet {
                     shopMoney {
                       amount
@@ -292,12 +299,19 @@ export class ShopifyService {
                       currencyCode
                     }
                   }
+                  currentShippingPriceSet {
+                    shopMoney {
+                      amount
+                      currencyCode
+                    }
+                  }
                   paymentGatewayNames
                   lineItems(first: ${lineItemsFirst}) {
                     edges {
                       node {
                         title
                         quantity
+                        currentQuantity
                         originalUnitPriceSet {
                           shopMoney {
                             amount
@@ -434,22 +448,30 @@ export class ShopifyService {
           // Extract numeric ID from GID (e.g., "gid://shopify/Order/123456" -> 123456)
           const orderId = parseInt(node.id.split('/').pop() || '0', 10);
           
-          // Transform line items
-          const lineItems = node.lineItems.edges.map((itemEdge: any) => {
-            const item = itemEdge.node;
-            return {
-              title: item.title,
-              quantity: item.quantity,
-              price: item.originalUnitPriceSet?.shopMoney?.amount || '0',
-              variant_title: item.variant?.title || null,
-              product_id: item.variant?.product?.id ? parseInt(item.variant.product.id.split('/').pop() || '0', 10) : undefined,
-              variant_id: item.variant?.id ? parseInt(item.variant.id.split('/').pop() || '0', 10) : undefined,
-              properties: item.customAttributes?.map((attr: any) => ({
-                name: attr.key || attr.name, // Shopify GraphQL uses 'key' but we map to 'name' for compatibility
-                value: attr.value
-              })) || []
-            };
-          });
+          // Transform line items — use currentQuantity (post-edit); drop removed rows
+          const lineItems = normalizeShopifyLineItems(
+            node.lineItems.edges.map((itemEdge: any) => {
+              const item = itemEdge.node;
+              return {
+                title: item.title,
+                quantity: item.quantity,
+                currentQuantity: item.currentQuantity,
+                price: item.originalUnitPriceSet?.shopMoney?.amount || '0',
+                variant_title: item.variant?.title || null,
+                product_id: item.variant?.product?.id
+                  ? parseInt(item.variant.product.id.split('/').pop() || '0', 10)
+                  : undefined,
+                variant_id: item.variant?.id
+                  ? parseInt(item.variant.id.split('/').pop() || '0', 10)
+                  : undefined,
+                properties:
+                  item.customAttributes?.map((attr: any) => ({
+                    name: attr.key || attr.name,
+                    value: attr.value,
+                  })) || [],
+              };
+            })
+          );
 
           // Transform fulfillments
           const fulfillments = node.fulfillments?.map((fulfillment: any) => ({
@@ -477,12 +499,15 @@ export class ShopifyService {
           // Transform tags (GraphQL returns as array)
           const tags = node.tags || [];
 
-          return {
+          return normalizeShopifyOrder({
             id: orderId,
             name: node.name,
             email: node.email || '',
             phone: node.phone || node.customer?.phone || node.shippingAddress?.phone || '',
-            total_price: node.totalPriceSet?.shopMoney?.amount || '0',
+            total_price:
+              node.currentTotalPriceSet?.shopMoney?.amount ||
+              node.totalPriceSet?.shopMoney?.amount ||
+              '0',
             financial_status: node.displayFinancialStatus || '',
             fulfillment_status: node.displayFulfillmentStatus || '',
             tags: tags,
@@ -518,13 +543,22 @@ export class ShopifyService {
             },
             fulfillments: fulfillments,
             shipping_lines: shippingLines,
-            total_shipping_price_set: node.totalShippingPriceSet ? {
-              shop_money: {
-                amount: node.totalShippingPriceSet.shopMoney.amount,
-                currency_code: node.totalShippingPriceSet.shopMoney.currencyCode
-              }
-            } : undefined
-          };
+            total_shipping_price_set: node.currentShippingPriceSet
+              ? {
+                  shop_money: {
+                    amount: node.currentShippingPriceSet.shopMoney.amount,
+                    currency_code: node.currentShippingPriceSet.shopMoney.currencyCode,
+                  },
+                }
+              : node.totalShippingPriceSet
+                ? {
+                    shop_money: {
+                      amount: node.totalShippingPriceSet.shopMoney.amount,
+                      currency_code: node.totalShippingPriceSet.shopMoney.currencyCode,
+                    },
+                  }
+                : undefined,
+          });
         });
 
         // Deduplicate orders by ID before adding to allOrders
@@ -581,14 +615,14 @@ export class ShopifyService {
   async getOrder(id: number): Promise<ShopifyOrder> {
     try {
       const response = await this.client.get({
-        path: `/admin/api/2022-10/orders/${id}.json`,
+        path: `orders/${id}`,
       }) as unknown as RequestReturn<{ order?: ShopifyOrder }>;
 
       if (!response.body.order) {
         throw new Error('Order not found');
       }
 
-      return response.body.order;
+      return normalizeShopifyOrder(response.body.order);
     } catch (error) {
       console.error('Error fetching order:', error);
       throw new Error('Failed to fetch order from Shopify');

@@ -5,6 +5,7 @@ import { UserIcon, CurrencyDollarIcon, ExclamationTriangleIcon, PencilIcon, Star
 import { StarIcon as StarIconSolid, PhoneArrowUpRightIcon } from '@heroicons/react/24/solid';
 import { convertToCairoTime, calculateDaysRemaining } from '../utils/dateUtils';
 import { getDaysSinceShipped } from '../utils/orderShippedDate';
+import { getActiveLineItems } from '../utils/orderLineItems';
 import { Menu, Dialog } from '@headlessui/react';
 import { format } from 'date-fns';
 import LocationDialog, { Zone, SubZone } from './ui/LocationDialog';
@@ -492,9 +493,10 @@ const OrderCard: React.FC<OrderCardProps> = ({
 
   const priorityMakingAnalysis = analyzePriorityMakingLineItems(order.line_items || []);
   const hidePriorityMakingLine = shouldHidePriorityMakingLine(priorityMakingAnalysis);
+  const activeLineItems = getActiveLineItems(order.line_items || []);
   
   // Separate regular line items from addon line items
-  const regularLineItems = (order.line_items || []).filter((item: any) => {
+  const regularLineItems = activeLineItems.filter((item: any) => {
     if (hidePriorityMakingLine && isPriorityMakingLineItem(item)) return false;
     const title = (item.title || '').toLowerCase();
     // Filter out addon line items (making time options)
@@ -504,7 +506,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
            !title.match(/handmade.*?\[.*?days?\]/i);
   });
   
-  const addonLineItems = (order.line_items || []).filter((item: any) => {
+  const addonLineItems = activeLineItems.filter((item: any) => {
     const title = (item.title || '').toLowerCase();
     // Include addon line items
     return title.includes('choose your making time') || 
