@@ -23,7 +23,6 @@ app.set('trust proxy', 1);
 
 // CORS first — required for browser preflight before any other middleware
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
 
 app.use(
   helmet({

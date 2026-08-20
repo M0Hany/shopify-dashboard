@@ -1,14 +1,32 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// These will be populated from environment variables
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_KEY || '';
+let supabaseClient: SupabaseClient | null = null;
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error('Missing Supabase credentials. Please check your environment variables.');
+function createSupabaseClient(): SupabaseClient {
+  const supabaseUrl = process.env.SUPABASE_URL || '';
+  const supabaseKey = process.env.SUPABASE_KEY || '';
+
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Missing Supabase credentials. Please check your environment variables.');
+  }
+
+  return createClient(supabaseUrl, supabaseKey);
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+/** Lazy client — avoids crashing serverless cold start when env is loaded after import. */
+export function getSupabase(): SupabaseClient {
+  if (!supabaseClient) {
+    supabaseClient = createSupabaseClient();
+  }
+  return supabaseClient;
+}
+
+/** @deprecated Prefer getSupabase() — lazy proxy for existing imports. */
+export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
+  get(_target, prop, receiver) {
+    return Reflect.get(getSupabase() as unknown as object, prop, receiver);
+  },
+});
 
 // Type definitions for our tables
 export type Database = {
