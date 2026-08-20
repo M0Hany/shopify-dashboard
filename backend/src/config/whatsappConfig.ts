@@ -11,7 +11,12 @@ export function isWabaEnabled(): boolean {
   return envFlag('WHATSAPP_WABA_ENABLED', false);
 }
 
-/** Baileys / WhatsApp Web — automated order-confirmed + optional send from dashboard. */
+/** Baileys / WhatsApp Web — automated order-confirmed + optional send from dashboard. Default off for serverless. */
 export function isWhatsAppWebEnabled(): boolean {
-  return envFlag('WHATSAPP_WEB_ENABLED', true);
+  return envFlag('WHATSAPP_WEB_ENABLED', false);
+}
+
+/** Baileys cannot run on Vercel serverless (ESM + persistent session). */
+export function canRunWhatsAppWeb(): boolean {
+  return isWhatsAppWebEnabled() && process.env.VERCEL !== '1';
 }
