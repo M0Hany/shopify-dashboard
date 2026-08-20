@@ -3,7 +3,7 @@ import multer from 'multer';
 import xlsx from 'xlsx';
 import { ShopifyOrder, ShopifyService } from '../services/shopify';
 import { logger } from '../utils/logger';
-import { stripWorkflowStatusTags } from '../utils/orderWorkflowStatusTags';
+import { stripTagsForBulkPaidFulfillment } from '../utils/orderWorkflowStatusTags';
 // REMOVED: Mylerz-specific location tags import (no longer used)
 // import { addLocationTags } from '../services/shopify';
 import { shopifyService } from '../services/shopify';
@@ -690,8 +690,8 @@ router.post('/bulk-import-shipping-costs', async (req: Request, res: Response) =
             ? order.tags.split(',').map((t: string) => t.trim())
             : [];
 
-        // Remove shipping/paid/fulfillment tags and workflow status tags (order_ready, shipped, etc.)
-        const filteredTags = stripWorkflowStatusTags(
+        // Remove old cost/paid/fulfillment tags and shipment workflow tags (shipped, shipped_date, etc.)
+        const filteredTags = stripTagsForBulkPaidFulfillment(
           existingTags.filter((tag: string) => {
             const trimmedTag = tag.trim().toLowerCase();
             return (
@@ -707,7 +707,16 @@ router.post('/bulk-import-shipping-costs', async (req: Request, res: Response) =
           })
         );
 
-        const formattedCost = parseFloat(cost).toFixed(2);
+        // Store the parsed carrier cost as-is (no VAT markup)
+        const parsedCost = parseFloat(String(cost));
+        if (Number.isNaN(parsedCost)) {
+          results.failed.push({
+            orderNumber,
+            reason: 'Invalid cost value',
+          });
+          continue;
+        }
+        const formattedCost = parsedCost.toFixed(2);
 
         filteredTags.push(`shipping_company_cost:${formattedCost}`);
         filteredTags.push(`shipping_company_cost_date:${transactionDate}`);

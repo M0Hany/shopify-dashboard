@@ -231,7 +231,7 @@ export class ProfitEngineService {
   /**
    * Calculate shipping company costs profit/loss from fulfilled orders
    * This extracts shipping_company_cost tags from orders and calculates profit/loss
-   * Profit/Loss = customer_shipping_charged - actual_shipping_cost (from tag, includes 14% tax)
+   * Profit/Loss = customer_shipping_charged - actual_shipping_cost (from tag)
    * Public method to allow access from routes
    */
   async calculateCompanyShippingProfitLoss(orders: any[], month: string): Promise<number> {
@@ -254,7 +254,7 @@ export class ProfitEngineService {
         continue;
       }
 
-      // Get actual shipping cost from tag (already includes 14% tax)
+      // Get actual shipping cost from tag
       const actualCost = parseFloat(companyCostTag.split(':')[1]?.trim() || '0');
       if (isNaN(actualCost)) {
         logger.warn(`Invalid shipping_company_cost for order ${order.name}: ${companyCostTag}`);
@@ -315,7 +315,7 @@ export class ProfitEngineService {
         continue;
       }
 
-      // Get actual shipping cost from tag (already includes 14% tax)
+      // Get actual shipping cost from tag
       const actualCost = parseFloat(companyCostTag.split(':')[1]?.trim() || '0');
       if (isNaN(actualCost)) {
         logger.warn(`Invalid shipping_company_cost for cancelled order ${order.name}: ${companyCostTag}`);

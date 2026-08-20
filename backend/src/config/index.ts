@@ -83,19 +83,38 @@ export function getConfig(): Config {
   };
 }
 
+const DEFAULT_PRODUCTION_ORIGINS = [
+  'https://ocdcrochet.qzz.io',
+  'https://www.ocdcrochet.qzz.io',
+  'https://shopify-dashboard-81gk.vercel.app',
+];
+
+function normalizeOrigin(origin: string): string {
+  const trimmed = origin.trim();
+  if (!trimmed) return trimmed;
+  const withoutTrailingSlash = trimmed.replace(/\/$/, '');
+  if (withoutTrailingSlash.startsWith('http://') || withoutTrailingSlash.startsWith('https://')) {
+    return withoutTrailingSlash;
+  }
+  return `https://${withoutTrailingSlash}`;
+}
+
 function buildAllowedOrigins(): string[] {
   const fromEnv = (process.env.CORS_ORIGIN || '')
     .split(',')
-    .map((origin) => origin.trim())
+    .map(normalizeOrigin)
     .filter(Boolean);
 
   const frontendUrl = process.env.FRONTEND_URL?.trim();
 
   return [
-    ...fromEnv,
-    ...(frontendUrl ? [frontendUrl] : []),
-    'http://localhost:5173',
-    'https://localhost:5173',
+    ...new Set([
+      ...DEFAULT_PRODUCTION_ORIGINS,
+      ...fromEnv,
+      ...(frontendUrl ? [normalizeOrigin(frontendUrl)] : []),
+      'http://localhost:5173',
+      'https://localhost:5173',
+    ]),
   ];
 }
 
@@ -103,10 +122,11 @@ function buildAllowedOrigins(): string[] {
 export function isAllowedCorsOrigin(origin: string | undefined): boolean {
   if (!origin) return true;
 
+  const normalized = normalizeOrigin(origin);
   const allowed = buildAllowedOrigins();
-  if (allowed.includes(origin)) return true;
+  if (allowed.includes(normalized)) return true;
 
-  if (process.env.VERCEL === '1' && /^https:\/\/[\w.-]+\.vercel\.app$/i.test(origin)) {
+  if (process.env.VERCEL === '1' && /^https:\/\/[\w.-]+\.vercel\.app$/i.test(normalized)) {
     return true;
   }
 

@@ -4,9 +4,19 @@ function normalizeTags(tags: string[] | string | undefined | null): string[] {
   return [];
 }
 
-/** Dashboard `paid` tag (internal bookkeeping). */
+/** Tag for manual payment marking (payment menu — not order workflow status). */
+export const MANUAL_PAID_TAG = 'manual_paid';
+export const MANUAL_PAID_DATE_PREFIX = 'manual_paid_date:';
+
+/** True when order was marked paid via the payment menu (`manual_paid` tag). */
 export function isOrderPaidByTag(tags: string[] | string | undefined | null): boolean {
-  return normalizeTags(tags).some((tag) => tag.trim().toLowerCase() === 'paid');
+  return normalizeTags(tags).some(
+    (tag) => tag.trim().toLowerCase() === MANUAL_PAID_TAG
+  );
+}
+
+export function isManualPaidDateTag(tag: string): boolean {
+  return tag.trim().toLowerCase().startsWith(MANUAL_PAID_DATE_PREFIX);
 }
 
 /** Shopify order payment status (`displayFinancialStatus` / `financial_status`). */
@@ -16,7 +26,7 @@ export function isShopifyPaymentPaid(financialStatus: string | undefined | null)
   return normalized === 'PAID';
 }
 
-/** Green highlight when paid via tag or Shopify payment status. */
+/** Green highlight when paid via manual tag or Shopify payment status. */
 export function isOrderPaymentHighlighted(
   tags: string[] | string | undefined | null,
   financialStatus?: string | null

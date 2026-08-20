@@ -23,8 +23,11 @@ import {
 import { getShippingConfirmationTemplateKey, getShippingMethodFromTags } from '../utils/shippingMethod';
 import {
   isOrderPaidByTag,
+  isManualPaidDateTag,
   isOrderPaymentHighlighted,
   isShopifyPaymentPaid,
+  MANUAL_PAID_TAG,
+  MANUAL_PAID_DATE_PREFIX,
 } from '../utils/orderPayment';
 import { normalizeOrderTagsArray, stripShippingRouteTags } from '../utils/shippingRouteTags';
 import { getOrderLatLng, tryParseLatLngFromMapsUrl } from '../utils/orderGeolocation';
@@ -1898,42 +1901,25 @@ Your order is being picked up by the shipping company and should be arriving to 
   const handleMarkAsPaid = () => {
     const currentTags = getCurrentTags();
     const today = format(new Date(), 'yyyy-MM-dd');
-    const updatedTags = currentTags.filter(
-      (tag) =>
-        tag.trim().toLowerCase() !== 'paid' && !tag.trim().startsWith('paid_date:')
-    );
-    updatedTags.push('paid', `paid_date:${today}`);
+    const updatedTags = currentTags.filter((tag) => {
+      const normalized = tag.trim().toLowerCase();
+      return normalized !== MANUAL_PAID_TAG && !isManualPaidDateTag(tag);
+    });
+    updatedTags.push(MANUAL_PAID_TAG, `${MANUAL_PAID_DATE_PREFIX}${today}`);
     if (onUpdateTags) {
       onUpdateTags(order.id, updatedTags);
     }
-    setCurrentStatus('paid');
     toast.success('Order marked as paid');
   };
 
   const handleMarkAsUnpaid = () => {
     const currentTags = getCurrentTags();
-    const updatedTags = currentTags.filter(
-      (tag) =>
-        tag.trim().toLowerCase() !== 'paid' && !tag.trim().startsWith('paid_date:')
-    );
+    const updatedTags = currentTags.filter((tag) => {
+      const normalized = tag.trim().toLowerCase();
+      return normalized !== MANUAL_PAID_TAG && !isManualPaidDateTag(tag);
+    });
     if (onUpdateTags) {
       onUpdateTags(order.id, updatedTags);
-    }
-    const tagsWithoutPaid = updatedTags.map((t) => t.trim());
-    if (tagsWithoutPaid.some((t) => t.toLowerCase() === 'fulfilled')) {
-      setCurrentStatus('fulfilled');
-    } else if (tagsWithoutPaid.includes('shipped')) {
-      setCurrentStatus('shipped');
-    } else if (tagsWithoutPaid.includes('ready_to_ship')) {
-      setCurrentStatus('ready_to_ship');
-    } else if (tagsWithoutPaid.includes('customer_confirmed')) {
-      setCurrentStatus('confirmed');
-    } else if (tagsWithoutPaid.includes('on_hold')) {
-      setCurrentStatus('on_hold');
-    } else if (tagsWithoutPaid.includes('order_ready')) {
-      setCurrentStatus('order-ready');
-    } else {
-      setCurrentStatus('pending');
     }
     toast.success('Order marked as unpaid');
   };
@@ -2749,9 +2735,9 @@ Your order is being picked up by the shipping company and should be arriving to 
                           className={`p-1 cursor-pointer rounded hover:bg-gray-100 transition-colors ${paymentIcon.containerClassName}`}
                           title={
                             isOrderPaid && isShopifyPaymentPaid(order.financial_status)
-                              ? 'Paid (tag and Shopify)'
+                              ? 'Manually marked paid and Shopify paid'
                               : isOrderPaid
-                                ? 'Paid (tag)'
+                                ? 'Manually marked as paid'
                                 : isShopifyPaymentPaid(order.financial_status)
                                   ? 'Shopify payment: Paid'
                                   : 'Payment status'
