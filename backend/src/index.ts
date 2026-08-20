@@ -1,137 +1,36 @@
 import './load-env';
-import helmet from 'helmet';
-import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
-import cors from 'cors';
-import orders from './routes/orders';
-import financeRoutes from './routes/financeRoutes';
-import financialRoutes from './routes/financial';
-import shippingRoutes from './routes/shipping';
-import whatsappWebhook from './routes/whatsappWebhook';
-import whatsappWebRoutes from './routes/whatsappWeb';
-import whatsappHubRoutes from './routes/whatsappHub';
-import { whatsappWebService } from './services/whatsappWeb.service';
-import discordInteractions from './routes/discordInteractions';
-import { errorHandler } from './middleware/errorHandler';
-import { corsOptions, getConfig } from './config';
-import express from 'express';
-import { schedulerService } from './services/scheduler.service';
+import app from './app';
+import { getConfig } from './config';
 import { logger } from './utils/logger';
+import { schedulerService } from './services/scheduler.service';
 import { startShippingStatusChecker, scheduleShippingStatusCheck } from './jobs/shippingStatusChecker';
-import path from 'path';
+import { whatsappWebService } from './services/whatsappWeb.service';
 
-const app = express();
 const config = getConfig();
-
-// Trust proxy - required for rate limiting behind reverse proxies
-app.set('trust proxy', 1);
-
-// Middleware
-// Allow frontend (different origin in dev) to embed uploaded images in <img> tags.
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: 'cross-origin' }
-}));
-app.use(morgan('dev'));
-
-// IMPORTANT: Register Discord interactions route BEFORE json() middleware
-// Discord needs raw body for signature verification
-app.use('/api/discord', discordInteractions);
-
-// JSON parsing for all other routes
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
-
-// CORS — allow FRONTEND_URL, CORS_ORIGIN, localhost, and *.vercel.app on Vercel
-app.use(cors(corsOptions));
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: config.rateLimit.windowMs,
-  max: config.rateLimit.max
-});
-app.use(limiter);
-
-// Specific rate limiting for orders endpoint
-const ordersLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 30, // 30 requests per 5 minutes for orders
-  message: {
-    error: 'Too many requests to orders endpoint. Please wait a few minutes before trying again.'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api/orders', ordersLimiter);
-
-// Add caching headers middleware
-app.use((req, res, next) => {
-  // Add cache headers for GET requests
-  if (req.method === 'GET') {
-    res.set('Cache-Control', 'public, max-age=120'); // Cache for 2 minutes
-  }
-  next();
-});
-
-// Request logging
-app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.path}`);
-  next();
-});
-
-// Routes
-app.use('/api/orders', orders);
-app.use('/api/finance', financeRoutes);
-app.use('/api/financial', financialRoutes);
-app.use('/api/shipping', shippingRoutes);
-app.use('/api/whatsapp', whatsappWebhook);
-app.use('/api/whatsapp/web', whatsappWebRoutes);
-app.use('/api/whatsapp/hub', whatsappHubRoutes);
-// Note: Discord interactions route is registered above, before json() middleware
-
-// Test endpoint
-app.get('/api/test', (req, res) => {
-  res.json({ message: 'CORS test successful' });
-});
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ status: 'healthy' });
-});
-
-// API route not found
-app.use('/api/*', (req, res) => {
-  res.status(404).json({ error: 'API endpoint not found' });
-});
-
-// Error handling
-app.use(errorHandler);
-
-// Start server
 const PORT = config.port || 3000;
+const isVercel = process.env.VERCEL === '1';
 
 const startServer = async () => {
   try {
-    // Start scheduler service
-    schedulerService.startAll();
+    if (!isVercel) {
+      schedulerService.startAll();
+      startShippingStatusChecker();
+      scheduleShippingStatusCheck();
 
-    // Start recurring cron jobs (every 30 min) so they run in both dev and production
-    startShippingStatusChecker();
-
-    // Run shipping status check once at startup (then cron takes over)
-    scheduleShippingStatusCheck();
-
-    const whatsappWebOn = whatsappWebService.isEnabled();
-    logger.info('WhatsApp Web configuration', {
-      enabled: whatsappWebOn,
-      env: process.env.WHATSAPP_WEB_ENABLED ?? '(not set)'
-    });
-
-    if (whatsappWebOn) {
-      whatsappWebService.start().catch((err) => {
-        logger.error('WhatsApp Web failed to start', { err });
+      const whatsappWebOn = whatsappWebService.isEnabled();
+      logger.info('WhatsApp Web configuration', {
+        enabled: whatsappWebOn,
+        env: process.env.WHATSAPP_WEB_ENABLED ?? '(not set)',
       });
-      logger.info('WhatsApp Web started — order confirmations use linked Business account');
+
+      if (whatsappWebOn) {
+        whatsappWebService.start().catch((err) => {
+          logger.error('WhatsApp Web failed to start', { err });
+        });
+        logger.info('WhatsApp Web started — order confirmations use linked Business account');
+      }
+    } else {
+      logger.info('Running on Vercel — cron, queues, and WhatsApp Web are disabled');
     }
 
     app.listen(PORT, () => {
@@ -143,4 +42,6 @@ const startServer = async () => {
   }
 };
 
-startServer(); 
+if (!isVercel) {
+  void startServer();
+}
