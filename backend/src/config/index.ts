@@ -79,23 +79,61 @@ export function getConfig(): Config {
       merchantId: process.env.SHIPPING_MERCHANT_ID || '',
       memberId: process.env.SHIPPING_MEMBER_ID || '',
     },
-    allowedOrigins: [
-      ...((process.env.CORS_ORIGIN || '')
-        .split(',')
-        .map((origin) => origin.trim())
-        .filter(Boolean)),
-      'http://localhost:5173',
-      'https://localhost:5173',
-    ],
+    allowedOrigins: buildAllowedOrigins(),
   };
+}
+
+function buildAllowedOrigins(): string[] {
+  const fromEnv = (process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  const frontendUrl = process.env.FRONTEND_URL?.trim();
+
+  return [
+    ...fromEnv,
+    ...(frontendUrl ? [frontendUrl] : []),
+    'http://localhost:5173',
+    'https://localhost:5173',
+  ];
+}
+
+/** Allow listed origins plus any *.vercel.app when deployed on Vercel. */
+export function isAllowedCorsOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+
+  const allowed = buildAllowedOrigins();
+  if (allowed.includes(origin)) return true;
+
+  if (process.env.VERCEL === '1' && /^https:\/\/[\w.-]+\.vercel\.app$/i.test(origin)) {
+    return true;
+  }
+
+  return false;
 }
 
 // Also export the config object directly for modules that prefer to import it
 export const config = getConfig();
 
 export const corsOptions = {
-  origin: getConfig().allowedOrigins,
+  origin: (
+    origin: string | undefined,
+    callback: (err: Error | null, allow?: boolean) => void
+  ) => {
+    callback(null, isAllowedCorsOrigin(origin));
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'Accept',
+    'Accept-Language',
+    'Cache-Control',
+    'Culture',
+    'Pragma',
+    'Priority',
+    'X-WhatsApp-Web-Secret',
+  ],
 }; 

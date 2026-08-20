@@ -13,7 +13,7 @@ import whatsappHubRoutes from './routes/whatsappHub';
 import { whatsappWebService } from './services/whatsappWeb.service';
 import discordInteractions from './routes/discordInteractions';
 import { errorHandler } from './middleware/errorHandler';
-import { getConfig } from './config';
+import { corsOptions, getConfig } from './config';
 import express from 'express';
 import { schedulerService } from './services/scheduler.service';
 import { logger } from './utils/logger';
@@ -42,22 +42,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
 
-// CORS configuration
-app.use(cors({
-  origin: config.allowedOrigins,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'Accept',
-    'Accept-Language',
-    'Cache-Control',
-    'Culture',
-    'Pragma',
-    'Priority'
-  ],
-  credentials: true
-}));
+// CORS — allow FRONTEND_URL, CORS_ORIGIN, localhost, and *.vercel.app on Vercel
+app.use(cors(corsOptions));
 
 // Rate limiting
 const limiter = rateLimit({
