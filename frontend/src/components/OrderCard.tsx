@@ -16,6 +16,7 @@ import "react-datepicker/dist/react-datepicker.css";
 import { useNavigate } from 'react-router-dom';
 import {
   analyzePriorityMakingLineItems,
+  describePriorityMismatch,
   isPriorityMakingLineItem,
   mergeRushTypeWithPriorityMaking,
   shouldHidePriorityMakingLine,
@@ -2912,8 +2913,7 @@ Your order is being picked up by the shipping company and should be arriving to 
                             priorityMakingAnalysis.hasPriorityMaking &&
                             !priorityMakingAnalysis.quantitiesMatch && (
                               <span className="mt-0.5 block text-xs font-medium text-red-600">
-                                Priority qty ({priorityMakingAnalysis.priorityQty}) ≠ plushie qty (
-                                {priorityMakingAnalysis.plushieQty})
+                                {describePriorityMismatch(priorityMakingAnalysis)}
                               </span>
                             )}
                         </span>
@@ -2976,8 +2976,7 @@ Your order is being picked up by the shipping company and should be arriving to 
                         priorityMakingAnalysis.hasPriorityMaking &&
                         !priorityMakingAnalysis.quantitiesMatch && (
                           <span className="mt-0.5 block text-xs font-medium text-red-600">
-                            Priority qty ({priorityMakingAnalysis.priorityQty}) ≠ plushie qty (
-                            {priorityMakingAnalysis.plushieQty})
+                            {describePriorityMismatch(priorityMakingAnalysis)}
                           </span>
                         )}
                     </span>

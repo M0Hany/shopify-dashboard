@@ -39,6 +39,7 @@ export interface ShopifyOrder {
     price: string;
     variant_title: string | null;
     product_id?: number;
+    product_type?: string | null;
     variant_id?: number;
     properties?: Array<{
       name: string;
@@ -322,6 +323,7 @@ export class ShopifyService {
                           title
                           product {
                             id
+                            productType
                           }
                         }
                         customAttributes {
@@ -461,6 +463,7 @@ export class ShopifyService {
                 product_id: item.variant?.product?.id
                   ? parseInt(item.variant.product.id.split('/').pop() || '0', 10)
                   : undefined,
+                product_type: item.variant?.product?.productType || null,
                 variant_id: item.variant?.id
                   ? parseInt(item.variant.id.split('/').pop() || '0', 10)
                   : undefined,
